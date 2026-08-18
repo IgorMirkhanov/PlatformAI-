@@ -83,8 +83,8 @@ PLATFORM_SUPERADMIN_EMAILS: list[str] = list(
 SEED_LLM_MODELS: list[dict[str, object]] = [
     {
         "provider": "openrouter",
-        "model_name": "meta-llama/llama-3.2-3b-instruct:free",
-        "display_name": "Llama 3.2 3B Instruct (OpenRouter Free)",
+        "model_name": "openai/gpt-oss-20b:free",
+        "display_name": "GPT-OSS 20B (OpenRouter Free)",
         "base_url": "https://openrouter.ai/api/v1",
         "context_window": 131_072,
         "cost_per_1k_input": Decimal("0.000000"),
@@ -117,6 +117,12 @@ SEED_LLM_MODELS: list[dict[str, object]] = [
         "cost_per_1k_input": Decimal("0.000000"),
         "cost_per_1k_output": Decimal("0.000000"),
     },
+]
+
+# Models the vendor pulled from the free tier: keep the row for audit trail but
+# switch it off so routing and pricing never pick a slug that answers 404.
+RETIRED_LLM_MODELS: list[tuple[str, str]] = [
+    ("openrouter", "meta-llama/llama-3.2-3b-instruct:free"),
 ]
 
 # Per-plan limits (informational — QuotaService reads these same constants).
@@ -438,6 +444,20 @@ async def _seed_llm_models(session) -> None:
             )
         )
         _log(OK, f"Created LLM model  {provider}/{model_name}")
+
+    for provider, model_name in RETIRED_LLM_MODELS:
+        retired: LLMModel | None = await session.scalar(
+            select(LLMModel).where(
+                LLMModel.provider == provider,
+                LLMModel.model_name == model_name,
+            )
+        )
+        if retired is None:
+            continue
+        if retired.is_active:
+            retired.is_active = False
+            retired.is_system_default = False
+            _log(OK, f"Deactivated retired LLM model  {provider}/{model_name}")
 
     await session.flush()
 
