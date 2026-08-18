@@ -158,6 +158,20 @@ def build_gateway_providers(
         preferred_order = (configured_provider,) + tuple(
             pid for pid in preferred_order if pid != configured_provider
         )
+
+    # FALLBACK_LLM_PROVIDER must sit directly behind the primary so a 429 / 5xx /
+    # timeout / unknown-model failure lands on it instead of an unrelated vendor.
+    fallback_provider = str(getattr(settings, "FALLBACK_LLM_PROVIDER", "") or "").strip().lower()
+    if (
+        fallback_provider
+        and fallback_provider not in {"", "auto"}
+        and fallback_provider != configured_provider
+        and fallback_provider in preferred_order
+    ):
+        rest = tuple(pid for pid in preferred_order if pid != fallback_provider)
+        preferred_order = rest[:1] + (fallback_provider,) + rest[1:]
+
+    fallback_model = str(getattr(settings, "FALLBACK_LLM_MODEL", "") or "").strip()
     configured: list[BaseLLMProvider] = []
     stubs: list[BaseLLMProvider] = []
 
@@ -167,6 +181,12 @@ def build_gateway_providers(
         kwargs: dict[str, Any] = {}
         if provider_id in org_keys:
             kwargs["api_key"] = org_keys[provider_id]
+        if (
+            provider_id == fallback_provider
+            and provider_id != configured_provider
+            and fallback_model
+        ):
+            kwargs["model"] = fallback_model
         try:
             instance = LLMProviderFactory.create(provider_id, **kwargs)
         except Exception:

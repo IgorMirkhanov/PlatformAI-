@@ -187,7 +187,7 @@ class ResilientLLMGateway:
     def _ordered_providers(self, *, model: str | None) -> list[BaseLLMProvider]:
         """Prefer the vendor that owns ``model``; keep remaining as fallback."""
         if not model:
-            return list(self.providers)
+            return self._promote_fallback(list(self.providers), after=1)
         preferred_id = resolve_provider_for_model(model)
         preferred: list[BaseLLMProvider] = []
         others: list[BaseLLMProvider] = []
@@ -204,8 +204,122 @@ class ResilientLLMGateway:
                 model=model,
                 preferred=preferred_id,
             )
-            return list(self.providers)
-        return preferred + others
+            return self._promote_fallback(list(self.providers), after=1)
+        return self._promote_fallback(preferred + others, after=len(preferred))
+
+    @staticmethod
+    def _promote_fallback(
+        providers: list[BaseLLMProvider],
+        *,
+        after: int,
+    ) -> list[BaseLLMProvider]:
+        """
+        Move ``FALLBACK_LLM_PROVIDER`` directly behind the primary providers.
+
+        DB-registry chains are ordered by the model table, so without this the
+        first retry after an OpenRouter outage could land on a paid model instead
+        of the configured free fallback. Keyless providers are left in place —
+        promoting one would only add a guaranteed auth failure to the hot path.
+        """
+        from app.core.config import settings
+
+        wanted_id = str(getattr(settings, "FALLBACK_LLM_PROVIDER", "") or "").strip().lower()
+        if not wanted_id or wanted_id in {"auto"} or after >= len(providers):
+            return providers
+
+        wanted_model = str(getattr(settings, "FALLBACK_LLM_MODEL", "") or "").strip().lower()
+        chosen: int | None = None
+        for index in range(after, len(providers)):
+            provider = providers[index]
+            pid = str(
+                getattr(provider, "provider_id", None) or type(provider).__name__
+            ).strip().lower()
+            if pid != wanted_id or not getattr(provider, "api_key", None):
+                continue
+            if chosen is None:
+                chosen = index
+            if wanted_model and str(getattr(provider, "model", "") or "").lower() == wanted_model:
+                chosen = index
+                break
+
+        if chosen is None or chosen == after:
+            return providers
+        return (
+            providers[:after]
+            + [providers[chosen]]
+            + [p for i, p in enumerate(providers) if i >= after and i != chosen]
+        )
+
+    def effective_chain(self, *, model: str | None = None) -> list[BaseLLMProvider]:
+        """Provider order this gateway would use for ``model`` (diagnostics)."""
+        return self._ordered_providers(model=model)
+
+    @staticmethod
+    def _provider_owns_model(provider: BaseLLMProvider, model: str) -> bool:
+        """True when ``model`` is servable by this vendor."""
+        pid = str(
+            getattr(provider, "provider_id", None) or type(provider).__name__
+        ).strip().lower()
+        own_model = str(getattr(provider, "model", "") or "").strip().lower()
+        candidate = model.strip().lower()
+        if own_model and own_model == candidate:
+            return True
+        return resolve_provider_for_model(candidate) == pid
+
+    def _kwargs_for_provider(
+        self,
+        provider: BaseLLMProvider,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Drop a foreign ``model`` hint before retrying on another vendor.
+
+        Groq cannot serve ``openai/gpt-oss-20b:free`` — forwarding the primary's
+        model id would turn every fallback into a 404 instead of an answer. Only
+        applied to fallback attempts; the first provider always gets the hint as-is.
+        """
+        call_kwargs = dict(kwargs)
+        model_hint = call_kwargs.get("model")
+        if not model_hint:
+            return call_kwargs
+        if self._provider_owns_model(provider, str(model_hint)):
+            return call_kwargs
+
+        call_kwargs.pop("model", None)
+        logger.debug(
+            "LLMGateway.model_remapped | provider={provider} requested={requested} "
+            "using={using}",
+            provider=getattr(provider, "provider_id", type(provider).__name__),
+            requested=model_hint,
+            using=getattr(provider, "model", None),
+        )
+        return call_kwargs
+
+    @staticmethod
+    def _announce_fallback(
+        providers: list[BaseLLMProvider],
+        index: int,
+        error: BaseException,
+    ) -> None:
+        """Warn + breadcrumb when the chain advances to the next vendor."""
+        if index + 1 >= len(providers):
+            return
+        primary = str(
+            getattr(providers[index], "provider_id", type(providers[index]).__name__)
+        )
+        secondary = str(
+            getattr(
+                providers[index + 1],
+                "provider_id",
+                type(providers[index + 1]).__name__,
+            )
+        )
+        logger.warning(
+            "LLM.fallback_triggered | Primary failed: {error} -> Switching to {secondary}",
+            error=f"{type(error).__name__}: {error}",
+            secondary=secondary,
+        )
+        _sentry_fallback_breadcrumb(primary=primary, secondary=secondary)
 
     async def _ensure_credits_available(
         self,
@@ -365,7 +479,6 @@ class ResilientLLMGateway:
 
         for index, provider in enumerate(providers):
             label = str(getattr(provider, "provider_id", type(provider).__name__))
-            model_name = _provider_model_name(provider, model_hint)
             breaker = self._breaker_for_provider(provider)
 
             if not breaker.allow_request():
@@ -378,13 +491,17 @@ class ResilientLLMGateway:
                 continue
 
             attempted.append(label)
+            call_kwargs = (
+                dict(kwargs) if index == 0 else self._kwargs_for_provider(provider, kwargs)
+            )
+            model_name = _provider_model_name(provider, call_kwargs.get("model"))
             try:
                 response = await provider.complete(
                     messages,
                     tools=tools,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    **kwargs,
+                    **call_kwargs,
                 )
             except LLMAuthenticationError as exc:
                 # Permanent credential failures must not trip the circuit breaker.
@@ -395,15 +512,7 @@ class ResilientLLMGateway:
                     index=index,
                     error=str(exc),
                 )
-                if index + 1 < len(providers):
-                    next_label = str(
-                        getattr(
-                            providers[index + 1],
-                            "provider_id",
-                            type(providers[index + 1]).__name__,
-                        )
-                    )
-                    _sentry_fallback_breadcrumb(primary=label, secondary=next_label)
+                self._announce_fallback(providers, index, exc)
                 continue
             except (
                 LLMRateLimitError,
@@ -427,15 +536,7 @@ class ResilientLLMGateway:
                         model_name=model_name,
                         error=exc,
                     )
-                if index + 1 < len(providers):
-                    next_label = str(
-                        getattr(
-                            providers[index + 1],
-                            "provider_id",
-                            type(providers[index + 1]).__name__,
-                        )
-                    )
-                    _sentry_fallback_breadcrumb(primary=label, secondary=next_label)
+                self._announce_fallback(providers, index, exc)
                 continue
             except Exception as exc:
                 # Unexpected errors still trip the breaker and advance the chain.
@@ -457,15 +558,7 @@ class ResilientLLMGateway:
                         model_name=model_name,
                         error=exc,
                     )
-                if index + 1 < len(providers):
-                    next_label = str(
-                        getattr(
-                            providers[index + 1],
-                            "provider_id",
-                            type(providers[index + 1]).__name__,
-                        )
-                    )
-                    _sentry_fallback_breadcrumb(primary=label, secondary=next_label)
+                self._announce_fallback(providers, index, exc)
                 continue
 
             breaker.record_success()

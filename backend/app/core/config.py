@@ -89,6 +89,10 @@ class Settings:
     GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "llama-3.1-8b-instant")
 
+    # Secondary vendor the gateway switches to on 429 / 5xx / timeout / bad model.
+    FALLBACK_LLM_PROVIDER: str = os.getenv("FALLBACK_LLM_PROVIDER", "groq")
+    FALLBACK_LLM_MODEL: str = os.getenv("FALLBACK_LLM_MODEL", "llama-3.1-8b-instant")
+
     # OpenRouter (OpenAI-compatible; `:free` models for tests)
     OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY") or None
     OPENROUTER_BASE_URL: str = os.getenv(

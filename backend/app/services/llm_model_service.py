@@ -264,8 +264,11 @@ class LLMModelService:
             resolved_base = cfg.base_url or getattr(settings, "OLLAMA_BASE_URL", None)
             if provider_id == "ollama" and resolved_base and not resolved_base.endswith("/v1"):
                 resolved_base = f"{resolved_base.rstrip('/')}/v1"
+            # Self-hosted endpoints accept any bearer; real vendors must not get a
+            # placeholder key — that turns a missing key into an opaque 401.
+            local_endpoint = provider_id in {"ollama", "vllm", "custom_openai"}
             return OpenAIProvider(
-                api_key=api_key or "ollama",
+                api_key=api_key or ("ollama" if local_endpoint else None),
                 model=cfg.model_name,
                 base_url=resolved_base,
                 provider_id=provider_id,
@@ -308,6 +311,7 @@ class LLMModelService:
     def _resolve_platform_api_key(provider: str) -> str | None:
         mapping = {
             "openai": settings.OPENAI_API_KEY,
+            "groq": settings.GROQ_API_KEY,
             "anthropic": settings.ANTHROPIC_API_KEY,
             "gemini": settings.GEMINI_API_KEY,
             "deepseek": settings.DEEPSEEK_API_KEY,

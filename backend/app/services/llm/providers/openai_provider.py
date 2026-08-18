@@ -171,7 +171,15 @@ class OpenAIProvider(BaseLLMProvider):
     ) -> None:
         if provider_id:
             self.provider_id = provider_id
-        self.api_key = api_key if api_key is not None else settings.OPENAI_API_KEY
+        # Only the OpenAI adapter may inherit the platform key. A vendor adapter
+        # that borrows it (e.g. Groq receiving an `sk-or-…` OpenRouter key) looks
+        # configured to the gateway and then answers every fallback with 401.
+        if api_key is not None:
+            self.api_key = api_key
+        elif self.provider_id == "openai":
+            self.api_key = settings.OPENAI_API_KEY
+        else:
+            self.api_key = None
         resolved_base = (
             (base_url or "").strip()
             or (getattr(settings, "resolved_openai_base_url", None) or "")

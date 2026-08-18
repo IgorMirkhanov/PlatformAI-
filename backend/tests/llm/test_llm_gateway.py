@@ -28,8 +28,12 @@ class FakeProvider(BaseLLMProvider):
         *,
         complete_side_effect: Any = None,
         complete_return: LLMResponse | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.provider_id = provider_id
+        self.api_key = api_key
+        self.model = model
         self.complete_calls = 0
         self._complete = AsyncMock(side_effect=complete_side_effect, return_value=complete_return)
 
@@ -156,6 +160,63 @@ async def test_gateway_fallback_on_rate_limit() -> None:
     assert call_kwargs.args[0] == messages
     assert call_kwargs.kwargs["temperature"] == 0.1
     assert call_kwargs.kwargs["max_tokens"] == 50
+
+
+@pytest.mark.asyncio
+async def test_gateway_retries_configured_fallback_before_other_vendors() -> None:
+    """FALLBACK_LLM_PROVIDER answers first, even when listed last in the chain."""
+    primary = FakeProvider(
+        "openrouter",
+        complete_side_effect=LLMRateLimitError("429", provider="openrouter", status_code=429),
+        api_key="sk-or-test",
+        model="openai/gpt-oss-20b:free",
+    )
+    paid = FakeProvider(
+        "openai",
+        complete_return=_ok("from-paid-model"),
+        api_key="sk-test",
+        model="gpt-4o",
+    )
+    groq = FakeProvider(
+        "groq",
+        complete_return=_ok("from-groq", model="llama-3.1-8b-instant"),
+        api_key="gsk-test",
+        model="llama-3.1-8b-instant",
+    )
+
+    gateway = ResilientLLMGateway([primary, paid, groq])
+    result = await gateway.complete([{"role": "user", "content": "x"}])
+
+    assert result.content == "from-groq"
+    assert groq.complete_calls == 1
+    assert paid.complete_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_gateway_drops_foreign_model_hint_on_fallback() -> None:
+    """Groq must be asked for its own model, not the primary's OpenRouter slug."""
+    primary = FakeProvider(
+        "openrouter",
+        complete_side_effect=LLMTimeoutError("timeout", provider="openrouter"),
+        api_key="sk-or-test",
+        model="openai/gpt-oss-20b:free",
+    )
+    groq = FakeProvider(
+        "groq",
+        complete_return=_ok("from-groq", model="llama-3.1-8b-instant"),
+        api_key="gsk-test",
+        model="llama-3.1-8b-instant",
+    )
+
+    gateway = ResilientLLMGateway([primary, groq])
+    result = await gateway.complete(
+        [{"role": "user", "content": "x"}],
+        model="openai/gpt-oss-20b:free",
+    )
+
+    assert result.content == "from-groq"
+    assert primary._complete.await_args.kwargs["model"] == "openai/gpt-oss-20b:free"
+    assert "model" not in groq._complete.await_args.kwargs
 
 
 @pytest.mark.asyncio
