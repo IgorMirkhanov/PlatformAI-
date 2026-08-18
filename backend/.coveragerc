@@ -1,0 +1,15 @@
+# Coverage gate for GA-critical modules (raise toward full-app 75% over time).
+# CI uses: pytest --cov-config=.coveragerc --cov=app.services.quota_service ...
+# Prefer listing packages in the pytest command; this file sets omit/report defaults.
+
+[run]
+branch = False
+omit =
+    */tests/*
+    */alembic/*
+    */__pycache__/*
+
+[report]
+precision = 1
+skip_covered = True
+show_missing = True

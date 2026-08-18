@@ -1,0 +1,252 @@
+# MP.AI — Development / CI docker-compose
+#
+# Quick start:
+#   cp .env.example .env          # fill in API keys, secrets
+#   docker compose up --build
+#
+# The `backend` container runs entrypoint.sh which:
+#   1. Waits for postgres + redis readiness
+#   2. Runs `alembic upgrade head`
+#   3. Seeds initial system data via `python scripts/seed_initial_data.py`
+#   4. Starts uvicorn
+#
+# Environment variables are loaded from .env (docker compose default).
+# Override individual services for local dev using docker-compose.override.yml
+# (see docker-compose.override.yml.example).
+
+name: mpai
+
+# ── Shared env block — backend services ──────────────────────────────────────
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/mpai
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND: redis://redis:6379/2
+  CELERY_QUEUES: ${CELERY_QUEUES:-inbound_messages,crm_actions}
+  CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+  CHROMA_SERVER_HOST: chromadb
+  CHROMA_SERVER_PORT: "8000"
+  CHROMA_HOST: http://chromadb:8000
+  WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-http://localhost:8000}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-pretty}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  # LLM providers (from .env — keys absent → providers silently skipped)
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+  LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  GLM_API_KEY: ${GLM_API_KEY:-}
+  QWEN_API_KEY: ${QWEN_API_KEY:-}
+  # Auth / security (required in production, optional in dev)
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-jwt-secret-change-in-production}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  CREDENTIALS_ENCRYPTION_KEY: ${CREDENTIALS_ENCRYPTION_KEY:-}
+  INTERNAL_SERVICE_API_KEY: ${INTERNAL_SERVICE_API_KEY:-dev-internal-key}
+  # Seed / migration control
+  SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-false}
+  SKIP_SEED: ${SKIP_SEED:-false}
+
+services:
+  # ── PostgreSQL with pgvector extension ─────────────────────────────────────
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mpai}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [mpai_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mpai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # ── Redis (cache + Celery broker) ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAXMEMORY:-512mb} --maxmemory-policy volatile-lru
+    volumes:
+      - redis_data:/data
+    networks: [mpai_net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── ChromaDB (vector store for RAG) ────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    restart: unless-stopped
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma_data:/chroma/chroma
+    expose: ["8000"]
+    networks: [mpai_net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8000/api/v1/heartbeat >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ── FastAPI backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    entrypoint: ["/app/entrypoint.sh"]
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --workers
+      - "4"
+      - --proxy-headers
+      - --forwarded-allow-ips=*
+    environment:
+      <<: *backend-env
+    expose: ["8000"]
+    volumes:
+      # Mount source for hot-reload in dev (overridden in override.yml for prod-like)
+      - ./backend:/app
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    networks: [mpai_net]
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthcheck', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Celery worker ───────────────────────────────────────────────────────────
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      - celery
+      - -A
+      - app.core.celery_app
+      - worker
+      - --loglevel=info
+      - -c
+      - "4"
+      - -Q
+      - inbound_messages,crm_actions
+      - --max-tasks-per-child=200
+      - --max-memory-per-child=400000
+    environment:
+      <<: *backend-env
+      SKIP_MIGRATIONS: "true"   # backend runs migrations; worker just connects
+      SKIP_SEED: "true"
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [mpai_net]
+
+  # ── Celery beat (periodic tasks scheduler) ─────────────────────────────────
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      - celery
+      - -A
+      - app.core.celery_app
+      - beat
+      - --loglevel=info
+    environment:
+      <<: *backend-env
+      SKIP_MIGRATIONS: "true"
+      SKIP_SEED: "true"
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    networks: [mpai_net]
+
+  # ── Next.js frontend ────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      API_INTERNAL_URL: http://backend:8000
+      NEXT_PUBLIC_OPERATOR_WS_TOKEN: ${NEXT_PUBLIC_OPERATOR_WS_TOKEN:-dev-operator-token}
+      NODE_ENV: ${NODE_ENV:-development}
+    expose: ["3000"]
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [mpai_net]
+
+  # ── Nginx reverse-proxy ────────────────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-3000}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_started
+    networks: [mpai_net]
+
+# ── Named volumes ─────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    name: mpai_postgres_data
+  redis_data:
+    name: mpai_redis_data
+  chroma_data:
+    name: mpai_chroma_data
+
+# ── Shared network ────────────────────────────────────────────────────────────
+networks:
+  mpai_net:
+    driver: bridge
+    name: mpai_net

@@ -1,0 +1,29 @@
+# MP.AI Prometheus — basic scrape config
+# Enable via: docker compose --profile monitoring up -d
+#
+# NOTE: Do not scrape JSON /health or plain-text /healthz as Prometheus metrics —
+# those paths are not exposition format and produce permanent up=0 (alert fatigue).
+# Use FastAPI /metrics for app RED metrics; add blackbox_exporter later for HTTP probes.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: mpai_api_prometheus
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ["backend_api:8000"]
+    # If /metrics is gated by INTERNAL_SERVICE_API_KEY / METRICS_SCRAPE_TOKEN,
+    # configure authorization via a scrape bearer or run Prometheus on the
+    # internal network with METRICS_SCRAPE_TOKEN unset in non-prod.
+

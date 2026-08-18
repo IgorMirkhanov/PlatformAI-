@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1.7
+# Production multi-stage Next.js (standalone, non-root).
+
+FROM node:20-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache libc6-compat
+COPY package.json package-lock.json ./
+RUN npm ci
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ARG NEXT_PUBLIC_API_URL=/api
+ARG NEXT_PUBLIC_OPERATOR_WS_TOKEN
+ARG API_INTERNAL_URL=http://backend_api:8000
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production \
+    NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
+    NEXT_PUBLIC_OPERATOR_WS_TOKEN=${NEXT_PUBLIC_OPERATOR_WS_TOKEN} \
+    API_INTERNAL_URL=${API_INTERNAL_URL}
+RUN npm run build \
+    && npm prune --omit=dev
+
+# Runtime: copy ONLY standalone output (+ static + public).
+# Do NOT COPY the full builder /.next tree — it contains cache, traces, and
+# Preview Mode secrets (prerender-manifest.json).
+FROM node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+RUN apk add --no-cache libc6-compat wget \
+    && addgroup --system --gid 1001 nodejs \
+    && adduser --system --uid 1001 nextjs
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+USER nextjs
+EXPOSE 3000
+STOPSIGNAL SIGTERM
+# Docker injects HOSTNAME=<container id>. Next standalone binds to that host,
+# so 127.0.0.1:3000 healthchecks and Nginx get "connection refused".
+CMD ["sh", "-c", "HOSTNAME=0.0.0.0 PORT=3000 exec node server.js"]

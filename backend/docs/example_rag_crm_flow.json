@@ -1,0 +1,71 @@
+{
+  "nodes": [
+    {
+      "id": "t1",
+      "type": "trigger",
+      "position": { "x": 40, "y": 120 },
+      "data": { "trigger_type": "message_received" }
+    },
+    {
+      "id": "rag1",
+      "type": "knowledge_search",
+      "position": { "x": 320, "y": 120 },
+      "data": {
+        "top_k": 3,
+        "query_variable": "message",
+        "output_variable": "rag_context"
+      }
+    },
+    {
+      "id": "llm1",
+      "type": "ai_agent",
+      "position": { "x": 600, "y": 120 },
+      "data": {
+        "prompt_context": "You are a support agent. Use {{rag_context}}. Reply in the user language.",
+        "knowledge_base_id": "default",
+        "temperature": 0.4
+      }
+    },
+    {
+      "id": "cond1",
+      "type": "condition",
+      "position": { "x": 880, "y": 120 },
+      "data": {
+        "condition_type": "customer_tag",
+        "tag": "vip",
+        "expression": "true",
+        "true_label": "VIP",
+        "false_label": "Standard"
+      }
+    },
+    {
+      "id": "wa1",
+      "type": "text_message",
+      "position": { "x": 1160, "y": 40 },
+      "data": {
+        "text": "VIP support will contact you shortly.",
+        "buttons": []
+      }
+    },
+    {
+      "id": "crm1",
+      "type": "crm_action",
+      "position": { "x": 1160, "y": 220 },
+      "data": {
+        "integration_type": "amocrm",
+        "method": "POST",
+        "url": "https://example.amocrm.ru/api/v4/leads",
+        "headers": { "Content-Type": "application/json" },
+        "body_template": "{\"name\":\"{{user_name}}\",\"phone\":\"{{phone}}\"}",
+        "response_variable": "crm_result"
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "t1", "target": "rag1" },
+    { "id": "e2", "source": "rag1", "target": "llm1" },
+    { "id": "e3", "source": "llm1", "target": "cond1" },
+    { "id": "e4", "source": "cond1", "target": "wa1", "sourceHandle": "true" },
+    { "id": "e5", "source": "cond1", "target": "crm1", "sourceHandle": "false" }
+  ]
+}

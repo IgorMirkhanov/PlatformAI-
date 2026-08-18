@@ -1,0 +1,89 @@
+# Спецификация JSON-графа для сценариев ботов
+
+Каждая цепочка хранится в `graph_data` (React Flow–совместимый направленный граф).
+Канонический runtime: `FlowExecutor` / `flow_parser.py` и
+[`FLOW_BUILDER_RUNTIME.md`](./FLOW_BUILDER_RUNTIME.md).
+
+## Типы узлов (supported)
+
+| type | aliases | Назначение | Ключевые `data` поля |
+|------|---------|------------|----------------------|
+| `trigger` | `input`, `start` | Точка входа | — |
+| `text_message` | | Исходящий текст (+ кнопки) | `text`, `buttons[]` |
+| `condition` | | Ветвление | `expression` / rules, handles |
+| `ai_agent` | `llm` | LLM-ответ | `prompt_context`, model hints |
+| `knowledge_search` | `rag`, `knowledge` | RAG → `{{rag_context}}` | `knowledge_base_id`, `top_k` |
+| `crm_action` | `crm` | HTTP CRM / webhook | `method`, `url`, `headers`, `body` |
+| `api_request` | | Generic HTTP | `method`, `url`, `headers`, `body` |
+| `loop` | | Цикл body/exit | `max_iterations` |
+| `human_handoff` | `handoff` | Пауза → оператор | `message` / reason |
+
+Неизвестный `type` → `unsupported_node_type` (ошибка выполнения).
+
+## Пример
+
+```json
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "trigger",
+      "position": { "x": 0, "y": 0 },
+      "data": {}
+    },
+    {
+      "id": "welcome_node",
+      "type": "text_message",
+      "position": { "x": 0, "y": 120 },
+      "data": {
+        "text": "Привет! Выберите раздел:",
+        "buttons": [
+          { "id": "btn_1", "text": "Узнать цену" },
+          { "id": "btn_2", "text": "Поговорить с ИИ" }
+        ]
+      }
+    },
+    {
+      "id": "kb_node",
+      "type": "knowledge_search",
+      "position": { "x": 280, "y": 240 },
+      "data": { "top_k": 4 }
+    },
+    {
+      "id": "ai_node",
+      "type": "ai_agent",
+      "position": { "x": 280, "y": 360 },
+      "data": {
+        "prompt_context": "Ты менеджер поддержки. Контекст: {{rag_context}}"
+      }
+    },
+    {
+      "id": "handoff",
+      "type": "human_handoff",
+      "position": { "x": 560, "y": 360 },
+      "data": { "message": "Подключаю оператора…" }
+    }
+  ],
+  "edges": [
+    { "id": "e0", "source": "start", "target": "welcome_node" },
+    {
+      "id": "e1",
+      "source": "welcome_node",
+      "sourceHandle": "btn_2",
+      "target": "kb_node"
+    },
+    { "id": "e2", "source": "kb_node", "target": "ai_node" }
+  ]
+}
+```
+
+## Edges
+
+- `source` / `target` — id узлов
+- `sourceHandle` — id кнопки / ветки condition / `success`|`failure` для API
+- Template Gallery / export-import должны валидировать `type` против таблицы выше
+
+## Синхронизация со спеком
+
+При добавлении ноды в `flow_parser.py` обновляйте этот файл и
+`FLOW_BUILDER_RUNTIME.md` в том же PR (или генерируйте таблицу из кода).

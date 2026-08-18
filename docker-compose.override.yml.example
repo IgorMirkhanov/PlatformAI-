@@ -1,0 +1,106 @@
+# docker-compose.override.yml.example
+# ─────────────────────────────────────────────────────────────────────────────
+# Local-development overrides for docker-compose.yml.
+#
+# Usage:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up
+#
+# Docker Compose automatically merges docker-compose.override.yml on top of
+# docker-compose.yml — no extra -f flags needed.
+#
+# Commit docker-compose.override.yml.example; gitignore docker-compose.override.yml.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── PostgreSQL — expose port to host so you can connect with psql / TablePlus ──
+  postgres:
+    ports:
+      - "5432:5432"
+    # Optionally increase shared_buffers for local development
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c work_mem=16MB
+      -c log_statement=none
+
+  # ── Redis — expose port to host for redis-cli / RedisInsight ──────────────
+  redis:
+    ports:
+      - "6379:6379"
+
+  # ── ChromaDB — expose port for direct inspection ──────────────────────────
+  chromadb:
+    ports:
+      - "8001:8000"
+
+  # ── Backend — hot-reload with uvicorn --reload ────────────────────────────
+  backend:
+    # Override CMD to single-worker uvicorn with --reload for hot-reload.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /app/app
+      - --log-level
+      - debug
+    environment:
+      LOG_LEVEL: DEBUG
+      LOG_FORMAT: pretty
+      ENVIRONMENT: development
+      # Uncomment to skip auto-migration on every restart (speed up iterations):
+      # SKIP_MIGRATIONS: "true"
+      # SKIP_SEED: "true"
+    ports:
+      - "8000:8000"   # direct access bypassing nginx
+    volumes:
+      # Mount host source directly — edits reflected immediately.
+      - ./backend:/app
+
+  # ── Celery worker — verbose logging, single concurrency for easy debugging ──
+  celery_worker:
+    command:
+      - celery
+      - -A
+      - app.core.celery_app
+      - worker
+      - --loglevel=debug
+      - -c
+      - "2"
+      - -Q
+      - inbound_messages,crm_actions
+    environment:
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend:/app
+
+  # ── Celery beat — verbose logging ─────────────────────────────────────────
+  celery_beat:
+    command:
+      - celery
+      - -A
+      - app.core.celery_app
+      - beat
+      - --loglevel=debug
+    environment:
+      LOG_LEVEL: DEBUG
+    volumes:
+      - ./backend:/app
+
+  # ── Frontend — expose port for direct Next.js dev access ──────────────────
+  frontend:
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NODE_ENV: development
+
+  # ── Nginx — expose on port 80 so http://localhost resolves cleanly ─────────
+  nginx:
+    ports:
+      - "80:80"

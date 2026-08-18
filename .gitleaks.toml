@@ -1,0 +1,12 @@
+title = "gitleaks"
+[allowlist]
+description = "Allowlisted paths / patterns"
+paths = [
+  '''frontend/node_modules/.*''',
+  '''whatsapp-service/node_modules/.*''',
+  '''.*\.lock''',
+  '''.*package-lock\.json''',
+  # Narrow docs allowlist — do NOT ignore all of docs/ (secrets can leak into guides).
+  '''docs/.*\.md$''',
+  '''docs/.*\.mdx$''',
+]

@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1.7
+# Production multi-stage FastAPI / Celery image (non-root).
+
+############################
+# Stage 1 — dependency build
+############################
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc g++ libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+############################
+# Stage 2 — runtime
+############################
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH=/app \
+    XDG_RUNTIME_DIR=/tmp \
+    APP_HOME=/app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libpq5 curl ca-certificates bash postgresql-client \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 appuser \
+    && useradd --system --uid 10001 --gid appuser --home-dir ${APP_HOME} \
+        --shell /usr/sbin/nologin appuser
+
+WORKDIR ${APP_HOME}
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=appuser:appuser . ${APP_HOME}
+
+RUN sed -i 's/\r$//' ${APP_HOME}/entrypoint.sh \
+                 ${APP_HOME}/scripts/docker-entrypoint-api.sh \
+                 ${APP_HOME}/scripts/docker-entrypoint-celery.sh \
+    && chmod +x ${APP_HOME}/entrypoint.sh \
+                ${APP_HOME}/scripts/docker-entrypoint-api.sh \
+                ${APP_HOME}/scripts/docker-entrypoint-celery.sh \
+    && mkdir -p ${APP_HOME}/data ${APP_HOME}/uploads \
+    && chown -R appuser:appuser ${APP_HOME}/data ${APP_HOME}/uploads
+
+USER appuser
+
+EXPOSE 8000
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["/app/scripts/docker-entrypoint-api.sh"]
+CMD []

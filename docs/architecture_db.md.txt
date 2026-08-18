@@ -1,0 +1,46 @@
+# Архитектура БД (PostgreSQL) — актуальная мульти-тенантная модель
+
+> **Устарело как однотенантный черновик.** Ранняя схема (`users.company_name` +
+> `bots.user_id` без org) больше не отражает прод. Канонический обзор:
+> [`architecture/SAAS_V1.md`](./architecture/SAAS_V1.md).
+> Ниже — сжатая ER-сводка, синхронизированная с миграциями `017+` / `019` / `020`.
+
+## Доменная модель
+
+```
+User ──< UserCompanyWorkspace >── Company (Organization)
+  │                                    ├── Project ──< Bot
+  │                                    │                ├── BotFlow (live graph_data)
+  │                                    │                ├── BotFlowRevision / BotFlowVersion
+  │                                    │                ├── credentials JSONB (sensitive fields sealed)
+  │                                    │                └── KnowledgeBase / Channel integrations
+  │                                    └── stripe_customers (org-level Stripe Customer)
+  └── Subscription / BillingTransaction / UsageEvent (quota key = organization_id)
+```
+
+## Ключевые таблицы
+
+| Table | Role |
+|-------|------|
+| `users` | Identity; `hashed_password`; platform flags `is_superadmin` / `is_support` |
+| `companies` | Tenant (organization); plan/quota mirror; `stripe_*` denormalized columns |
+| `user_company_workspaces` | Membership + RBAC role (`OWNER` / `ADMIN` / `OPERATOR` / …) |
+| `projects` | Scoped under `organization_id` |
+| `bots` | `organization_id` (+ optional legacy `user_id`); `credentials` JSONB |
+| `bot_flows` / `bot_flow_revisions` | Live graph + immutable publish snapshots |
+| `clients` / `chat_messages` | End-user state machine + inbox history |
+| `stripe_customers` | One Stripe Customer per organization |
+| `admin_audit_logs` | Impersonation start/end and other admin actions |
+
+## Credentials at rest
+
+`bots.credentials` is **not** plain-text for secrets. Channel / CRM / integration
+tokens go through `app.core.crypto` / `security.encrypt_credential`
+(`aesgcm:` primary, legacy `enc:` Fernet still readable). Requires
+`CREDENTIALS_ENCRYPTION_KEY` / `ENCRYPTION_KEY` (distinct from `JWT_SECRET_KEY`).
+
+## Что не делать
+
+- Не проектировать новые миграции вокруг «один user → много bots» без `organization_id`.
+- Не читать этот файл как единственный источник правды — при расхождении
+  побеждает код моделей в `backend/app/models/` + Alembic.

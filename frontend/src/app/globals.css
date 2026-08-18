@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --canvas: #09090b;
+  --canvas-raised: #121214;
+  --canvas-border: #27272a;
+  --accent: #6366f1;
+  --accent-glow: rgba(124, 58, 237, 0.35);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    height: 100%;
+    background-color: #000000 !important;
+  }
+
+  body {
+    min-height: 100%;
+    background-color: #000000 !important;
+    color: #f4f4f5 !important;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+::selection {
+  background-color: rgba(99, 102, 241, 0.35);
+  color: #ffffff;
+}
+
+::-moz-selection {
+  background-color: rgba(99, 102, 241, 0.35);
+  color: #ffffff;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+  background-clip: content-box;
+}
+
+.react-flow__background {
+  background-color: #09090b !important;
+}
+
+.react-flow__minimap {
+  background-color: #121214 !important;
+}
+
+.react-flow__controls {
+  @apply overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 shadow-node;
+}
+
+.react-flow__controls-button {
+  @apply border-zinc-800 bg-zinc-900 text-zinc-300 fill-zinc-300;
+}
+
+.react-flow__controls-button:hover {
+  @apply bg-zinc-800;
+}
+
+.react-flow__edge-path {
+  stroke: #52525b;
+}
+
+@keyframes flow-edge-pulse {
+  to {
+    stroke-dashoffset: -40;
+  }
+}
+
+.flow-edge-pulse {
+  animation: flow-edge-pulse 1.1s linear infinite;
+}
+
+.react-flow__handle {
+  @apply h-3 w-3 border-2 border-zinc-900 bg-zinc-500;
+}
+
+.react-flow__handle:hover {
+  @apply bg-violet-400;
+}
+
+.react-flow__node.selected {
+  @apply shadow-glow;
+}
+
+@layer components {
+  .luxury-card {
+    @apply rounded-xl border border-zinc-800/80 bg-[#121214] p-6;
+  }
+
+  .glass-panel {
+    @apply rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-6 backdrop-blur;
+  }
+
+  .glass-card {
+    @apply rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-6 backdrop-blur;
+  }
+
+  .agent-tab-bar {
+    @apply sticky top-0 z-30 rounded-xl border border-zinc-800 bg-[#121214] p-1 backdrop-blur-md;
+  }
+
+  .agent-tab-link {
+    @apply relative whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-800/50 hover:text-zinc-200;
+  }
+
+  .agent-tab-link-active {
+    @apply bg-zinc-900 text-indigo-300 ring-1 ring-indigo-500/30;
+  }
+
+  .agent-tab-link-active::after {
+    content: "";
+    @apply absolute inset-x-3 -bottom-1 h-0.5 rounded-full bg-violet-500;
+  }
+
+  .moonai-sidebar {
+    @apply bg-[#070708];
+  }
+
+  .moonai-account-panel {
+    @apply rounded-2xl border border-violet-500/15 bg-gradient-to-br from-violet-950/20 via-[#0c0c0e] to-black p-4;
+  }
+
+  .moonai-agent-chip {
+    @apply rounded-xl border border-violet-500/20 bg-violet-500/5 px-3 py-3;
+  }
+
+  .moonai-panel {
+    @apply rounded-2xl border border-zinc-800/80 bg-[#0a0a0c]/90 p-6 backdrop-blur;
+  }
+
+  .moonai-modal {
+    @apply rounded-2xl border border-zinc-800/80 bg-[#0b0b0d]/95 p-6 shadow-glow-purple backdrop-blur-xl;
+  }
+
+  .moonai-save-bar {
+    @apply rounded-2xl border border-zinc-800/80 bg-black/80 backdrop-blur-md;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
