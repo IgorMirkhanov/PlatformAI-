@@ -174,10 +174,11 @@ class Settings:
     MAX_CHAT_HISTORY_MESSAGES: int = int(os.getenv("MAX_CHAT_HISTORY_MESSAGES", "10"))
     MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "3"))
+    RAG_MIN_SIMILARITY_SCORE: float = float(os.getenv("RAG_MIN_SIMILARITY_SCORE", "0.35"))
 
-    # Knowledge base chunking
-    KB_CHUNK_SIZE: int = int(os.getenv("KB_CHUNK_SIZE", "500"))
-    KB_CHUNK_OVERLAP: int = int(os.getenv("KB_CHUNK_OVERLAP", "50"))
+    # Knowledge base chunking (semantic windows; 500–1000 chars recommended)
+    KB_CHUNK_SIZE: int = int(os.getenv("KB_CHUNK_SIZE", "800"))
+    KB_CHUNK_OVERLAP: int = int(os.getenv("KB_CHUNK_OVERLAP", "100"))
 
     # Optional Google Drive / Docs API key for folder listing & private exports
     GOOGLE_API_KEY: str | None = os.getenv("GOOGLE_API_KEY") or None

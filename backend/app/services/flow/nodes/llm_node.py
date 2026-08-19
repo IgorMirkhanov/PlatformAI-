@@ -302,25 +302,23 @@ class LLMNodeHandler(BaseNodeHandler):
 
 
 
+        rag_chunks = ctx.variables.get("rag_chunks")
         rag_context = ctx.variables.get("rag_context")
+        if isinstance(rag_chunks, list) and rag_chunks:
+            from app.services.rag.prompt_context import build_rag_system_addon
 
-        if rag_context and str(rag_context).strip():
+            rag_block = build_rag_system_addon([str(chunk) for chunk in rag_chunks if str(chunk).strip()])
+        elif rag_context and str(rag_context).strip():
+            from app.services.rag.prompt_context import build_rag_system_addon
 
-            messages.append(
-
-                {
-
-                    "role": "system",
-
-                    "content": ctx.interpolate(
-
-                        f"Retrieved knowledge base context:\n{rag_context}"
-
-                    ),
-
-                }
-
+            rag_block = build_rag_system_addon(
+                [part.strip() for part in str(rag_context).split("\n\n") if part.strip()]
             )
+        else:
+            rag_block = ""
+
+        if rag_block:
+            messages.append({"role": "system", "content": ctx.interpolate(rag_block)})
 
 
 

@@ -64,6 +64,25 @@ async def _sentence_transformer_embed_texts(texts: list[str]) -> list[list[float
     return await asyncio.to_thread(_encode)
 
 
+async def _openrouter_embed_texts(texts: list[str]) -> list[list[float]]:
+    from openai import AsyncOpenAI
+
+    api_key = settings.OPENROUTER_API_KEY
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not configured")
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=(settings.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1").rstrip("/"),
+    )
+    logger.debug("Embeddings.openrouter | count={count}", count=len(texts))
+    response = await client.embeddings.create(
+        model=settings.OPENAI_EMBEDDING_MODEL,
+        input=texts,
+    )
+    return [item.embedding for item in response.data]
+
+
 async def embed_texts(texts: list[str]) -> list[list[float]]:
     """Generate embeddings using the best available configured provider."""
     if not texts:
@@ -77,6 +96,14 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
         except Exception as exc:
             logger.warning("Embeddings.openai_failed | error={error}", error=str(exc))
             if provider == "openai":
+                raise
+
+    if provider in {"auto", "openrouter"} and settings.OPENROUTER_API_KEY:
+        try:
+            return await _openrouter_embed_texts(texts)
+        except Exception as exc:
+            logger.warning("Embeddings.openrouter_failed | error={error}", error=str(exc))
+            if provider == "openrouter":
                 raise
 
     try:

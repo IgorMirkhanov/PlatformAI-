@@ -149,8 +149,8 @@ class RecursiveCharacterTextSplitter:
         chunk_overlap: int | None = None,
         separators: list[str] | tuple[str, ...] | None = None,
     ) -> None:
-        self.chunk_size = max(50, int(chunk_size or settings.KB_CHUNK_SIZE or 500))
-        overlap = int(chunk_overlap if chunk_overlap is not None else settings.KB_CHUNK_OVERLAP or 50)
+        self.chunk_size = max(500, min(1000, int(chunk_size or settings.KB_CHUNK_SIZE or 800)))
+        overlap = int(chunk_overlap if chunk_overlap is not None else settings.KB_CHUNK_OVERLAP or 100)
         self.chunk_overlap = max(0, min(overlap, self.chunk_size // 2))
         self.separators = list(separators) if separators is not None else list(self.DEFAULT_SEPARATORS)
 

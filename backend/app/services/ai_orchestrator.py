@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.llm_cache import llm_response_cache
-from app.core.vector_db import RAGSearchHit, similarity_search, similarity_search_detailed
+from app.core.vector_db import RAGSearchHit, search_knowledge_base
 from app.models.core_models import (
     Bot,
     ChatMessage,
@@ -971,7 +971,7 @@ class AIOrchestrator:
             )
             return [], []
 
-        hits = await similarity_search_detailed(
+        hits = await search_knowledge_base(
             knowledge_base_id=knowledge_base_id,
             query=incoming_message,
             top_k=settings.RAG_TOP_K,
@@ -1060,13 +1060,14 @@ class AIOrchestrator:
             )
             return []
 
-        chunks = await similarity_search(
+        chunks = await search_knowledge_base(
             knowledge_base_id=knowledge_base_id,
             query=incoming_message,
             top_k=settings.RAG_TOP_K,
             excluded_document_ids=inactive_document_ids,
         )
-        if not chunks:
+        chunk_texts = [str(hit["text"]) for hit in chunks if hit.get("text")]
+        if not chunk_texts:
             logger.info(
                 "AIOrchestrator.rag_empty | knowledge_base_id={kb_id}",
                 kb_id=knowledge_base_id,
@@ -1080,15 +1081,15 @@ class AIOrchestrator:
                     error_message="Knowledge base query returned no matching chunks.",
                     node_id=node_id,
                 )
-            return chunks
+            return []
 
         logger.info(
             "AIOrchestrator.rag_loaded | knowledge_base_id={kb_id} chunks={count} excluded_inactive={excluded}",
             kb_id=knowledge_base_id,
-            count=len(chunks),
+            count=len(chunk_texts),
             excluded=len(inactive_document_ids),
         )
-        return chunks
+        return chunk_texts
 
     def _build_llm_messages(
         self,
@@ -1099,16 +1100,9 @@ class AIOrchestrator:
     ) -> list[dict[str, str]]:
         system_parts = [system_prompt.strip() or "You are a helpful support assistant."]
 
-        if rag_context:
-            joined_context = "\n\n".join(f"- {chunk}" for chunk in rag_context)
-            system_parts.append(
-                "Use the following knowledge base excerpts when answering:\n"
-                f"{joined_context}"
-            )
-        else:
-            system_parts.append(
-                "No knowledge base excerpts were retrieved. Answer using general context only."
-            )
+        from app.services.rag.prompt_context import build_rag_system_addon
+
+        system_parts.append(build_rag_system_addon(rag_context))
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self._truncate("\n\n".join(system_parts))},

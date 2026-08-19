@@ -71,6 +71,7 @@ class OpenAIChatClient:
         model: str,
         temperature: float = 0.4,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
     ) -> LLMCompletion:
         api_key = (
             settings.OPENAI_API_KEY
@@ -100,6 +101,8 @@ class OpenAIChatClient:
             }
             if tools:
                 kwargs["tools"] = tools
+            if tool_choice is not None:
+                kwargs["tool_choice"] = tool_choice
             response = await client.chat.completions.create(**kwargs)
         except Exception as exc:
             wrapped = wrap_if_transient(exc, model=model)

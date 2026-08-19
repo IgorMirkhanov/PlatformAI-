@@ -352,10 +352,21 @@ def _hits_from_query_result(results: dict[str, Any]) -> list[RAGSearchHit]:
     return hits
 
 
-def _merge_rag_hits(hits: list[RAGSearchHit], top_k: int) -> list[RAGSearchHit]:
+def _merge_rag_hits(
+    hits: list[RAGSearchHit],
+    top_k: int,
+    min_score: float | None = None,
+) -> list[RAGSearchHit]:
+    from app.core.config import settings
+
+    threshold = settings.RAG_MIN_SIMILARITY_SCORE if min_score is None else float(min_score)
     seen: set[tuple[str | None, int | None, str]] = set()
     unique: list[RAGSearchHit] = []
+    dropped = 0
     for hit in sorted(hits, key=lambda item: item["similarity_score"], reverse=True):
+        if hit["similarity_score"] < threshold:
+            dropped += 1
+            continue
         key = (hit.get("document_id"), hit.get("chunk_index"), hit["text"][:80])
         if key in seen:
             continue
@@ -363,6 +374,12 @@ def _merge_rag_hits(hits: list[RAGSearchHit], top_k: int) -> list[RAGSearchHit]:
         unique.append(hit)
         if len(unique) >= top_k:
             break
+    if dropped:
+        logger.debug(
+            "VectorDB.relevance_filter | dropped={dropped} threshold={threshold}",
+            dropped=dropped,
+            threshold=threshold,
+        )
     return unique
 
 
@@ -494,8 +511,10 @@ def _sync_query_chunks_detailed(
     allowed_document_ids: list[str] | None = None,
     excluded_document_ids: list[str] | None = None,
     organization_id: str | None = None,
+    min_score: float | None = None,
 ) -> list[RAGSearchHit]:
     merged: list[RAGSearchHit] = []
+    fetch_k = max(top_k * 3, top_k + 2)
 
     # Prefer tenant-isolated org collection when organization_id is known.
     if organization_id:
@@ -509,7 +528,7 @@ def _sync_query_chunks_detailed(
                 org_collection = _get_org_collection(str(organization_id))
                 query_kwargs: dict[str, Any] = {
                     "query_embeddings": [query_embedding],
-                    "n_results": top_k,
+                    "n_results": fetch_k,
                     "include": ["documents", "distances", "metadatas"],
                 }
                 if org_where:
@@ -534,7 +553,7 @@ def _sync_query_chunks_detailed(
             bot_collection = _get_bot_collection(knowledge_base_id)
             query_kwargs: dict[str, Any] = {
                 "query_embeddings": [query_embedding],
-                "n_results": top_k,
+                "n_results": fetch_k,
                 "include": ["documents", "distances", "metadatas"],
             }
             if bot_where:
@@ -558,7 +577,7 @@ def _sync_query_chunks_detailed(
         try:
             shared_results = _get_collection().query(
                 query_embeddings=[query_embedding],
-                n_results=top_k,
+                n_results=fetch_k,
                 where=shared_where,
                 include=["documents", "distances", "metadatas"],
             )
@@ -570,7 +589,7 @@ def _sync_query_chunks_detailed(
                 error=str(exc),
             )
 
-    hits = _merge_rag_hits(merged, top_k)
+    hits = _merge_rag_hits(merged, top_k, min_score=min_score)
     logger.info(
         "VectorDB.search_detailed | knowledge_base_id={kb_id} hits={count} top_k={top_k} org={org}",
         kb_id=knowledge_base_id,
@@ -800,6 +819,33 @@ async def list_document_chunks(
         raise
 
 
+async def search_knowledge_base(
+    knowledge_base_id: str,
+    query: str,
+    top_k: int = 3,
+    *,
+    min_score: float | None = None,
+    allowed_document_ids: list[str] | None = None,
+    excluded_document_ids: list[str] | None = None,
+    organization_id: str | None = None,
+) -> list[RAGSearchHit]:
+    """
+    Retrieve knowledge-base chunks with relevance threshold filtering.
+
+    Chunks below ``RAG_MIN_SIMILARITY_SCORE`` (or ``min_score``) are discarded so
+    low-confidence matches are not injected into the LLM prompt.
+    """
+    return await similarity_search_detailed(
+        knowledge_base_id,
+        query,
+        top_k=top_k,
+        allowed_document_ids=allowed_document_ids,
+        excluded_document_ids=excluded_document_ids,
+        organization_id=organization_id,
+        min_score=min_score,
+    )
+
+
 async def similarity_search(
     knowledge_base_id: str,
     query: str,
@@ -847,6 +893,7 @@ async def similarity_search_detailed(
     allowed_document_ids: list[str] | None = None,
     excluded_document_ids: list[str] | None = None,
     organization_id: str | None = None,
+    min_score: float | None = None,
 ) -> list[RAGSearchHit]:
     """Retrieve ranked chunks with metadata and similarity scores."""
     if not query.strip():
@@ -862,6 +909,7 @@ async def similarity_search_detailed(
             allowed_document_ids,
             excluded_document_ids,
             organization_id,
+            min_score,
         )
     except Exception as exc:
         logger.exception(

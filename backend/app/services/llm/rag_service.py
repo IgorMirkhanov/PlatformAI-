@@ -251,6 +251,7 @@ class RAGService:
 
         k = int(top_k if top_k is not None else getattr(settings, "RAG_TOP_K", 3))
         k = max(1, min(k, 50))
+        threshold = float(getattr(settings, "RAG_MIN_SIMILARITY_SCORE", 0.35))
 
         query_vectors = await self._embed([cleaned])
         query_vec = query_vectors[0]
@@ -262,7 +263,8 @@ class RAGService:
         scored: list[tuple[float, KnowledgeDocument]] = []
         for doc in docs:
             score = cosine_similarity(query_vec, list(doc.embedding or []))
-            scored.append((score, doc))
+            if score >= threshold:
+                scored.append((score, doc))
         scored.sort(key=lambda item: item[0], reverse=True)
 
         hits: list[dict[str, Any]] = []
