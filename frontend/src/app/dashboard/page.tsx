@@ -8,9 +8,8 @@ import { CreateAgentModal } from "@/components/dashboard/CreateAgentModal";
 import { DashboardHeroHeader } from "@/components/dashboard/DashboardHeroHeader";
 import { ErrorVaultWidget } from "@/components/dashboard/ErrorVaultWidget";
 import { MessagesChart } from "@/components/dashboard/MessagesChart";
-import { TopUpOverlay } from "@/components/dashboard/TopUpOverlay";
+import { BalanceTopUpModal } from "@/components/billing/ManualDepositWidget";
 import { PageSkeleton } from "@/components/ui/Skeleton";
-import { formatBillingCurrency } from "@/lib/billing-utils";
 import {
   fetchDashboardStats,
   fetchDiagnosticLogs,
@@ -41,7 +40,6 @@ export default function DashboardPage() {
   const billing = useBotStore((state) => state.billing);
   const loadBilling = useBotStore((state) => state.loadBilling);
   const loadCurrentUser = useBotStore((state) => state.loadCurrentUser);
-  const topUp = useBotStore((state) => state.topUp);
   const canCreateAgents = canManageBots(currentUser?.role);
 
   const [stats, setStats] = useState<DashboardStatsResponse | null>(null);
@@ -110,19 +108,6 @@ export default function DashboardPage() {
       endDate: exportEndDate,
     });
     showToast("CSV-отчёт формируется и будет загружен.", "success");
-  };
-
-  const handleTopUp = async (amount: number): Promise<void> => {
-    try {
-      await topUp(amount);
-      await loadBilling();
-      await loadStats();
-      showToast(`Баланс пополнен на ${formatBillingCurrency(amount, currency)}.`, "success");
-      setTopUpOpen(false);
-    } catch (error) {
-      showToast(getApiErrorMessage(error, "Пополнение не удалось."), "error");
-      throw error;
-    }
   };
 
   if (loading && !stats && !loadError) {
@@ -221,11 +206,13 @@ export default function DashboardPage() {
         />
       ) : null}
 
-      <TopUpOverlay
+      <BalanceTopUpModal
         open={topUpOpen}
-        currency={currency}
-        onClose={() => setTopUpOpen(false)}
-        onTopUp={handleTopUp}
+        onClose={() => {
+          setTopUpOpen(false);
+          void loadBilling();
+          void loadStats();
+        }}
       />
     </div>
   );

@@ -25,7 +25,9 @@ from app.services.billing_service import billing_service
 from app.services.notification_service import notification_service
 from app.services.billing.payment_billing_service import payment_billing_service
 from app.services.billing.payment_catalog import SUBSCRIPTION_PLANS, TOPUP_PACKAGES
+from app.core.config import settings as app_settings
 from app.services.stripe_service import StripeNotConfigured, stripe_service
+from app.services.tiptop_service import TipTopNotConfigured
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -56,6 +58,25 @@ class CheckoutResponse(BaseModel):
     amount_kzt: float | None = None
     currency: str | None = None
     tokens_allocated: int | None = None
+
+
+class CardTopupRequest(BaseModel):
+    amount: float = Field(gt=0, description="Top-up amount (KZT or USD per currency field)")
+    currency: str = Field(default="KZT", description="KZT or USD")
+    provider: str = Field(default="stripe", description="stripe or tiptop")
+    use_saved_card: bool = Field(default=False, description="Charge saved card token / Stripe PM")
+    tiptop_token: str | None = Field(default=None, description="TipTop saved card token")
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class CardTopupResponse(BaseModel):
+    status: str
+    checkout_url: str | None = None
+    payment_url: str | None = None
+    invoice_id: str | None = None
+    message: str | None = None
+    widget_params: dict | None = None
 
 
 @router.get(
@@ -213,6 +234,11 @@ async def top_up_balance(
     current_user: User = Depends(require_permission(Permission.BILLING_WRITE)),
     _: User = Depends(ensure_not_impersonated),
 ) -> SubscriptionRead:
+    if app_settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Direct balance credit is disabled in production. Use POST /billing/topup with a payment provider.",
+        )
     try:
         if payload.user_id is None:
             payload = payload.model_copy(update={"user_id": current_user.id})
@@ -229,6 +255,62 @@ async def top_up_balance(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to top up balance.",
+        ) from exc
+
+
+@router.post(
+    "/topup",
+    response_model=CardTopupResponse,
+    summary="Wallet top-up by card (alias)",
+    include_in_schema=True,
+)
+@router.post(
+    "/topup/card",
+    response_model=CardTopupResponse,
+    summary="Wallet top-up via Stripe or TipTop Pay",
+)
+@limiter.limit("15/minute", key_func=rate_limit_key_user)
+async def topup_by_card(
+    request: Request,
+    payload: CardTopupRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(Permission.BILLING_WRITE)),
+    _: User = Depends(ensure_not_impersonated),
+) -> CardTopupResponse:
+    org_id = getattr(current_user, "company_id", None)
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Active organization is required.",
+        )
+    org_uuid = uuid.UUID(str(org_id))
+    try:
+        base = (app_settings.FRONTEND_URL or "http://localhost:3000").rstrip("/")
+        success = payload.success_url or f"{base}/dashboard/billing?status=success"
+        cancel = payload.cancel_url or f"{base}/dashboard/billing?status=cancel"
+
+        result = await payment_billing_service.process_topup(
+            db,
+            org_id=org_uuid,
+            user=current_user,
+            amount=payload.amount,
+            currency=payload.currency,
+            provider=payload.provider,
+            use_saved_card=payload.use_saved_card,
+            success_url=success,
+            cancel_url=cancel,
+            tiptop_token=payload.tiptop_token,
+        )
+        return CardTopupResponse(**result)
+    except (StripeNotConfigured, TipTopNotConfigured) as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Billing.card_topup_error | error={error}", error=str(exc))
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process card top-up.",
         ) from exc
 
 
@@ -354,22 +436,30 @@ async def create_wallet_checkout(
                 status.HTTP_400_BAD_REQUEST,
                 detail="Provide item_type + plan_or_package_id or legacy amount.",
             )
-        result = await stripe_service.create_checkout_session(
+
+        base = (app_settings.FRONTEND_URL or "http://localhost:3000").rstrip("/")
+        success = payload.success_url or f"{base}/dashboard/billing?status=success"
+        cancel = payload.cancel_url or f"{base}/dashboard/billing?status=cancel"
+
+        result = await payment_billing_service.process_topup(
             db,
-            current_user,
-            payload.amount,
-            success_url=payload.success_url,
-            cancel_url=payload.cancel_url,
+            org_id=org_uuid,
+            user=current_user,
+            amount=float(payload.amount),
+            currency="USD",
+            provider="stripe",
+            success_url=success,
+            cancel_url=cancel,
         )
+        checkout_url = str(result.get("checkout_url") or result.get("payment_url") or "")
         return CheckoutResponse(
-            checkout_url=result["url"],
-            url=result["url"],
-            id=result.get("id"),
-            amount=result.get("amount"),
-            amount_kzt=result.get("amount_kzt"),
-            currency=result.get("currency"),
+            checkout_url=checkout_url,
+            url=checkout_url,
+            invoice_id=result.get("invoice_id"),
+            amount=float(payload.amount),
+            currency="USD",
         )
-    except StripeNotConfigured as exc:
+    except (StripeNotConfigured, TipTopNotConfigured) as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

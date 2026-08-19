@@ -18,6 +18,8 @@ import type {
   BalanceTopUpRequest,
   BillingStatusResponse,
   BillingTransactionListResponse,
+  CardTopupRequest,
+  CardTopupResponse,
   DepositRequestPayload,
   DepositRequestResponse,
   SubscribeRequest,
@@ -674,6 +676,26 @@ export async function submitDepositRequest(
     body: formData,
   });
 }
+
+/** Production wallet top-up via Stripe or TipTop Pay */
+export async function topUpByCard(payload: CardTopupRequest): Promise<CardTopupResponse> {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  return apiRequest<CardTopupResponse>("/api/v1/billing/topup", {
+    method: "POST",
+    body: JSON.stringify({
+      amount: payload.amount,
+      currency: payload.currency ?? "KZT",
+      provider: payload.provider ?? "stripe",
+      use_saved_card: payload.use_saved_card ?? false,
+      tiptop_token: payload.tiptop_token,
+      success_url: payload.success_url ?? `${origin}/dashboard/billing?status=success`,
+      cancel_url: payload.cancel_url ?? `${origin}/dashboard/billing?status=cancel`,
+    }),
+  });
+}
+
+/** Alias — wallet top-up by card */
+export const topUpWallet = topUpByCard;
 
 export async function fetchBillingNotifications(
   limit = 25,

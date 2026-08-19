@@ -1,27 +1,23 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CreditCard, Loader2, Sparkles, Wallet } from "lucide-react";
 
+import { BalanceTopUpModal } from "@/components/billing/ManualDepositWidget";
 import {
   TransactionLedger,
   type TransactionTypeFilter,
 } from "@/components/billing/TransactionLedger";
 import { useToast } from "@/hooks/useToast";
 import { formatBillingCurrency } from "@/lib/billing-utils";
-import {
-  createWalletCheckout,
-  fetchBillingTransactions,
-  openBillingPortal,
-} from "@/lib/api";
+import { fetchBillingTransactions, openBillingPortal } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useImpersonation } from "@/lib/hooks/useImpersonation";
 import { getApiErrorMessage, useBotStore } from "@/store/useBotStore";
 import type { BillingTransaction } from "@/types/billing";
 import { DEFAULT_BILLING_CURRENCY } from "@/types/billing";
 
-const USD_PRESETS = [10, 25, 50, 100] as const;
 const PAGE_SIZE = 10;
 
 export default function BillingPageClient() {
@@ -32,8 +28,7 @@ export default function BillingPageClient() {
   const loadBilling = useBotStore((state) => state.loadBilling);
   const { isImpersonating } = useImpersonation();
 
-  const [amount, setAmount] = useState<string>("25");
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [topUpOpen, setTopUpOpen] = useState(false);
   const [portalLoading, setPortalLoading] = useState(false);
 
   const [transactions, setTransactions] = useState<BillingTransaction[]>([]);
@@ -68,50 +63,22 @@ export default function BillingPageClient() {
   }, [loadTransactions]);
 
   useEffect(() => {
+    const status = searchParams.get("status");
     const checkout = searchParams.get("checkout");
-    if (checkout === "success") {
-      showToast("Payment received. Wallet balance will update shortly.", "success");
+    const isSuccess = status === "success" || checkout === "success";
+    const isCancel = status === "cancel" || checkout === "cancel";
+
+    if (isSuccess) {
+      showToast("Платеж успешно обработан, баланс пополнен!", "success");
       void loadBilling();
       void loadTransactions();
-    } else if (checkout === "cancel") {
-      showToast("Checkout cancelled.", "error");
+    } else if (isCancel) {
+      showToast("Оплата отменена.", "error");
     }
   }, [loadBilling, loadTransactions, searchParams, showToast]);
 
   const currency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
   const balance = billing?.balance ?? 0;
-
-  const handleCheckout = useCallback(
-    async (event?: FormEvent) => {
-      event?.preventDefault();
-      if (isImpersonating) {
-        showToast("Billing actions are blocked during impersonation.", "error");
-        return;
-      }
-      const parsed = Number(amount.replace(",", "."));
-      if (!Number.isFinite(parsed) || parsed < 0.5) {
-        showToast("Enter at least $0.50.", "error");
-        return;
-      }
-      setCheckoutLoading(true);
-      try {
-        const origin = window.location.origin;
-        const result = await createWalletCheckout({
-          amount: parsed,
-          success_url: `${origin}/dashboard/billing?checkout=success`,
-          cancel_url: `${origin}/dashboard/billing?checkout=cancel`,
-        });
-        if (!result.url) {
-          throw new Error("Stripe did not return a Checkout URL.");
-        }
-        window.location.assign(result.url);
-      } catch (error) {
-        showToast(getApiErrorMessage(error, "Failed to start Stripe Checkout."), "error");
-        setCheckoutLoading(false);
-      }
-    },
-    [amount, isImpersonating, showToast],
-  );
 
   const handlePortal = useCallback(async () => {
     if (isImpersonating) {
@@ -139,8 +106,8 @@ export default function BillingPageClient() {
         </p>
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-50">Wallet & payments</h1>
         <p className="max-w-xl text-sm text-zinc-500">
-          Top up your MP.AI wallet with Stripe, then manage saved cards and invoices in the
-          Customer Portal.
+          Пополнение баланса картой или безналичным переводом. Средства используются для LLM и
+          платформенных операций.
         </p>
       </header>
 
@@ -163,8 +130,7 @@ export default function BillingPageClient() {
               {billingLoading ? "…" : formatBillingCurrency(balance, currency)}
             </p>
             <p className="mt-2 text-sm text-zinc-500">
-              Used for LLM usage and platform fees. Stripe top-ups credit KZT at the platform FX
-              rate.
+              Основной счёт организации в тенге (₸).
             </p>
           </div>
           <div className="rounded-2xl border border-zinc-800 bg-black/40 px-4 py-3 text-right">
@@ -185,65 +151,26 @@ export default function BillingPageClient() {
 
         {isImpersonating ? (
           <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            Impersonation mode: Stripe checkout and portal are disabled.
+            Impersonation mode: billing top-up is disabled.
           </div>
         ) : null}
 
-        <form onSubmit={(event) => void handleCheckout(event)} className="space-y-5">
-          <div className="flex flex-wrap gap-2">
-            {USD_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                type="button"
-                onClick={() => setAmount(String(preset))}
-                disabled={isImpersonating}
-                className={cn(
-                  "rounded-xl border px-3.5 py-2 text-sm font-medium transition",
-                  Number(amount) === preset
-                    ? "border-amber-400/50 bg-amber-400/15 text-amber-100"
-                    : "border-zinc-800 bg-zinc-900/50 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100",
-                  isImpersonating && "cursor-not-allowed opacity-50",
-                )}
-              >
-                ${preset}
-              </button>
-            ))}
-          </div>
+        <p className="mb-5 text-sm text-zinc-500">
+          Выберите способ: мгновенное пополнение картой или ручной перевод по реквизитам с загрузкой
+          чека.
+        </p>
 
-          <label className="block space-y-2">
-            <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Amount (USD)
-            </span>
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">
-                $
-              </span>
-              <input
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                inputMode="decimal"
-                placeholder="25.00"
-                disabled={isImpersonating}
-                className="w-full rounded-xl border border-zinc-800 bg-black/40 py-3 pl-8 pr-3 text-sm text-zinc-100 outline-none ring-amber-500/30 placeholder:text-zinc-600 focus:ring-2 disabled:opacity-50"
-              />
-            </div>
-          </label>
-
-          <button
-            type="submit"
-            disabled={checkoutLoading || isImpersonating}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-400 px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:opacity-60"
-          >
-            {checkoutLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Redirecting to Stripe…
-              </>
-            ) : (
-              "Пополнить баланс"
-            )}
-          </button>
-        </form>
+        <button
+          type="button"
+          onClick={() => setTopUpOpen(true)}
+          disabled={isImpersonating}
+          className={cn(
+            "inline-flex w-full items-center justify-center gap-2 rounded-xl bg-amber-400 px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:opacity-60",
+          )}
+        >
+          <CreditCard className="h-4 w-4" />
+          Пополнить баланс
+        </button>
       </section>
 
       <TransactionLedger
@@ -268,7 +195,7 @@ export default function BillingPageClient() {
         </div>
         <p className="mb-5 text-sm text-zinc-500">
           Update saved cards, download invoices, and manage billing details in the Stripe Customer
-          Portal.
+          Portal (when Stripe is configured).
         </p>
         <button
           type="button"
@@ -286,6 +213,15 @@ export default function BillingPageClient() {
           )}
         </button>
       </section>
+
+      <BalanceTopUpModal
+        open={topUpOpen}
+        onClose={() => {
+          setTopUpOpen(false);
+          void loadBilling();
+          void loadTransactions();
+        }}
+      />
     </div>
   );
 }

@@ -32,7 +32,7 @@ interface TransactionLedgerProps {
   onPageChange?: (page: number) => void;
 }
 
-const CREDIT_TYPES = new Set(["TOP_UP", "BONUS", "REFUND", "MANUAL_DEPOSIT"]);
+const CREDIT_TYPES = new Set(["TOP_UP", "BONUS", "REFUND", "MANUAL_DEPOSIT", "CARD_DEPOSIT"]);
 
 function signedAmount(tx: BillingTransaction): number {
   if (CREDIT_TYPES.has(tx.transaction_type)) {

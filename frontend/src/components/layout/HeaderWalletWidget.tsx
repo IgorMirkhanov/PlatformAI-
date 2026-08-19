@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, Plus, Wallet } from "lucide-react";
 
-import { ManualDepositWidget } from "@/components/billing/ManualDepositWidget";
+import { BalanceTopUpModal } from "@/components/billing/ManualDepositWidget";
 import { formatBillingCurrency } from "@/lib/billing-utils";
 import { canAccessBilling } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
@@ -68,7 +68,7 @@ export function HeaderWalletWidget() {
         </button>
       </div>
 
-      <ManualDepositWidget open={depositOpen} onClose={() => setDepositOpen(false)} />
+      <BalanceTopUpModal open={depositOpen} onClose={() => setDepositOpen(false)} />
     </>
   );
 }

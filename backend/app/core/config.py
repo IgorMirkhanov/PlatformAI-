@@ -54,12 +54,16 @@ class Settings:
     PAYMENT_WEBHOOK_DEV_SECRET: str = os.getenv("PAYMENT_WEBHOOK_DEV_SECRET", "dev-payment-secret")
     STRIPE_PRICE_PRO: str | None = os.getenv("STRIPE_PRICE_PRO") or None
     STRIPE_PRICE_ENTERPRISE: str | None = os.getenv("STRIPE_PRICE_ENTERPRISE") or None
-    STRIPE_PUBLISHABLE_KEY: str | None = os.getenv("STRIPE_PUBLISHABLE_KEY") or None
+    STRIPE_PUBLISHABLE_KEY: str | None = os.getenv("STRIPE_PUBLISHABLE_KEY") or os.getenv("STRIPE_PUBLIC_KEY") or None
+    STRIPE_PUBLIC_KEY: str | None = os.getenv("STRIPE_PUBLIC_KEY") or os.getenv("STRIPE_PUBLISHABLE_KEY") or None
     # Optional Stripe Billing Meter event name (usage-based). Empty = local ledger only.
     STRIPE_METER_EVENT_NAME: str | None = os.getenv("STRIPE_METER_EVENT_NAME") or None
     STRIPE_METERING_ENABLED: bool = os.getenv("STRIPE_METERING_ENABLED", "false").lower() == "true"
 
-    # AI safety
+    # TipTop Pay / Freedom Pay (KZT acquiring, CloudPayments-compatible API)
+    TIPTOP_PUBLIC_ID: str | None = os.getenv("TIPTOP_PUBLIC_ID") or None
+    TIPTOP_API_SECRET: str | None = os.getenv("TIPTOP_API_SECRET") or None
+    TIPTOP_API_URL: str = os.getenv("TIPTOP_API_URL", "https://api.tiptoppay.kz")
     AI_GUARDRAILS_ENABLED: bool = os.getenv("AI_GUARDRAILS_ENABLED", "true").lower() == "true"
     AI_MODERATION_ENABLED: bool = os.getenv("AI_MODERATION_ENABLED", "false").lower() == "true"
 
@@ -420,6 +424,10 @@ class Settings:
 
 
 settings = Settings()
+
+
+def resolve_stripe_publishable_key() -> str | None:
+    return (settings.STRIPE_PUBLIC_KEY or settings.STRIPE_PUBLISHABLE_KEY or "").strip() or None
 
 
 def is_seeded_superadmin_email(email: str | None) -> bool:

@@ -141,10 +141,16 @@ class StripeService:
             raise ValueError("amount must be a positive number")
 
         amount = float(amount)
-        # Stripe expects the smallest currency unit (cents / tiyin).
-        unit_amount = int(round(amount * 100))
-        if unit_amount < 50:  # Stripe minimum ~$0.50 for USD
-            raise ValueError("Minimum top-up amount is 0.50")
+        currency_norm = currency.lower()
+        # Stripe expects the smallest currency unit (cents / whole tenge for KZT).
+        if currency_norm in {"jpy", "krw", "vnd", "kzt"}:
+            unit_amount = int(round(amount))
+            if unit_amount < 100:
+                raise ValueError("Minimum top-up amount is 100 KZT")
+        else:
+            unit_amount = int(round(amount * 100))
+            if unit_amount < 50:  # Stripe minimum ~$0.50 for USD
+                raise ValueError("Minimum top-up amount is 0.50")
 
         customer_id = await self.get_or_create_customer_id(db, user)
         stripe = self._stripe()
@@ -158,7 +164,7 @@ class StripeService:
 
         amount_kzt = (
             round(amount * USD_TO_KZT, 2)
-            if currency.lower() == "usd"
+            if currency_norm == "usd"
             else round(amount, 2)
         )
 
@@ -172,7 +178,7 @@ class StripeService:
                 {
                     "quantity": 1,
                     "price_data": {
-                        "currency": currency.lower(),
+                        "currency": currency_norm,
                         "unit_amount": unit_amount,
                         "product_data": {
                             "name": "MP.AI Wallet Top-up",
@@ -187,13 +193,15 @@ class StripeService:
                 "organization_id": str(getattr(user, "company_id", "") or ""),
                 "amount_major": str(amount),
                 "amount_kzt": str(amount_kzt),
-                "currency": currency.lower(),
+                "currency": currency_norm,
                 **(extra_metadata or {}),
             },
             payment_intent_data={
                 "metadata": {
                     "purpose": "wallet_topup",
                     "user_id": str(user.id),
+                    "organization_id": str(getattr(user, "company_id", "") or ""),
+                    **({k: str(v) for k, v in (extra_metadata or {}).items()}),
                 }
             },
         )
@@ -203,7 +211,62 @@ class StripeService:
             "url": session["url"],
             "amount": amount,
             "amount_kzt": amount_kzt,
-            "currency": currency.lower(),
+            "currency": currency_norm,
+        }
+
+    async def charge_saved_payment_method(
+        self,
+        db: AsyncSession,
+        user: User,
+        amount: float,
+        *,
+        currency: str = "usd",
+        extra_metadata: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        """Off-session charge against the customer's default saved card."""
+        if amount is None or float(amount) <= 0:
+            raise ValueError("amount must be a positive number")
+
+        currency_norm = currency.lower()
+        amount_f = float(amount)
+        if currency_norm in {"jpy", "krw", "vnd", "kzt"}:
+            unit_amount = int(round(amount_f))
+            if unit_amount < 100:
+                raise ValueError("Minimum top-up amount is 100 KZT")
+        else:
+            unit_amount = int(round(amount_f * 100))
+            if unit_amount < 50:
+                raise ValueError("Minimum top-up amount is 0.50 USD")
+
+        customer_id = await self.get_or_create_customer_id(db, user)
+        stripe = self._stripe()
+        payment_methods = stripe.PaymentMethod.list(customer=customer_id, type="card", limit=1)
+        if not payment_methods.data:
+            raise ValueError(
+                "No saved card on file. Complete a Stripe Checkout once or add a card in the Customer Portal."
+            )
+        payment_method_id = payment_methods.data[0].id
+
+        metadata = {
+            "purpose": "wallet_topup",
+            "user_id": str(user.id),
+            "organization_id": str(getattr(user, "company_id", "") or ""),
+            **({k: str(v) for k, v in (extra_metadata or {}).items()}),
+        }
+        intent = stripe.PaymentIntent.create(
+            amount=unit_amount,
+            currency=currency_norm,
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            metadata=metadata,
+        )
+        await db.commit()
+        return {
+            "id": str(intent["id"]),
+            "status": str(intent.get("status") or ""),
+            "payment_method": payment_method_id,
         }
 
     async def create_customer_portal(

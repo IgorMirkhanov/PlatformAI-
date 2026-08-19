@@ -132,6 +132,7 @@ class BillingService:
                         [
                             BillingTransactionType.TOP_UP,
                             BillingTransactionType.MANUAL_DEPOSIT,
+                            BillingTransactionType.CARD_DEPOSIT,
                             BillingTransactionType.BONUS,
                             BillingTransactionType.REFUND,
                         ]
@@ -268,6 +269,59 @@ class BillingService:
             "Billing.top_up | user_id={user_id} amount={amount} balance={balance}",
             user_id=user.id,
             amount=payload.amount,
+            balance=str(subscription.balance),
+        )
+        return SubscriptionRead.model_validate(subscription)
+
+    async def credit_card_deposit(
+        self,
+        db: AsyncSession,
+        *,
+        user_id: uuid.UUID | None,
+        amount: Decimal | float,
+        organization_id: uuid.UUID | None = None,
+        description: str = "Пополнение банковской картой",
+    ) -> SubscriptionRead:
+        """Instant card top-up — updates KZT subscription balance + CARD_DEPOSIT ledger row."""
+        user = await self._resolve_user(db, user_id)
+        subscription = await self._get_or_create_active_subscription(db, user.id)
+        amount_value = Decimal(str(amount)).quantize(Decimal("0.01"))
+        if amount_value <= 0:
+            raise ValueError("Deposit amount must be greater than zero.")
+
+        org_id = organization_id or getattr(user, "company_id", None)
+        subscription.balance = Decimal(str(subscription.balance)) + amount_value
+
+        await self._record_transaction(
+            db,
+            user_id=user.id,
+            organization_id=org_id,
+            subscription_id=subscription.id,
+            transaction_type=BillingTransactionType.CARD_DEPOSIT,
+            amount=amount_value,
+            description=description,
+            status=BillingTransactionStatus.SUCCESS,
+        )
+
+        if amount_value >= BONUS_THRESHOLD:
+            bonus_amount = (amount_value * BONUS_RATE).quantize(Decimal("0.01"))
+            await self._record_transaction(
+                db,
+                user_id=user.id,
+                organization_id=org_id,
+                subscription_id=subscription.id,
+                transaction_type=BillingTransactionType.BONUS,
+                amount=bonus_amount,
+                description="Бонус за пополнение от 15 000 ₸",
+                status=BillingTransactionStatus.SUCCESS,
+            )
+
+        await db.flush()
+        await db.refresh(subscription)
+        logger.info(
+            "Billing.card_deposit | user_id={user_id} amount={amount} balance={balance}",
+            user_id=user.id,
+            amount=str(amount_value),
             balance=str(subscription.balance),
         )
         return SubscriptionRead.model_validate(subscription)

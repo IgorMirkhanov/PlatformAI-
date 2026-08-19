@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 class PaymentProvider(str, enum.Enum):
     STRIPE = "stripe"
+    TIPTOP = "tiptop"
     YOOKASSA = "yookassa"
     MANUAL = "manual"
 

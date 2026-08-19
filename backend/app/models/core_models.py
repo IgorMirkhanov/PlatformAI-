@@ -62,6 +62,7 @@ class BillingTransactionType(str, enum.Enum):
     BONUS = "BONUS"
     REFUND = "REFUND"
     MANUAL_DEPOSIT = "MANUAL_DEPOSIT"
+    CARD_DEPOSIT = "CARD_DEPOSIT"
 
 
 class BillingTransactionStatus(str, enum.Enum):

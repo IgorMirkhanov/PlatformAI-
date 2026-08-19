@@ -976,6 +976,39 @@ async def wazzup_webhook(
 
 
 @router.post(
+    "/webhooks/payments",
+    summary="Unified payment gateway webhook (Stripe payment_intent / checkout)",
+    include_in_schema=True,
+)
+async def unified_payments_webhook(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str | bool]:
+    """
+    Accepts Stripe ``checkout.session.completed`` and ``payment_intent.succeeded``.
+    Registered before ``/webhooks/payments/{provider}`` to avoid path conflicts.
+    """
+    from app.services.billing.payment_billing_service import payment_billing_service
+
+    raw = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    try:
+        return await payment_billing_service.handle_payments_webhook(
+            db,
+            raw_body=raw,
+            headers=headers,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Payment.webhook_error | error={error}", error=str(exc))
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Payment webhook processing failed.",
+        ) from exc
+
+
+@router.post(
     "/webhooks/payments/{provider}",
     summary="Payment provider webhook (Stripe / YooKassa / manual)",
     include_in_schema=True,
@@ -995,6 +1028,26 @@ async def payment_provider_webhook(
     raw = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
     provider_norm = (provider or "").strip().lower()
+
+    if provider_norm in {"tiptop", "freedom"}:
+        try:
+            return await payment_billing_service.handle_tiptop_webhook(
+                db,
+                raw_body=raw,
+                headers=headers,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+
+    if provider_norm == "stripe":
+        try:
+            return await payment_billing_service.handle_payments_webhook(
+                db,
+                raw_body=raw,
+                headers=headers,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
     if not payment_billing_service.verify_provider_signature(
         provider_norm,

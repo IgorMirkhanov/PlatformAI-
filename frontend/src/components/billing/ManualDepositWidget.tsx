@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { FileText, Loader2, UploadCloud, Wallet, X } from "lucide-react";
+import {
+  ChevronDown,
+  CreditCard,
+  FileText,
+  Globe,
+  Loader2,
+  Sparkles,
+  UploadCloud,
+  Wallet,
+  X,
+} from "lucide-react";
 
-import { submitDepositRequest } from "@/lib/api";
+import { submitDepositRequest, topUpByCard } from "@/lib/api";
 import { formatBillingCurrency } from "@/lib/billing-utils";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/useToast";
@@ -15,12 +25,19 @@ import {
   DEFAULT_BILLING_CURRENCY,
   MANUAL_DEPOSIT_PAYMENT_DETAILS,
   TOP_UP_PRESETS_KZT,
+  TOP_UP_PRESETS_USD,
+  type BillingCurrency,
 } from "@/types/billing";
 
-interface ManualDepositWidgetProps {
+interface BalanceTopUpModalProps {
   open: boolean;
   onClose: () => void;
 }
+
+/** @deprecated Use BalanceTopUpModal */
+export type ManualDepositWidgetProps = BalanceTopUpModalProps;
+
+type PayProvider = "stripe" | "tiptop";
 
 const ACCEPT_ATTR = ".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf";
 
@@ -33,28 +50,86 @@ function isAcceptedReceipt(file: File): boolean {
   return name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".pdf");
 }
 
-function toPureIntegerAmount(raw: string | number): number {
-  const parsed = typeof raw === "number" ? raw : Number(String(raw).replace(",", ".").trim());
+function parseAmount(raw: string, currency: BillingCurrency): number {
+  const parsed = Number(String(raw).replace(",", ".").trim());
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return NaN;
   }
-  return Math.trunc(parsed);
+  return currency === "KZT" ? Math.trunc(parsed) : Math.round(parsed * 100) / 100;
 }
 
-export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps) {
+function AmountSection({
+  amount,
+  amountNumber,
+  currency,
+  inputRef,
+  onSelect,
+  onChange,
+}: {
+  amount: string;
+  amountNumber: number;
+  currency: BillingCurrency;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  onSelect: (value: number) => void;
+  onChange: (value: string) => void;
+}) {
+  const presets = currency === "USD" ? TOP_UP_PRESETS_USD : TOP_UP_PRESETS_KZT;
+
+  return (
+    <section>
+      <label htmlFor="topup-amount" className="text-xs text-zinc-500">
+        Введите сумму пополнения
+      </label>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {presets.map((value) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => onSelect(value)}
+            className={cn(
+              "rounded-xl border px-3 py-2 text-sm font-medium transition",
+              amountNumber === value
+                ? "border-violet-500/60 bg-violet-500/10 text-violet-100"
+                : "border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/70",
+            )}
+          >
+            {formatBillingCurrency(value, currency)}
+          </button>
+        ))}
+      </div>
+      <input
+        ref={inputRef}
+        id="topup-amount"
+        type="number"
+        min={currency === "USD" ? "0.5" : "100"}
+        step={currency === "USD" ? "0.01" : "1"}
+        value={amount}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={currency === "USD" ? "Сумма в USD" : "Сумма в ₸"}
+        className="mt-3 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-violet-500/50 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+      />
+    </section>
+  );
+}
+
+export function BalanceTopUpModal({ open, onClose }: BalanceTopUpModalProps) {
   const billing = useBotStore((state) => state.billing);
   const loadBillingTransactions = useBotStore((state) => state.loadBillingTransactions);
   const { showToast } = useToast();
 
+  const amountInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [currency, setCurrency] = useState<BillingCurrency>("KZT");
   const [amount, setAmount] = useState(String(TOP_UP_PRESETS_KZT[1]));
+  const [manualOpen, setManualOpen] = useState(false);
   const [receipt, setReceipt] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<PayProvider | "saved" | "manual" | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  const currency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
-  const amountNumber = toPureIntegerAmount(amount);
+  const displayCurrency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
+  const amountNumber = parseAmount(amount, currency);
 
   useEffect(() => {
     setMounted(true);
@@ -64,10 +139,13 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
     if (!open) {
       return;
     }
+    setCurrency("KZT");
     setAmount(String(TOP_UP_PRESETS_KZT[1]));
+    setManualOpen(false);
     setReceipt(null);
     setDragging(false);
-    setSubmitting(false);
+    setSubmitting(null);
+    window.setTimeout(() => amountInputRef.current?.focus(), 120);
   }, [open]);
 
   const assignReceipt = useCallback(
@@ -85,8 +163,61 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
     [showToast],
   );
 
-  const handleSubmit = async (): Promise<void> => {
-    const finalAmount = toPureIntegerAmount(amount);
+  const refreshBilling = (): void => {
+    void loadBillingTransactions();
+    void useBotStore.getState().loadBilling();
+  };
+
+  const handlePay = async (
+    provider: PayProvider,
+    options?: { useSavedCard?: boolean; payCurrency?: BillingCurrency },
+  ): Promise<void> => {
+    const payCurrency: BillingCurrency =
+      options?.payCurrency ??
+      (provider === "stripe" && !options?.useSavedCard ? "USD" : currency);
+    const finalAmount = parseAmount(amount, payCurrency);
+    if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
+      showToast("Введите сумму пополнения больше нуля.", "error");
+      return;
+    }
+
+    setSubmitting(options?.useSavedCard ? "saved" : provider);
+    try {
+      const result = await topUpByCard({
+        amount: finalAmount,
+        currency: payCurrency,
+        provider,
+        use_saved_card: Boolean(options?.useSavedCard),
+      });
+
+      const redirectUrl = result.checkout_url || result.payment_url;
+      if (result.status === "redirect" && redirectUrl) {
+        window.location.assign(redirectUrl);
+        return;
+      }
+
+      if (result.status === "processing") {
+        showToast(
+          result.message ||
+            "Платеж отправлен. Баланс обновится после подтверждения эквайера.",
+          "success",
+        );
+        onClose();
+        return;
+      }
+
+      showToast(result.message || "Не удалось инициализировать оплату.", "error");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Не удалось выполнить оплату.";
+      showToast(message, "error");
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const handleManualSubmit = async (): Promise<void> => {
+    const finalAmount = parseAmount(amount, "KZT");
     if (!Number.isFinite(finalAmount) || finalAmount <= 0) {
       showToast("Введите сумму пополнения больше нуля.", "error");
       return;
@@ -96,11 +227,10 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
       return;
     }
 
-    setSubmitting(true);
+    setSubmitting("manual");
     try {
       const result = await submitDepositRequest({ amount: finalAmount, receipt });
-      void loadBillingTransactions();
-      void useBotStore.getState().loadBilling();
+      refreshBilling();
       showToast(
         result.message ||
           "Заявка принята! Баланс обновится после проверки чека оператором.",
@@ -112,7 +242,7 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
         error instanceof Error ? error.message : "Не удалось отправить заявку на пополнение.";
       showToast(message, "error");
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   };
 
@@ -151,14 +281,18 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
             <div className="flex items-start justify-between gap-3 border-b border-zinc-800/80 px-5 py-4">
               <div>
                 <div className="mb-1.5 flex items-center gap-2">
-                  <Wallet className="h-4 w-4 text-zinc-300" />
+                  <Wallet className="h-4 w-4 text-violet-300" />
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
-                    Ручное пополнение
+                    Billing
                   </p>
                 </div>
                 <h2 className="text-lg font-semibold text-zinc-50">Пополнить баланс</h2>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Текущий баланс: {formatBillingCurrency(billing?.balance ?? 0, currency)}
+                <p className="mt-1.5 text-xs italic text-zinc-500">
+                  Пополните баланс, чтобы обеспечить стабильную работу агента и доступ ко всем
+                  функциям
+                </p>
+                <p className="mt-2 text-xs text-zinc-600">
+                  Текущий баланс: {formatBillingCurrency(billing?.balance ?? 0, displayCurrency)}
                 </p>
               </div>
               <button
@@ -171,164 +305,170 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
             </div>
 
             <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
-              <section className="rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
-                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                  {MANUAL_DEPOSIT_PAYMENT_DETAILS.title}
-                </p>
-                <div className="mt-3 space-y-3 text-sm text-zinc-300">
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.kaspi.label}
-                    </p>
-                    <p className="mt-0.5 font-medium text-zinc-100">
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.kaspi.value}
-                    </p>
-                    <p className="mt-0.5 text-xs text-zinc-500">
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.kaspi.hint}
-                    </p>
-                  </div>
-                  <div className="h-px bg-zinc-800" />
-                  <div className="space-y-1 text-xs leading-relaxed text-zinc-400">
-                    <p>
-                      <span className="text-zinc-500">Получатель:</span>{" "}
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.beneficiary}
-                    </p>
-                    <p>
-                      <span className="text-zinc-500">БИН:</span>{" "}
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.bin}
-                    </p>
-                    <p>
-                      <span className="text-zinc-500">ИИК:</span>{" "}
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.iik}
-                    </p>
-                    <p>
-                      <span className="text-zinc-500">БИК:</span>{" "}
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.bik}
-                    </p>
-                    <p>
-                      <span className="text-zinc-500">Банк:</span>{" "}
-                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.bankName}
-                    </p>
-                  </div>
-                </div>
-              </section>
+              <AmountSection
+                amount={amount}
+                amountNumber={amountNumber}
+                currency={currency}
+                inputRef={amountInputRef}
+                onSelect={(value) => {
+                  setCurrency(currency === "USD" ? "USD" : "KZT");
+                  setAmount(String(value));
+                }}
+                onChange={setAmount}
+              />
 
-              <section>
-                <label className="text-xs text-zinc-500">Сумма пополнения (₸)</label>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {TOP_UP_PRESETS_KZT.map((value) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => {
-                        setAmount(String(Math.trunc(value)));
-                      }}
-                      className={cn(
-                        "rounded-xl border px-3 py-2 text-sm font-medium transition",
-                        amountNumber === value
-                          ? "border-zinc-500 bg-zinc-800 text-zinc-100"
-                          : "border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/70",
-                      )}
-                    >
-                      {formatBillingCurrency(value, currency)}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={amount}
-                  onChange={(event) => {
-                    const next = event.target.value;
-                    if (next === "") {
-                      setAmount("");
-                      return;
-                    }
-                    const integer = toPureIntegerAmount(next);
-                    setAmount(Number.isFinite(integer) ? String(integer) : next.replace(/[^\d]/g, ""));
-                  }}
-                  placeholder="Введите сумму"
-                  className="mt-3 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none"
-                />
-              </section>
-
-              <section>
-                <label className="text-xs text-zinc-500">Загрузить чек об оплате</label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={ACCEPT_ATTR}
-                  className="hidden"
-                  onChange={(event) => assignReceipt(event.target.files?.[0] ?? null)}
-                />
+              <div className="space-y-2.5">
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    setDragging(true);
-                  }}
-                  onDragLeave={(event) => {
-                    event.preventDefault();
-                    setDragging(false);
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setDragging(false);
-                    assignReceipt(event.dataTransfer.files?.[0] ?? null);
-                  }}
+                  disabled={submitting !== null}
+                  onClick={() => void handlePay("stripe", { useSavedCard: true, payCurrency: "KZT" })}
                   className={cn(
-                    "mt-2 flex w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition",
-                    dragging
-                      ? "border-zinc-400 bg-zinc-900/80"
-                      : "border-zinc-700 bg-zinc-950/50 hover:border-zinc-500 hover:bg-zinc-900/60",
+                    "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition",
+                    "bg-gradient-to-r from-violet-600 to-fuchsia-600 shadow-glow-purple",
+                    "hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-50",
                   )}
                 >
-                  <UploadCloud className="h-6 w-6 text-zinc-400" />
-                  <p className="text-sm text-zinc-300">Перетащите файл сюда или нажмите для выбора</p>
-                  <p className="text-[11px] text-zinc-600">PNG, JPG или PDF · до 50 МБ</p>
+                  {submitting === "saved" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  Tip! Пополнить с привязанной карты
                 </button>
 
-                {receipt ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/50 px-3 py-2.5">
-                    <FileText className="h-4 w-4 shrink-0 text-zinc-400" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium text-zinc-200">{receipt.name}</p>
-                      <p className="text-[10px] text-zinc-500">
-                        {(receipt.size / 1024).toFixed(1)} КБ
-                      </p>
+                <button
+                  type="button"
+                  disabled={submitting !== null}
+                  onClick={() => {
+                    setCurrency("KZT");
+                    void handlePay("tiptop", { payCurrency: "KZT" });
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left transition",
+                    "hover:border-zinc-600 hover:bg-zinc-900 disabled:opacity-50",
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <CreditCard className="h-4 w-4 shrink-0 text-zinc-300" />
+                    <div>
+                      <p className="text-sm font-medium text-zinc-100">Пополнить через TipTop Pay</p>
+                      <p className="text-[11px] text-zinc-500">Оплата картой в тенге</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setReceipt(null)}
-                      className="rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
                   </div>
-                ) : null}
-              </section>
-            </div>
+                  <span className="shrink-0 rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                    Казахстан / KZT
+                  </span>
+                  {submitting === "tiptop" ? <Loader2 className="h-4 w-4 animate-spin text-zinc-400" /> : null}
+                </button>
 
-            <div className="border-t border-zinc-800/80 p-5">
+                <button
+                  type="button"
+                  disabled={submitting !== null}
+                  onClick={() => {
+                    setCurrency("USD");
+                    setAmount(String(TOP_UP_PRESETS_USD[0]));
+                    void handlePay("stripe", { payCurrency: "USD" });
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left transition",
+                    "hover:border-zinc-600 hover:bg-zinc-900 disabled:opacity-50",
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <Globe className="h-4 w-4 shrink-0 text-zinc-300" />
+                    <div>
+                      <p className="text-sm font-medium text-zinc-100">Пополнить через Stripe</p>
+                      <p className="text-[11px] text-zinc-500">Международные карты</p>
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-md bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-300">
+                    Международные / USD
+                  </span>
+                  {submitting === "stripe" ? <Loader2 className="h-4 w-4 animate-spin text-zinc-400" /> : null}
+                </button>
+              </div>
+
               <button
                 type="button"
-                onClick={() => void handleSubmit()}
-                disabled={submitting}
-                className={cn(
-                  "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-white transition",
-                  "bg-gradient-to-r from-violet-600 to-fuchsia-600 shadow-glow-purple",
-                  "hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-50",
-                )}
+                onClick={() => setManualOpen((value) => !value)}
+                className="flex w-full items-center justify-between rounded-lg px-1 py-1 text-xs text-zinc-500 transition hover:text-zinc-300"
               >
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Отправить подтверждение
+                <span>Безналичный перевод / Kaspi (ручная проверка)</span>
+                <ChevronDown
+                  className={cn("h-4 w-4 transition", manualOpen ? "rotate-180" : "")}
+                />
               </button>
+
+              {manualOpen ? (
+                <div className="space-y-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/30 p-4">
+                  <section className="rounded-xl border border-zinc-800/90 bg-zinc-900/40 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                      {MANUAL_DEPOSIT_PAYMENT_DETAILS.title}
+                    </p>
+                    <div className="mt-2 space-y-2 text-xs text-zinc-400">
+                      <p>{MANUAL_DEPOSIT_PAYMENT_DETAILS.kaspi.value}</p>
+                      <p>{MANUAL_DEPOSIT_PAYMENT_DETAILS.bank.beneficiary}</p>
+                    </div>
+                  </section>
+
+                  <section>
+                    <label className="text-xs text-zinc-500">Загрузить чек об оплате</label>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept={ACCEPT_ATTR}
+                      className="hidden"
+                      onChange={(event) => assignReceipt(event.target.files?.[0] ?? null)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragEnter={(event) => {
+                        event.preventDefault();
+                        setDragging(true);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDragging(true);
+                      }}
+                      onDragLeave={(event) => {
+                        event.preventDefault();
+                        setDragging(false);
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDragging(false);
+                        assignReceipt(event.dataTransfer.files?.[0] ?? null);
+                      }}
+                      className={cn(
+                        "mt-2 flex w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-6 text-center transition",
+                        dragging
+                          ? "border-zinc-400 bg-zinc-900/80"
+                          : "border-zinc-700 bg-zinc-950/50 hover:border-zinc-500",
+                      )}
+                    >
+                      <UploadCloud className="h-5 w-5 text-zinc-400" />
+                      <p className="text-xs text-zinc-400">PNG, JPG или PDF</p>
+                    </button>
+                    {receipt ? (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2">
+                        <FileText className="h-4 w-4 text-zinc-400" />
+                        <span className="truncate text-xs text-zinc-300">{receipt.name}</span>
+                      </div>
+                    ) : null}
+                  </section>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleManualSubmit()}
+                    disabled={submitting !== null}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-zinc-800 disabled:opacity-50"
+                  >
+                    {submitting === "manual" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Отправить на проверку
+                  </button>
+                </div>
+              ) : null}
             </div>
           </motion.div>
         </motion.div>
@@ -337,3 +477,6 @@ export function ManualDepositWidget({ open, onClose }: ManualDepositWidgetProps)
     document.body,
   );
 }
+
+/** Backward-compatible export */
+export const ManualDepositWidget = BalanceTopUpModal;

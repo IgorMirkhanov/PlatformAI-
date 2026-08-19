@@ -7,7 +7,8 @@ export type BillingTransactionType =
   | "LLM_DEDUCTION"
   | "BONUS"
   | "REFUND"
-  | "MANUAL_DEPOSIT";
+  | "MANUAL_DEPOSIT"
+  | "CARD_DEPOSIT";
 export type BillingTransactionStatus =
   | "SUCCESS"
   | "PENDING"
@@ -95,6 +96,30 @@ export interface DepositRequestResponse {
   created_at: string;
 }
 
+export interface CardTopupRequest {
+  amount: number;
+  currency?: BillingCurrency;
+  provider?: "stripe" | "tiptop";
+  use_saved_card?: boolean;
+  tiptop_token?: string;
+  success_url?: string;
+  cancel_url?: string;
+}
+
+export interface CardTopupResponse {
+  status: "redirect" | "processing" | string;
+  checkout_url?: string;
+  payment_url?: string;
+  invoice_id?: string;
+  message?: string;
+  widget_params?: {
+    public_id?: string;
+    amount?: number;
+    currency?: string;
+    invoice_id?: string;
+  };
+}
+
 export interface SystemNotificationRead {
   id: string;
   organization_id: string | null;
@@ -146,6 +171,8 @@ export const DEFAULT_BILLING_CURRENCY: BillingCurrency = "KZT";
 
 export const TOP_UP_PRESETS_KZT = [5000, 15000, 50000] as const;
 
+export const TOP_UP_PRESETS_USD = [10, 25, 50, 100] as const;
+
 export const ACCEPTED_RECEIPT_MIME_TYPES = [
   "image/png",
   "image/jpeg",
@@ -154,17 +181,17 @@ export const ACCEPTED_RECEIPT_MIME_TYPES = [
 ] as const;
 
 export const MANUAL_DEPOSIT_PAYMENT_DETAILS = {
-  title: "Корпоративные реквизиты MoonAI",
+  title: "Реквизиты для безналичного перевода (B2B)",
   kaspi: {
-    label: "Kaspi Business",
-    value: "QR / перевод на Kaspi Business «MoonAI LLP»",
-    hint: "В комментарии укажите название организации",
+    label: "Kaspi перевод / QR",
+    value: "Перевод на Kaspi Business — MP.AI Platform",
+    hint: "В комментарии укажите email аккаунта и название организации",
   },
   bank: {
     label: "Банковский перевод (KZT)",
-    beneficiary: "ТОО «MoonAI»",
-    bin: "123456789012",
-    iik: "KZ00 0000 0000 0000 0000",
+    beneficiary: "ТОО «MP.AI Platform»",
+    bin: "Запросите у billing@mp.ai",
+    iik: "Запросите у billing@mp.ai",
     bik: "CASPKZKA",
     bankName: "АО «Kaspi Bank»",
   },
@@ -272,6 +299,7 @@ export const TRANSACTION_TYPE_LABELS: Record<BillingTransactionType, string> = {
   BONUS: "Бонус",
   REFUND: "Возврат",
   MANUAL_DEPOSIT: "Ручное пополнение",
+  CARD_DEPOSIT: "Пополнение картой",
 };
 
 export const PLAN_BADGE_STYLES: Record<
