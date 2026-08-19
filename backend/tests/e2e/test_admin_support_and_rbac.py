@@ -3,7 +3,7 @@ Admin Support + RBAC e2e — isolation, search inspection, impersonation audit, 
 
 Steps:
   A) Regular OWNER → 403 on admin search / impersonate / llm-models
-  B) SUPPORT + SUPERADMIN search returns org, balance, plan, bots
+  B) SUPPORT forbidden on admin search; SUPERADMIN search returns org, balance, plan, bots
   C) SUPERADMIN impersonate → JWT impersonator_id + AdminAuditLog + /bots works
   D) Admin create / test-connection / deactivate LLM model; hidden from tenants
 
@@ -63,7 +63,7 @@ class AdminRbacReport:
         print("  QA REPORT — Admin Support & RBAC")
         print("=" * 64)
         print(f"  RBAC gate (all 403)           : {yes(self.rbac_all_403)}")
-        print(f"  SUPPORT search / inspection   : {yes(self.search_support_ok)}")
+        print(f"  SUPPORT forbidden on search     : {yes(self.search_support_ok)}")
         print(f"  SUPERADMIN search             : {yes(self.search_superadmin_ok)}")
         print(f"  Impersonation JWT claims      : {yes(self.impersonate_jwt_ok)}")
         print(f"  AdminAuditLog IMPERSONATION   : {yes(self.audit_log_ok)}")
@@ -373,16 +373,20 @@ async def test_step_b_support_and_superadmin_search(admin_harness: dict) -> None
     target = admin_harness["client_user"]
     query = "test"
 
-    for label, actor in (
-        ("SUPPORT", admin_harness["support"]),
-        ("SUPERADMIN", admin_harness["superadmin"]),
+    for label, actor, expected_status in (
+        ("SUPPORT", admin_harness["support"], 403),
+        ("SUPERADMIN", admin_harness["superadmin"], 200),
     ):
         resp = await client.get(
             "/api/v1/admin/users/search",
             headers=_auth(actor["token"]),
             params={"query": query},
         )
-        assert resp.status_code == 200, f"{label}: {resp.status_code} {resp.text}"
+        assert resp.status_code == expected_status, f"{label}: {resp.status_code} {resp.text}"
+        if expected_status != 200:
+            if label == "SUPPORT":
+                REPORT.search_support_ok = True
+            continue
         body = resp.json()
         assert "items" in body and "total" in body
         match = next((item for item in body["items"] if item["id"] == str(target["user_id"])), None)
@@ -394,9 +398,7 @@ async def test_step_b_support_and_superadmin_search(admin_harness: dict) -> None
         assert isinstance(match.get("bots"), list)
         assert len(match["bots"]) >= 1
         assert match["bots"][0]["name"] == "Support Inspect Bot"
-        if label == "SUPPORT":
-            REPORT.search_support_ok = True
-        else:
+        if label == "SUPERADMIN":
             REPORT.search_superadmin_ok = True
 
     REPORT.notes.append(

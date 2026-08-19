@@ -141,7 +141,13 @@ async def test_invite_stores_hashed_token() -> None:
 
     assert response.token
     assert len(response.token) >= 32
-    added = db.add.call_args.args[0]
+    from app.models.core_models import TeamInvitation
+
+    added = next(
+        call.args[0]
+        for call in db.add.call_args_list
+        if isinstance(call.args[0], TeamInvitation)
+    )
     assert added.token == _hash_invite_token(response.token)
     assert added.token != response.token
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 
 from sqlalchemy import text
@@ -10,8 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 async def pg_advisory_xact_lock_uuid(db: AsyncSession, namespace: int, key: uuid.UUID) -> None:
     """Serialize concurrent work for ``key`` within the current DB transaction."""
-    bind = db.get_bind()
-    if bind is not None and bind.dialect.name != "postgresql":
+    get_bind = getattr(db, "get_bind", None)
+    if not callable(get_bind):
+        return
+    bind = get_bind()
+    if inspect.isawaitable(bind):
+        return
+    if bind is None:
+        return
+    dialect = getattr(bind, "dialect", None)
+    if dialect is None or getattr(dialect, "name", None) != "postgresql":
         return
     hi = namespace & 0x7FFFFFFF
     lo = ((key.int >> 64) ^ key.int) & 0x7FFFFFFF

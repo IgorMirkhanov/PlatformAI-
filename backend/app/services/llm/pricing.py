@@ -159,20 +159,33 @@ def normalize_model_name(model_name: str | None) -> str:
 
 
 def is_free_llm_model(model_name: str | None) -> bool:
-    """True for Groq / OpenRouter ``:free`` / local models that must not debit wallets."""
-    if bool(getattr(settings, "is_free_llm_route", False)):
-        return True
+    """True for models that must not debit wallets (not every model when the default route is free)."""
     raw = (model_name or "").strip().lower()
+    configured = settings.resolved_chat_model.lower()
     alias = (getattr(settings, "OPENAI_CHAT_MODEL", "") or "").strip().lower()
-    if alias in {"openrouter/free", "free", "openrouter-free"}:
+    free_slugs = {"openrouter/free", "free", "openrouter-free"}
+
+    def _matches_configured(name: str) -> bool:
+        if not name:
+            return False
+        return name == configured or normalize_model_name(name) == normalize_model_name(configured)
+
+    if raw.endswith(":free") or raw in free_slugs:
         return True
-    if not raw:
-        return False
-    if raw.endswith(":free") or raw in {"openrouter/free", "free", "openrouter-free"}:
+    if alias in free_slugs and (not raw or raw == alias or _matches_configured(raw)):
         return True
-    price = LLM_CREDIT_PRICING.get(raw)
+
+    effective_key = normalize_model_name(raw or configured)
+    price = LLM_CREDIT_PRICING.get(effective_key)
     if price and int(price["prompt_per_1k"]) == 0 and int(price["completion_per_1k"]) == 0:
         return True
+
+    # Free platform default route — only the configured chat model is zero-rated.
+    if bool(getattr(settings, "is_free_llm_route", False)):
+        effective = raw or configured
+        if _matches_configured(effective):
+            return True
+
     return False
 
 

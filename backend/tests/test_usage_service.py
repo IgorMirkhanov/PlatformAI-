@@ -37,6 +37,9 @@ class _Db:
     async def execute(self, statement):
         return SimpleNamespace(scalar_one_or_none=lambda: self.sub, scalar_one=lambda: self.sub)
 
+    async def scalar(self, _stmt):
+        return None
+
 
 @pytest.mark.asyncio
 async def test_record_and_debit_without_wallet(monkeypatch):

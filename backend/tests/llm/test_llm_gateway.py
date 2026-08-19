@@ -192,8 +192,15 @@ async def test_gateway_retries_configured_fallback_before_other_vendors() -> Non
     assert paid.complete_calls == 0
 
 
-def test_gateway_orders_registry_chain_by_configured_providers() -> None:
+def test_gateway_orders_registry_chain_by_configured_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Registry order must not put paid models ahead of the free primary/fallback."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "openrouter", raising=False)
+    monkeypatch.setattr(settings, "OPENAI_CHAT_MODEL", "openai/gpt-oss-20b:free", raising=False)
+    monkeypatch.setattr(settings, "FALLBACK_LLM_PROVIDER", "groq", raising=False)
+    monkeypatch.setattr(settings, "FALLBACK_LLM_MODEL", "openai/gpt-oss-20b", raising=False)
+
     groq = FakeProvider("groq", api_key="gsk-test", model="openai/gpt-oss-20b")
     paid = FakeProvider("openrouter", api_key="sk-or-test", model="openai/gpt-4o")
     free = FakeProvider("openrouter", api_key="sk-or-test", model="openai/gpt-oss-20b:free")

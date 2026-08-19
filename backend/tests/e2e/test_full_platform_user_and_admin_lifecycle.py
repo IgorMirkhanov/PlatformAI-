@@ -329,6 +329,9 @@ async def life_harness(life_session_factory: async_sessionmaker[AsyncSession]):
     gateway = ResilientLLMGateway([provider], wallet_service=wallet_service)
 
     stack = ExitStack()
+    stack.enter_context(
+        patch.object(settings, "REGISTER_WALLET_STARTER_CREDITS", 100_000)
+    )
     for item in [
         patch("app.services.llm.factory.get_llm_gateway", return_value=gateway),
         patch(

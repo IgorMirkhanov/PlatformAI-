@@ -186,7 +186,15 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     db.add = MagicMock()
     db.flush = AsyncMock()
     db.commit = AsyncMock()
-    db.get = AsyncMock(return_value=stack["company"])
+
+    async def _db_get(model: Any, obj_id: uuid.UUID) -> Any:
+        if model is Bot:
+            return bot
+        if model is Client and stored_client is not None and obj_id == stored_client.id:
+            return stored_client
+        return stack["company"]
+
+    db.get = AsyncMock(side_effect=_db_get)
 
     mock_quota_module = MagicMock()
     mock_quota_module.quota_service = MagicMock(assert_token_quota=AsyncMock())

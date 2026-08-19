@@ -245,6 +245,19 @@ def test_calculate_cost_known_model() -> None:
     assert calculate_cost("llama3", 5000, 5000) == 0
 
 
+def test_calculate_cost_free_suffix_and_paid_on_free_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("OPENAI_CHAT_MODEL", "openai/gpt-oss-20b")
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq", raising=False)
+    monkeypatch.setattr(settings, "OPENAI_CHAT_MODEL", "openai/gpt-oss-20b", raising=False)
+
+    assert calculate_cost("meta-llama/llama-3.2-3b-instruct:free", 1000, 1000) == 0
+    assert calculate_cost("gpt-4o-mini", 1000, 1000) == 25
+    assert calculate_cost(settings.resolved_chat_model, 1000, 1000) == 0
+
+
 @pytest.mark.asyncio
 async def test_post_deduct_insufficient_maps_to_llm_error() -> None:
     """Race after preflight: deduct raises → standardized 402 error."""

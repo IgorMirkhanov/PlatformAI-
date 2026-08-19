@@ -53,7 +53,10 @@ def _client_for(user: MagicMock) -> AsyncIterator[AsyncClient]:
     async def _override_db() -> AsyncIterator[MagicMock]:
         db = MagicMock()
         db.commit = AsyncMock()
-        db.execute = AsyncMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        db.scalar = AsyncMock(return_value=0)
+        exec_result = MagicMock()
+        exec_result.all = MagicMock(return_value=[])
+        db.execute = AsyncMock(return_value=exec_result)
         yield db
 
     app.dependency_overrides[get_db] = _override_db
@@ -92,8 +95,14 @@ async def test_regular_user_forbidden_on_admin_search(regular_client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_support_user_can_search(support_client: AsyncClient) -> None:
+async def test_support_user_forbidden_on_admin_search(support_client: AsyncClient) -> None:
     response = await support_client.get("/api/v1/admin/users/search", params={"query": "client"})
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_superadmin_can_search(superadmin_client: AsyncClient) -> None:
+    response = await superadmin_client.get("/api/v1/admin/users/search", params={"query": "client"})
     assert response.status_code == 200
     body = response.json()
     assert body["query"] == "client"

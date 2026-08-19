@@ -15,7 +15,10 @@ from app.services.llm.base import LLMResponse
 async def test_orchestrator_uses_gateway_when_bot_and_db_present() -> None:
     org_id = uuid.uuid4()
     bot_id = uuid.uuid4()
+    bot = MagicMock()
+    bot.credentials = {}
     db = MagicMock()
+    db.get = AsyncMock(return_value=bot)
     gateway_response = LLMResponse(
         content="Gateway reply",
         tool_calls=None,
