@@ -22,6 +22,11 @@ const CRM_TABS = [
     match: (path: string) => path.startsWith("/dashboard/crm/analytics"),
   },
   {
+    href: "/dashboard/crm/settings/fields",
+    label: "Поля",
+    match: (path: string) => path.startsWith("/dashboard/crm/settings/fields"),
+  },
+  {
     href: "/dashboard/crm/settings/automations",
     label: "Автоматизации",
     match: (path: string) => path.startsWith("/dashboard/crm/settings/automations"),

@@ -13,6 +13,8 @@ import type {
   CrmContactListResponse,
   CrmCustomFieldDefinition,
   CrmCustomFieldListResponse,
+  CrmEntityType,
+  CrmFieldType,
   CrmDeal,
   CrmDealCreatePayload,
   CrmDealListResponse,
@@ -290,4 +292,29 @@ export async function listCustomFields(
     `/api/v1/crm/custom-fields?${params.toString()}`,
   );
   return response.items;
+}
+
+export interface CrmCustomFieldCreatePayload {
+  entity_type: CrmEntityType;
+  field_key: string;
+  label: string;
+  field_type: CrmFieldType;
+  options?: string[] | null;
+  is_required?: boolean;
+  position?: number;
+}
+
+export async function createCustomField(
+  payload: CrmCustomFieldCreatePayload,
+): Promise<CrmCustomFieldDefinition> {
+  return apiRequest<CrmCustomFieldDefinition>("/api/v1/crm/custom-fields", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteCustomField(fieldId: string): Promise<void> {
+  await apiRequest<void>(`/api/v1/crm/custom-fields/${fieldId}`, {
+    method: "DELETE",
+  });
 }

@@ -79,7 +79,11 @@ export function AdminSupportTab() {
 
   const handleImpersonate = async (user: AdminUserSearchItem) => {
     const password = window.prompt(
-      `Подтвердите пароль администратора для входа как ${user.email}:`,
+      [
+        `Подтверждение входа как ${user.email}`,
+        "",
+        "Введите пароль вашего аккаунта MP.AI (тот же, что при входе на платформу).",
+      ].join("\n"),
     );
     if (!password) return;
     setPendingEmail(user.email);

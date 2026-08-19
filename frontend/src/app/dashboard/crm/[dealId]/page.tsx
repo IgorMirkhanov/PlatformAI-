@@ -6,6 +6,7 @@ import { ArrowLeft, ExternalLink, Loader2, Tag, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { CrmSubNav } from "@/components/crm/CrmSubNav";
+import { DealCustomFieldsPanel } from "@/components/crm/DealCustomFieldsPanel";
 import { DealTimeline } from "@/components/crm/DealTimeline";
 import { useToast } from "@/hooks/useToast";
 import {
@@ -26,7 +27,6 @@ import type {
   CrmTag,
   CrmTimelineEvent,
 } from "@/lib/crm/types";
-import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/store/useBotStore";
 
 function formatAmount(amount: string | number, currency: string): string {
@@ -78,6 +78,9 @@ export default function CrmDealDetailPage() {
   const [noteText, setNoteText] = useState("");
   const [saving, setSaving] = useState(false);
   const [savingFields, setSavingFields] = useState(false);
+  const [savingDealMeta, setSavingDealMeta] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [amountDraft, setAmountDraft] = useState("");
   const [tagBusy, setTagBusy] = useState<string | null>(null);
 
   const loadFeed = useCallback(async (id: string) => {
@@ -100,6 +103,8 @@ export default function CrmDealDetailPage() {
         listCustomFields("deal").catch(() => [] as CrmCustomFieldDefinition[]),
       ]);
       setDeal(nextDeal);
+      setTitleDraft(nextDeal.title);
+      setAmountDraft(String(nextDeal.amount ?? ""));
       setAllTags(tags);
       setFieldDefs(defs.sort((a, b) => a.position - b.position));
       const draft: Record<string, string> = {};
@@ -186,6 +191,25 @@ export default function CrmDealDetailPage() {
     }
   };
 
+  const onSaveDealMeta = async () => {
+    if (!dealId || !deal || savingDealMeta) return;
+    setSavingDealMeta(true);
+    try {
+      const updated = await updateDeal(dealId, {
+        title: titleDraft.trim() || deal.title,
+        amount: amountDraft === "" ? deal.amount : Number(amountDraft),
+      });
+      setDeal(updated);
+      setTitleDraft(updated.title);
+      setAmountDraft(String(updated.amount ?? ""));
+      showToast("Данные сделки обновлены.", "success");
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Не удалось сохранить сделку."), "error");
+    } finally {
+      setSavingDealMeta(false);
+    }
+  };
+
   const onSaveCustomFields = async () => {
     if (!dealId || !deal || savingFields) return;
     setSavingFields(true);
@@ -256,11 +280,21 @@ export default function CrmDealDetailPage() {
             К канбану
           </button>
           <h1 className="text-2xl font-semibold text-zinc-50">{deal.title}</h1>
+          <p className="text-xs text-zinc-500">
+            Карточка сделки · лента активности слева, реквизиты и поля справа
+          </p>
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.7fr)]">
-        <section className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]">
+        <section className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+          <div className="flex gap-2 border-b border-zinc-800/80 pb-3 text-sm">
+            <span className="rounded-lg bg-violet-500/15 px-3 py-1.5 font-medium text-violet-100">
+              Лента
+            </span>
+            <span className="rounded-lg px-3 py-1.5 text-zinc-500">Комментарии</span>
+            <span className="rounded-lg px-3 py-1.5 text-zinc-500">Задачи</span>
+          </div>
           <form
             onSubmit={onSubmitNote}
             className="rounded-2xl border border-zinc-800/90 bg-zinc-950/50 p-4"
@@ -297,28 +331,57 @@ export default function CrmDealDetailPage() {
 
         <aside className="space-y-4 lg:sticky lg:top-4 lg:self-start">
           <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Сумма</p>
-            <p className="mt-1 text-2xl font-semibold text-emerald-300">
-              {formatAmount(deal.amount, deal.currency)}
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              О сделке
             </p>
-            <dl className="mt-4 space-y-2 text-sm">
+            <label className="mt-3 block text-xs text-zinc-500">
+              Название
+              <input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm font-medium text-zinc-100 outline-none focus:border-violet-500/40"
+              />
+            </label>
+            <label className="mt-3 block text-xs text-zinc-500">
+              Сумма ({deal.currency})
+              <input
+                type="number"
+                min="0"
+                value={amountDraft}
+                onChange={(e) => setAmountDraft(e.target.value)}
+                className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/40"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => void onSaveDealMeta()}
+              disabled={savingDealMeta}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900 disabled:opacity-50"
+            >
+              {savingDealMeta ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Сохранить
+            </button>
+            <dl className="mt-4 space-y-2 border-t border-zinc-800/80 pt-4 text-sm">
               <div className="flex justify-between gap-3">
                 <dt className="text-zinc-500">Статус</dt>
                 <dd className="font-medium capitalize text-zinc-200">{deal.status}</dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-zinc-500">Этап</dt>
+                <dt className="text-zinc-500">Этап воронки</dt>
                 <dd className="text-right font-medium text-zinc-200">
                   {deal.stage?.name ?? "—"}
                 </dd>
               </div>
               {deal.source ? (
                 <div className="flex justify-between gap-3">
-                  <dt className="text-zinc-500">Источник сделки</dt>
+                  <dt className="text-zinc-500">Источник</dt>
                   <dd className="text-zinc-200">{deal.source}</dd>
                 </div>
               ) : null}
             </dl>
+            <p className="mt-3 text-lg font-semibold text-emerald-300">
+              {formatAmount(deal.amount, deal.currency)}
+            </p>
           </div>
 
           <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
@@ -371,82 +434,27 @@ export default function CrmDealDetailPage() {
             ) : null}
           </div>
 
-          <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Кастомные поля
-            </p>
-            {fieldDefs.length === 0 ? (
-              <p className="mt-3 text-xs text-zinc-500">
-                Определения полей не настроены.
-              </p>
-            ) : (
-              <div className="mt-3 space-y-3">
-                {fieldDefs.map((def) => (
-                  <label key={def.id} className="block text-xs text-zinc-400">
-                    {def.label}
-                    {def.field_type === "boolean" ? (
-                      <select
-                        value={fieldDraft[def.field_key] ?? ""}
-                        onChange={(e) =>
-                          setFieldDraft((prev) => ({
-                            ...prev,
-                            [def.field_key]: e.target.value,
-                          }))
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-                      >
-                        <option value="">—</option>
-                        <option value="true">Да</option>
-                        <option value="false">Нет</option>
-                      </select>
-                    ) : def.field_type === "select" && def.options?.length ? (
-                      <select
-                        value={fieldDraft[def.field_key] ?? ""}
-                        onChange={(e) =>
-                          setFieldDraft((prev) => ({
-                            ...prev,
-                            [def.field_key]: e.target.value,
-                          }))
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100"
-                      >
-                        <option value="">—</option>
-                        {def.options.map((opt) => (
-                          <option key={opt} value={opt}>
-                            {opt}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type={def.field_type === "number" ? "number" : def.field_type === "date" ? "date" : "text"}
-                        value={fieldDraft[def.field_key] ?? ""}
-                        onChange={(e) =>
-                          setFieldDraft((prev) => ({
-                            ...prev,
-                            [def.field_key]: e.target.value,
-                          }))
-                        }
-                        className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/40"
-                      />
-                    )}
-                  </label>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => void onSaveCustomFields()}
-                  disabled={savingFields}
-                  className={cn(
-                    "inline-flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 px-3 py-2 text-sm text-zinc-100 hover:bg-zinc-900",
-                    savingFields && "opacity-60",
-                  )}
-                >
-                  {savingFields ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Сохранить поля
-                </button>
-              </div>
-            )}
-          </div>
+          <DealCustomFieldsPanel
+            fieldDefs={fieldDefs}
+            fieldDraft={fieldDraft}
+            savingFields={savingFields}
+            onDraftChange={(key, value) =>
+              setFieldDraft((prev) => ({ ...prev, [key]: value }))
+            }
+            onSave={() => void onSaveCustomFields()}
+            onFieldDefsChange={(defs) => {
+              setFieldDefs(defs);
+              setFieldDraft((prev) => {
+                const next = { ...prev };
+                for (const def of defs) {
+                  if (next[def.field_key] === undefined) {
+                    next[def.field_key] = "";
+                  }
+                }
+                return next;
+              });
+            }}
+          />
 
           <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Контакт</p>

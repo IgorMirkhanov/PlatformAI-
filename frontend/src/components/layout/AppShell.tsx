@@ -18,7 +18,6 @@ import {
   Workflow,
   X,
   Zap,
-  Shield,
 } from "lucide-react";
 
 import { CreateAgentButton } from "@/components/layout/CreateAgentButton";
@@ -272,22 +271,6 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               </Link>
             )}
           </div>
-        )}
-
-        {(Boolean(currentUser?.is_superadmin) || Boolean(currentUser?.is_support)) && (
-          <Link
-            href="/admin"
-            onClick={onNavigate}
-            className={cn(
-              "mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold transition",
-              pathname.startsWith("/admin") || pathname.startsWith("/dashboard/admin")
-                ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
-                : "border-zinc-800 bg-zinc-950/60 text-zinc-300 hover:border-zinc-700 hover:text-white",
-            )}
-          >
-            <Shield className="h-3.5 w-3.5" />
-            Admin Panel
-          </Link>
         )}
 
         {inAgentWorkspace && workspaceBotId ? (

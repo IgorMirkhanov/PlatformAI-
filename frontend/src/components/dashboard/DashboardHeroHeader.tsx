@@ -85,7 +85,7 @@ export function DashboardHeroHeader({
         </div>
         <div className="mt-4 flex items-center gap-2 text-xs text-zinc-500">
           <Wallet className="h-3.5 w-3.5 text-violet-400" />
-          Мгновенное пополнение через симуляцию платежа
+          Пополнение картой через Stripe / TipTop Pay
         </div>
       </article>
 

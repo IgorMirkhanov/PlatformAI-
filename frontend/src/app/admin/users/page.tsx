@@ -68,7 +68,12 @@ export default function AdminUsersPage() {
   const handleLoginAs = useCallback(
     async (user: AdminClientItem) => {
       const password = window.prompt(
-        `Введите свой пароль администратора, чтобы войти как ${user.email}:`,
+        [
+          `Подтверждение входа как ${user.email}`,
+          "",
+          "Введите пароль вашего аккаунта MP.AI (тот же, что при входе на платформу).",
+          "Это не отдельный пароль — step-up проверка перед impersonation.",
+        ].join("\n"),
       );
       if (!password) return;
       setPendingId(user.id);
