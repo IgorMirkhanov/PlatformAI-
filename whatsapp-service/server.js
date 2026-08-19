@@ -316,6 +316,17 @@ async function startSession(botId, options = {}) {
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
+    logger.info(
+      {
+        botId: key,
+        connection: connection || "unknown",
+        hasQr: Boolean(qr),
+        statusCode: lastDisconnect?.error
+          ? new Boom(lastDisconnect.error)?.output?.statusCode
+          : undefined,
+      },
+      "WhatsApp connection.update",
+    );
 
     if (qr) {
       const now = Date.now();

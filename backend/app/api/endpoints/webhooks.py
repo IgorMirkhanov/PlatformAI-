@@ -57,10 +57,14 @@ def _enqueue_inbound_message(
     bot_id: str,
     platform_type: str,
     payload: dict[str, Any],
+    normalized: dict[str, Any] | None = None,
 ) -> WebhookQueuedResponse:
     """Queue Celery work on the ``inbound_messages`` stream and return immediately."""
+    task_payload = dict(payload)
+    if normalized is not None:
+        task_payload["normalized"] = normalized
     task = process_inbound_message_task.apply_async(
-        args=[bot_id, platform_type, payload],
+        args=[bot_id, platform_type, task_payload],
         queue=settings.CELERY_INBOUND_QUEUE,
     )
     logger.info(
@@ -219,22 +223,45 @@ async def telegram_webhook(
         if update_id and not claim_inbound_event("telegram", update_id):
             return Response(status_code=status.HTTP_200_OK)
 
-        return _enqueue_inbound_message(
-            bot_id=str(bot.id),
-            platform_type="TELEGRAM",
-            payload={
+        from app.services.inbound.normalizer import attach_normalized, normalize_telegram
+
+        if parsed:
+            normalized = normalize_telegram(
+                bot_id=bot.id,
+                chat_id=parsed.chat_id,
+                message_text=parsed.message_text,
+                username=parsed.username,
+                first_name=parsed.first_name,
+                last_name=parsed.last_name,
+                raw_payload=raw_body if isinstance(raw_body, dict) else {},
+            )
+            payload = attach_normalized(
+                {
+                    "bot_id": str(bot.id),
+                    "bot_token_hash": bot_token,
+                    "bot_token_path": bot_token,
+                    "update": update.to_raw_dict(),
+                    "external_id": parsed.chat_id,
+                    "username": parsed.username,
+                    "first_name": parsed.first_name,
+                    "last_name": parsed.last_name,
+                    "message_text": parsed.message_text,
+                },
+                normalized,
+            )
+        else:
+            payload = {
                 "bot_id": str(bot.id),
                 "bot_token_hash": bot_token,
                 "bot_token_path": bot_token,
-                "update": update.to_raw_dict() if parsed else (
-                    raw_body if isinstance(raw_body, dict) else {}
-                ),
-                "external_id": parsed.chat_id if parsed else None,
-                "username": parsed.username if parsed else None,
-                "first_name": parsed.first_name if parsed else None,
-                "last_name": parsed.last_name if parsed else None,
-                "message_text": parsed.message_text if parsed else None,
-            },
+                "update": raw_body if isinstance(raw_body, dict) else {},
+            }
+
+        return _enqueue_inbound_message(
+            bot_id=str(bot.id),
+            platform_type="TELEGRAM",
+            payload=payload,
+            normalized=payload.get("normalized"),
         )
     except Exception as exc:
         logger.exception(
@@ -414,18 +441,35 @@ async def whatsapp_webhook(
                 )
                 return Response(status_code=status.HTTP_200_OK)
 
+        from app.services.inbound.normalizer import attach_normalized, normalize_whatsapp
+
+        base_payload: dict[str, Any] = {
+            "bot_id": str(bot_id),
+            "body": body.to_raw_dict(),
+            "external_id": first.external_id if first else None,
+            "username": first.username if first else None,
+            "first_name": first.first_name if first else None,
+            "last_name": first.last_name if first else None,
+            "message_text": first.message_text if first else None,
+        }
+        if first:
+            normalized = normalize_whatsapp(
+                bot_id=bot_id,
+                phone=first.external_id,
+                message_text=first.message_text,
+                client_name=first.first_name or first.username,
+                provider="whatsapp",
+                raw_payload=body.to_raw_dict(),
+            )
+            payload = attach_normalized(base_payload, normalized)
+        else:
+            payload = base_payload
+
         return _enqueue_inbound_message(
             bot_id=str(bot_id),
             platform_type="WHATSAPP",
-            payload={
-                "bot_id": str(bot_id),
-                "body": body.to_raw_dict(),
-                "external_id": first.external_id if first else None,
-                "username": first.username if first else None,
-                "first_name": first.first_name if first else None,
-                "last_name": first.last_name if first else None,
-                "message_text": first.message_text if first else None,
-            },
+            payload=payload,
+            normalized=payload.get("normalized"),
         )
     except Exception as exc:
         logger.exception(
@@ -438,14 +482,15 @@ async def whatsapp_webhook(
 
 @router.post(
     "/webhooks/whatsapp-qr",
+    response_model=WebhookQueuedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Receive inbound WhatsApp QR (Baileys) messages from the Node microservice",
 )
 async def whatsapp_qr_webhook(
     request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> WebhookQueuedResponse | dict[str, Any]:
     from app.core.webhook_auth import require_internal_service_key
-    from app.services.whatsapp_qr_service import whatsapp_qr_service
+    from app.services.inbound.normalizer import attach_normalized, normalize_whatsapp_qr
 
     try:
         require_internal_service_key(request)
@@ -457,9 +502,13 @@ async def whatsapp_qr_webhook(
         return {"status": "ignored", "reason": "invalid_json"}
 
     bot_id = str(raw_body.get("bot_id") or "").strip()
+    from_phone = str(raw_body.get("from") or "").strip()
+    message_text = str(raw_body.get("message_text") or "").strip()
     if not bot_id:
         logger.warning("WebhookEndpoint.whatsapp_qr_missing_bot_id")
         return {"status": "ignored", "reason": "missing_bot_id"}
+    if not from_phone or not message_text:
+        return {"status": "ignored", "reason": "incomplete_payload"}
 
     # Redis idempotency — Baileys may retry; skip duplicate message_id (24h TTL).
     from app.core.redis_client import claim_whatsapp_message_id
@@ -473,20 +522,35 @@ async def whatsapp_qr_webhook(
         )
         return {"status": "duplicate", "skipped": True}
 
-    # Process synchronously so Baileys gets an AI reply without depending on Celery.
     try:
-        result = await whatsapp_qr_service.process_inbound_webhook(db, raw_body)
-        await db.commit()
-        return result
-    except Exception as exc:
-        await db.rollback()
-        logger.exception(
-            "WebhookEndpoint.whatsapp_qr_failed | bot_id={bot_id} error={error}",
-            bot_id=bot_id,
-            error=str(exc),
-        )
-        # Still acknowledge to Baileys so it doesn't retry-storm.
-        return {"status": "failed"}
+        bot_uuid = uuid.UUID(bot_id)
+    except ValueError:
+        return {"status": "ignored", "reason": "invalid_bot_id"}
+
+    normalized = normalize_whatsapp_qr(
+        bot_id=bot_uuid,
+        from_phone=from_phone,
+        message_text=message_text,
+        push_name=str(raw_body.get("push_name") or from_phone),
+        raw_payload=raw_body,
+    )
+    payload = attach_normalized(
+        {
+            "bot_id": bot_id,
+            "body": raw_body,
+            "external_id": from_phone,
+            "username": from_phone,
+            "first_name": str(raw_body.get("push_name") or from_phone),
+            "message_text": message_text,
+        },
+        normalized,
+    )
+    return _enqueue_inbound_message(
+        bot_id=bot_id,
+        platform_type="WHATSAPP_QR",
+        payload=payload,
+        normalized=payload.get("normalized"),
+    )
 
 
 @router.get(
@@ -675,16 +739,30 @@ async def widget_webhook(
     if not external_id:
         external_id = f"web-{uuid.uuid4().hex[:12]}"
     text = str(raw_body.get("message_text") or raw_body.get("text") or "").strip()
-    queued = _enqueue_inbound_message(
-        bot_id=str(bot_id),
-        platform_type="WEB_WIDGET",
-        payload={
+    from app.services.inbound.normalizer import attach_normalized, normalize_web_widget
+
+    normalized = normalize_web_widget(
+        bot_id=bot_id,
+        session_id=external_id,
+        message_text=text,
+        username=str(raw_body.get("username") or "web-visitor"),
+        raw_payload=raw_body,
+    )
+    payload = attach_normalized(
+        {
             "bot_id": str(bot_id),
             "body": raw_body,
             "external_id": external_id,
             "username": str(raw_body.get("username") or "web-visitor"),
             "message_text": text or None,
         },
+        normalized,
+    )
+    queued = _enqueue_inbound_message(
+        bot_id=str(bot_id),
+        platform_type="WEB_WIDGET",
+        payload=payload,
+        normalized=payload.get("normalized"),
     )
     return {
         "status": "queued",
@@ -859,10 +937,34 @@ async def wazzup_webhook(
         if event_id and not claim_inbound_event("wazzup", event_id):
             return Response(status_code=status.HTTP_200_OK)
 
+        from app.services.inbound.normalizer import attach_normalized, normalize_wazzup_inbound
+        from app.services.wazzup_service import wazzup_service
+
+        inbound_items = wazzup_service.extract_inbound_messages(raw_body)
+        first = inbound_items[0] if inbound_items else None
+        base_payload: dict[str, Any] = {
+            "bot_id": str(bot_id),
+            "body": raw_body,
+            "external_id": first["external_id"] if first else None,
+            "username": first["username"] if first else None,
+            "first_name": first["first_name"] if first else None,
+            "message_text": first["message_text"] if first else None,
+        }
+        if first:
+            normalized = normalize_wazzup_inbound(
+                bot_id=bot_id,
+                inbound=first,
+                raw_body=raw_body,
+            )
+            payload = attach_normalized(base_payload, normalized)
+        else:
+            payload = base_payload
+
         return _enqueue_inbound_message(
             bot_id=str(bot_id),
             platform_type="WAZZUP",
-            payload={"bot_id": str(bot_id), "body": raw_body},
+            payload=payload,
+            normalized=payload.get("normalized"),
         )
     except Exception as exc:
         logger.exception(

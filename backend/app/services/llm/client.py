@@ -108,13 +108,27 @@ class OpenAIChatClient:
             raise
 
         content = response.choices[0].message.content
-        if not content:
-            tool_calls = getattr(response.choices[0].message, "tool_calls", None) or []
-            if tool_calls:
-                names = [str(getattr(tc.function, "name", "") or "") for tc in tool_calls]
-                content = f"Called tools: {', '.join(filter(None, names)) or 'function'}"
-            else:
-                raise RuntimeError(f"OpenAI model '{model}' returned an empty completion")
+        message = response.choices[0].message
+        tool_calls_raw = getattr(message, "tool_calls", None) or []
+        tool_calls: list[dict[str, Any]] | None = None
+        if tool_calls_raw:
+            tool_calls = []
+            for tc in tool_calls_raw:
+                fn = getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                tool_calls.append(
+                    {
+                        "id": getattr(tc, "id", None),
+                        "name": str(getattr(fn, "name", "") or ""),
+                        "arguments": str(getattr(fn, "arguments", "") or "{}"),
+                    }
+                )
+        if not content and not tool_calls:
+            raise RuntimeError(f"OpenAI model '{model}' returned an empty completion")
+        if not content and tool_calls:
+            names = [t["name"] for t in tool_calls if t.get("name")]
+            content = f"Called tools: {', '.join(names) or 'function'}"
 
         usage = response.usage
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
@@ -123,9 +137,11 @@ class OpenAIChatClient:
             getattr(usage, "total_tokens", input_tokens + output_tokens) or 0
         )
         return LLMCompletion(
-            text=content.strip(),
+            text=(content or "").strip(),
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            tool_calls=tool_calls,
+            raw_message=message,
         )

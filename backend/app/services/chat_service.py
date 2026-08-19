@@ -304,27 +304,29 @@ async def send_manual_operator_message(
     db.add(operator_message)
     await db.flush()
 
-    if bot.platform_type == PlatformType.TELEGRAM:
-        try:
-            from app.services.telegram_service import telegram_service
+    try:
+        from app.services.inbound.outbound_router import deliver_outbound, resolve_client_outbound
 
-            bot_token = telegram_service.extract_bot_token(bot)
-            await telegram_service.send_message(
-                bot_token=bot_token,
-                chat_id=client.external_id,
-                text=message_text.strip(),
-                buttons=[],
-            )
-        except Exception as exc:
-            logger.exception(
-                "ChatService.telegram_send_failed | client_id={client_id} error={error}",
-                client_id=client_id,
-                error=str(exc),
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to deliver message to Telegram.",
-            ) from exc
+        normalized = await resolve_client_outbound(db, client=client, bot=bot)
+        await deliver_outbound(
+            db,
+            normalized=normalized,
+            reply_text=message_text.strip(),
+            payload={"body": normalized.metadata},
+            client_id=client.id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "ChatService.outbound_send_failed | client_id={client_id} error={error}",
+            client_id=client_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to deliver message to the client channel.",
+        ) from exc
 
     await broadcast_chat_message(client, operator_message)
     return ChatMessageRead.model_validate(operator_message)

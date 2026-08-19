@@ -25,6 +25,8 @@ class LLMCompletion:
     used_fallback: bool = False
     primary_model: str | None = None
     fallback_model: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
+    raw_message: Any = None
 
 
 class TransientLLMError(Exception):

@@ -21,6 +21,7 @@ from app.models.integrations import (
 )
 from app.schemas.crm_schemas import CRMActionPayload
 from app.services.diagnostic_log_service import diagnostic_log_service
+from app.utils.phone_utils import clean_phone_number
 
 CRM_HTTP_TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 AMOCRM_TOKEN_PATH = "/oauth2/access_token"
@@ -505,34 +506,19 @@ class CRMOrchestrator:
         client: Client,
         query: str,
     ) -> int:
-        search = await http.get(
-            f"{webhook}crm.contact.list",
-            params={
-                "filter[PHONE]": query,
-                "select[]": ["ID", "NAME"],
-            },
+        cleaned = clean_phone_number(query)
+        if not cleaned:
+            raise ValueError("Bitrix24 contact requires a valid phone number.")
+        contact_id = await self._bitrix_find_or_create_contact_safe(
+            http,
+            webhook,
+            name=client.first_name or client.username or "Клиент",
+            phone=cleaned,
+            external_id=client.external_id,
         )
-        search.raise_for_status()
-        result = search.json().get("result") or []
-        if result:
-            return int(result[0]["ID"])
-
-        name = client.first_name or client.username or f"Client {client.external_id}"
-        create = await http.post(
-            f"{webhook}crm.contact.add",
-            json={
-                "fields": {
-                    "NAME": name,
-                    "PHONE": [{"VALUE": query, "VALUE_TYPE": "WORK"}] if query else [],
-                    "COMMENTS": f"Telegram/WhatsApp ID: {client.external_id}",
-                }
-            },
-        )
-        create.raise_for_status()
-        contact_id = create.json().get("result")
-        if not contact_id:
-            raise ValueError("Bitrix24 contact creation returned empty result.")
-        return int(contact_id)
+        if contact_id is None:
+            raise ValueError("Bitrix24 contact creation failed — invalid phone.")
+        return contact_id
 
     async def _bitrix_create_deal(
         self,
@@ -560,6 +546,7 @@ class CRMOrchestrator:
         fields: dict[str, Any] = {
             "TITLE": str(custom_attributes.get("lead_name") or f"MP.Ai Deal #{contact_id}"),
             "CONTACT_ID": contact_id,
+            "SOURCE_ID": "OTHER",
         }
         if comments_parts:
             fields["COMMENTS"] = " | ".join(comments_parts)
@@ -575,6 +562,16 @@ class CRMOrchestrator:
             f"{webhook}crm.deal.add",
             json={"fields": fields},
         )
+        if response.status_code in {400, 422}:
+            logger.error(
+                "Bitrix24.payload_sent | endpoint=crm.deal.add payload={payload}",
+                payload={"fields": fields},
+            )
+            logger.error(
+                "Bitrix24.error_response | status={status} body={body}",
+                status=response.status_code,
+                body=response.text[:2000],
+            )
         response.raise_for_status()
         deal_id = response.json().get("result")
         if not deal_id:
@@ -794,11 +791,91 @@ class CRMOrchestrator:
         for message in reversed(client.messages or []):
             payload = message.payload or {}
             phone = payload.get("phone") or payload.get("phone_number")
-            if phone:
-                return str(phone)
+            cleaned = clean_phone_number(str(phone) if phone else None)
+            if cleaned:
+                return cleaned
         if client.username:
+            cleaned = clean_phone_number(client.username)
+            if cleaned:
+                return cleaned
             return client.username
-        return client.external_id
+        cleaned = clean_phone_number(client.external_id)
+        return cleaned or client.external_id
+
+    async def _bitrix_api_add(
+        self,
+        http: httpx.AsyncClient,
+        webhook: str,
+        method: str,
+        payload: dict[str, Any],
+    ) -> int:
+        """POST to Bitrix24 REST ``method``; log payload + body on 400/422."""
+        response = await http.post(f"{webhook}{method}", json=payload)
+        if response.status_code in {400, 422}:
+            logger.error(
+                "Bitrix24.payload_sent | endpoint={endpoint} payload={payload}",
+                endpoint=method,
+                payload=payload,
+            )
+            logger.error(
+                "Bitrix24.error_response | status={status} body={body}",
+                status=response.status_code,
+                body=response.text[:2000],
+            )
+        response.raise_for_status()
+        result = response.json().get("result")
+        if not result:
+            raise ValueError(f"Bitrix24 {method} returned empty result.")
+        return int(result)
+
+    async def _bitrix_find_or_create_contact_safe(
+        self,
+        http: httpx.AsyncClient,
+        webhook: str,
+        *,
+        name: str,
+        phone: str,
+        external_id: str,
+        payload_sent: dict[str, Any] | None = None,
+    ) -> int | None:
+        cleaned = clean_phone_number(phone)
+        if not cleaned:
+            return None
+        try:
+            search = await http.get(
+                f"{webhook}crm.contact.list",
+                params={"filter[PHONE]": cleaned, "select[]": ["ID", "NAME"]},
+            )
+            if search.status_code in {400, 422}:
+                logger.error(
+                    "Bitrix24.payload_sent | endpoint=crm.contact.list filter[PHONE]={phone}",
+                    phone=cleaned,
+                )
+                logger.error(
+                    "Bitrix24.error_response | status={status} body={body}",
+                    status=search.status_code,
+                    body=search.text[:2000],
+                )
+            search.raise_for_status()
+            result = search.json().get("result") or []
+            if result:
+                return int(result[0]["ID"])
+
+            create_payload = {
+                "fields": {
+                    "NAME": name or "Клиент",
+                    "PHONE": [{"VALUE": cleaned, "VALUE_TYPE": "WORK"}],
+                    "COMMENTS": f"MP.Ai ID: {external_id}",
+                }
+            }
+            return await self._bitrix_api_add(http, webhook, "crm.contact.add", create_payload)
+        except httpx.HTTPStatusError:
+            if payload_sent:
+                logger.error(
+                    "Bitrix24.payload_sent | endpoint=crm.contact.add payload={payload}",
+                    payload=payload_sent,
+                )
+            raise
 
     def _build_message_summary(self, messages: list[ChatMessage]) -> str:
         recent = sorted(messages, key=lambda item: item.created_at)[-10:]

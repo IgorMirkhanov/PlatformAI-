@@ -285,7 +285,12 @@ async def _dispatch_platform(
         )
 
     if platform in {"WHATSAPP_QR", "WHATSAPP-QR"}:
-        return await whatsapp_qr_service.process_inbound_webhook(db, payload)
+        return await _process_normalized_inbound(
+            db,
+            bot_id=bot_id,
+            payload=payload,
+            source="whatsapp_qr",
+        )
 
     if platform == "INSTAGRAM":
         return await instagram_service.process_queued_webhook(
@@ -299,6 +304,14 @@ async def _dispatch_platform(
             db=db,
             bot_id=uuid.UUID(str(payload.get("bot_id") or bot_id)),
             webhook_body=payload.get("body") or {},
+        )
+
+    if platform == "WEB_WIDGET":
+        return await _process_normalized_inbound(
+            db,
+            bot_id=bot_id,
+            payload=payload,
+            source="web_widget",
         )
 
     if platform in {"WEBHOOK_SIMULATOR", "SIMULATOR"}:
@@ -345,6 +358,95 @@ async def _dispatch_platform(
             payload=payload,
         )
     return result
+
+
+async def _process_normalized_inbound(
+    db: AsyncSession,
+    *,
+    bot_id: str,
+    payload: dict[str, Any],
+    source: str,
+) -> dict[str, Any]:
+    """Normalized DTO → FlowExecutor → OutboundRouter (web widget, WhatsApp QR, …)."""
+    from app.schemas.inbound_message import NormalizedInboundMessage
+    from app.services.inbound.normalizer import normalize_web_widget
+    from app.services.inbound.outbound_router import deliver_outbound
+
+    normalized = NormalizedInboundMessage.from_celery_dict(payload.get("normalized") or {})
+    external_id = str(payload.get("external_id") or "").strip()
+    message_text = str(payload.get("message_text") or "").strip()
+    if normalized is None and (not external_id or not message_text):
+        return {"status": "ignored", "reason": "missing_external_id_or_text"}
+
+    if normalized is None:
+        if source == "web_widget":
+            normalized = normalize_web_widget(
+                bot_id=uuid.UUID(bot_id),
+                session_id=external_id,
+                message_text=message_text,
+                username=str(payload.get("username") or "web-visitor"),
+                raw_payload=payload.get("body") if isinstance(payload.get("body"), dict) else {},
+            )
+        else:
+            from app.services.inbound.normalizer import normalize_whatsapp_qr
+
+            normalized = normalize_whatsapp_qr(
+                bot_id=uuid.UUID(bot_id),
+                from_phone=external_id,
+                message_text=message_text,
+                push_name=str(payload.get("first_name") or external_id),
+                raw_payload=payload.get("body") if isinstance(payload.get("body"), dict) else {},
+            )
+
+    result = await execute_flow_for_inbound(
+        db,
+        bot_id=normalized.bot_id,
+        external_id=normalized.channel_user_id,
+        username=str(normalized.metadata.get("username") or normalized.channel_user_id),
+        first_name=str(normalized.metadata.get("client_name") or normalized.channel_user_id),
+        message_text=normalized.message_text,
+        source=source,
+        inbound_payload={"channel": normalized.channel.value, **normalized.metadata},
+    )
+
+    reply = str(result.get("response_text") or "").strip()
+    if reply and not result.get("bot_silent"):
+        client_id_raw = result.get("client_id")
+        client_uuid = uuid.UUID(str(client_id_raw)) if client_id_raw else None
+        await deliver_outbound(
+            db,
+            normalized=normalized,
+            reply_text=reply,
+            payload=payload,
+            client_id=client_uuid,
+            media_attachments=result.get("media_attachments"),
+        )
+        provider = str(normalized.metadata.get("provider") or "").lower()
+        media = result.get("media_attachments") or []
+        if provider in {"whatsapp_qr", "baileys", "whatsapp-qr"} and media:
+            await whatsapp_qr_service.dispatch_media_attachments(
+                bot_id=normalized.bot_id,
+                to=normalized.channel_user_id,
+                attachments=list(media),
+                client_id=client_uuid,
+                db=db,
+            )
+    return result
+
+
+async def _process_normalized_web_widget(
+    db: AsyncSession,
+    *,
+    bot_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Deprecated alias — kept for imports/tests."""
+    return await _process_normalized_inbound(
+        db,
+        bot_id=bot_id,
+        payload=payload,
+        source="web_widget",
+    )
 
 
 async def _deliver_generic_outbound(

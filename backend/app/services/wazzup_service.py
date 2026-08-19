@@ -44,6 +44,17 @@ class WazzupService:
         for item in items:
             if not isinstance(item, dict):
                 continue
+            # Skip company outbound echoes — prevents bot reply loops.
+            if item.get("isOutbound") is True or str(item.get("direction") or "").lower() == "outgoing":
+                continue
+            if str(item.get("status") or "").lower() in {"sent", "delivered", "read", "outgoing"}:
+                if not str(
+                    item.get("text")
+                    or item.get("message")
+                    or ((item.get("content") or {}).get("text") if isinstance(item.get("content"), dict) else "")
+                    or ""
+                ).strip():
+                    continue
             chat_id = str(item.get("chatId") or item.get("chat_id") or item.get("from") or "").strip()
             text = str(
                 item.get("text")
@@ -90,7 +101,11 @@ class WazzupService:
                 first_name=inbound["first_name"],
                 message_text=inbound["message_text"],
                 source="wazzup",
-                inbound_payload={"channel": "wazzup"},
+                inbound_payload={
+                    "channel": "whatsapp",
+                    "provider": "wazzup",
+                    "phone": inbound["external_id"],
+                },
             )
             if result.response_text and not result.bot_silent and api_key:
                 await self.send_text_message(

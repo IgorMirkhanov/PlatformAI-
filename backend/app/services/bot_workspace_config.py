@@ -125,9 +125,16 @@ def agent_rag_to_openai_tool(item: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def openai_tools_for_bot(bot: Bot) -> list[dict[str, Any]]:
+def openai_tools_for_bot(bot: Bot, *, include_crm: bool = True) -> list[dict[str, Any]]:
+    from app.services.llm.tool_executor import BUILTIN_SAVE_LEAD_TOOL
+
     workspace = get_workspace(bot)
     tools: list[dict[str, Any]] = []
+    if include_crm:
+        crm = (bot.credentials or {}).get("crm") if isinstance(bot.credentials, dict) else {}
+        bitrix = crm.get("bitrix24") if isinstance(crm, dict) else {}
+        if isinstance(bitrix, dict) and bitrix.get("connected"):
+            tools.append(BUILTIN_SAVE_LEAD_TOOL)
     for item in workspace["functions"]:
         if isinstance(item, dict):
             mapped = function_to_openai_tool(item)

@@ -80,6 +80,16 @@ class LLMOrchestrator:
                 temperature=temperature,
                 tools=tools,
             )
+            result = await self._resolve_tool_calls(
+                result,
+                messages=messages,
+                model=primary,
+                temperature=temperature,
+                tools=tools,
+                bot_id=bot_id,
+                client_id=client_id,
+                db=db,
+            )
             result.primary_model = primary
             result.fallback_model = fallback
             result.used_fallback = False
@@ -110,6 +120,16 @@ class LLMOrchestrator:
                     temperature=temperature,
                     tools=tools,
                 )
+                result = await self._resolve_tool_calls(
+                    result,
+                    messages=messages,
+                    model=fallback,
+                    temperature=temperature,
+                    tools=tools,
+                    bot_id=bot_id,
+                    client_id=client_id,
+                    db=db,
+                )
                 result.primary_model = primary
                 result.fallback_model = fallback
                 result.used_fallback = True
@@ -136,6 +156,93 @@ class LLMOrchestrator:
                     db=db,
                     degrade_on_exhaustion=degrade_on_exhaustion,
                 )
+
+    async def _resolve_tool_calls(
+        self,
+        result: LLMCompletion,
+        *,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        tools: list[dict[str, Any]] | None,
+        bot_id: uuid.UUID | None,
+        client_id: uuid.UUID | None,
+        db: AsyncSession | None,
+    ) -> LLMCompletion:
+        """Run one tool round-trip when the model returns function calls."""
+        if not result.tool_calls or db is None or bot_id is None:
+            return result
+
+        from app.models.core_models import Bot, Client
+        from app.services.llm.tool_executor import execute_tool_call
+
+        bot = await db.get(Bot, bot_id)
+        if bot is None:
+            return result
+        client: Client | None = None
+        if client_id is not None:
+            client = await db.get(Client, client_id)
+
+        channel = "web"
+        channel_user_id: str | None = None
+        if client is not None:
+            channel_user_id = client.external_id
+            source = str(getattr(client, "source", "") or "").lower()
+            if "telegram" in source:
+                channel = "telegram"
+            elif "whatsapp" in source or "wazzup" in source:
+                channel = "whatsapp"
+            elif "web" in source or "widget" in source:
+                channel = "web"
+
+        follow_up = list(messages)
+        follow_up.append(
+            {
+                "role": "assistant",
+                "content": result.text or None,
+                "tool_calls": [
+                    {
+                        "id": tc.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("name"),
+                            "arguments": tc.get("arguments"),
+                        },
+                    }
+                    for tc in result.tool_calls
+                ],
+            }
+        )
+
+        for tc in result.tool_calls:
+            tool_result = await execute_tool_call(
+                db,
+                bot=bot,
+                client=client,
+                tool_name=str(tc.get("name") or ""),
+                arguments_json=str(tc.get("arguments") or "{}"),
+                channel=channel,
+                channel_user_id=channel_user_id,
+            )
+            import json as _json
+
+            follow_up.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": _json.dumps(tool_result, ensure_ascii=False),
+                }
+            )
+
+        # Second completion — model reads tool output and replies to the user.
+        final = await self._client.chat_completion(
+            messages=follow_up,
+            model=model,
+            temperature=temperature,
+            tools=tools,
+        )
+        final.tool_calls = None
+        return final
 
     async def _handle_exhaustion(
         self,

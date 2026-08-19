@@ -24,6 +24,7 @@ router = APIRouter(prefix="/omnichannel/telegram", tags=["omnichannel-telegram"]
 class TelegramWebhookResult(BaseModel):
     status: str = "ok"
     logged: int = 0
+    queued: int = 0
     message_ids: list[str] = Field(default_factory=list)
     ignored: bool = False
     reason: str | None = None
@@ -103,11 +104,29 @@ async def telegram_receive_webhook(
         return TelegramWebhookResult(
             status="ok",
             logged=0,
+            queued=0,
             ignored=True,
             reason="unsupported_or_empty_update",
         )
 
+    from app.services.inbound.omnichannel_bridge import (
+        enqueue_omnichannel_inbound,
+        resolve_bot_for_omnichannel,
+    )
+
+    bot = await resolve_bot_for_omnichannel(
+        db,
+        organization_id=organization_id,
+        channel="telegram",
+    )
+    if bot is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active Telegram bot found for this organization.",
+        )
+
     logged_ids: list[str] = []
+    queued_count = 0
     for inbound in inbound_messages:
         try:
             await message_log_service.log_inbound(db, inbound)
@@ -119,11 +138,20 @@ async def telegram_receive_webhook(
                 mid=inbound.channel_message_id,
                 error=str(exc),
             )
+        task_id = enqueue_omnichannel_inbound(bot_id=bot.id, inbound=inbound)
+        if task_id:
+            queued_count += 1
 
     logger.info(
-        "Omnichannel.Telegram.webhook | org={org} logged={n} hash={hash}",
+        "Omnichannel.Telegram.webhook | org={org} logged={n} queued={q} hash={hash}",
         org=organization_id,
         n=len(logged_ids),
+        q=queued_count,
         hash=bot_token_hash[:12],
     )
-    return TelegramWebhookResult(status="ok", logged=len(logged_ids), message_ids=logged_ids)
+    return TelegramWebhookResult(
+        status="ok",
+        logged=len(logged_ids),
+        queued=queued_count,
+        message_ids=logged_ids,
+    )

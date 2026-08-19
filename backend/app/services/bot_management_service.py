@@ -983,10 +983,49 @@ class BotManagementService:
         for field, value in updates.items():
             setattr(bot, field, value)
 
+        await self._sync_telegram_webhook_on_activation(db, bot, updates)
+
         await db.flush()
         await db.refresh(bot)
         logger.info("BotManagement.settings_updated | bot_id={bot_id}", bot_id=bot_id)
         return BotAgentProfileRead.model_validate(bot)
+
+    async def _sync_telegram_webhook_on_activation(
+        self,
+        db: AsyncSession,
+        bot: Bot,
+        updates: dict[str, Any],
+    ) -> None:
+        """Register Telegram setWebhook when the bot is activated in the admin panel."""
+        if updates.get("is_active") is not True:
+            return
+        credentials = bot.credentials if isinstance(bot.credentials, dict) else {}
+        channels = credentials.get("channels") if isinstance(credentials.get("channels"), dict) else {}
+        telegram = channels.get("telegram") if isinstance(channels.get("telegram"), dict) else {}
+        token_hash = str(credentials.get("token_hash") or telegram.get("token_hash") or "").strip()
+        if not token_hash:
+            return
+        try:
+            token = telegram_service.extract_bot_token(bot)
+        except ValueError:
+            logger.warning(
+                "BotManagement.telegram_webhook_skip | bot_id={bot_id} reason=no_token",
+                bot_id=bot.id,
+            )
+            return
+        try:
+            webhook_url, _secret = await telegram_service.register_webhook(token, token_hash)
+            logger.info(
+                "BotManagement.telegram_webhook_registered | bot_id={bot_id} url={url}",
+                bot_id=bot.id,
+                url=webhook_url,
+            )
+        except Exception as exc:
+            logger.warning(
+                "BotManagement.telegram_webhook_failed | bot_id={bot_id} error={error}",
+                bot_id=bot.id,
+                error=str(exc),
+            )
 
     async def upload_bot_avatar(
         self,
