@@ -87,11 +87,11 @@ class Settings:
     # Groq (OpenAI-compatible, free-tier models)
     GROQ_API_KEY: str | None = os.getenv("GROQ_API_KEY") or None
     GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-    GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "llama-3.1-8b-instant")
+    GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-20b")
 
     # Secondary vendor the gateway switches to on 429 / 5xx / timeout / bad model.
     FALLBACK_LLM_PROVIDER: str = os.getenv("FALLBACK_LLM_PROVIDER", "groq")
-    FALLBACK_LLM_MODEL: str = os.getenv("FALLBACK_LLM_MODEL", "llama-3.1-8b-instant")
+    FALLBACK_LLM_MODEL: str = os.getenv("FALLBACK_LLM_MODEL", "openai/gpt-oss-20b")
 
     # OpenRouter (OpenAI-compatible; `:free` models for tests)
     OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY") or None
@@ -294,7 +294,7 @@ class Settings:
         aliases = {"openrouter/free", "free", "openrouter-free"}
         if raw.lower() in aliases:
             if provider == "groq":
-                return (self.GROQ_CHAT_MODEL or "llama-3.1-8b-instant").strip()
+                return (self.GROQ_CHAT_MODEL or "openai/gpt-oss-20b").strip()
             return (self.OPENROUTER_FREE_MODEL or "meta-llama/llama-3.2-3b-instruct:free").strip()
         if provider == "groq":
             groq_model = (self.GROQ_CHAT_MODEL or "").strip()

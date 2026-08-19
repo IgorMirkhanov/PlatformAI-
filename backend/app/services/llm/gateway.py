@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from app.core.config import settings
 from app.services.llm.base import (
     BaseLLMProvider,
     InsufficientCreditsForLLMError,
@@ -187,7 +188,7 @@ class ResilientLLMGateway:
     def _ordered_providers(self, *, model: str | None) -> list[BaseLLMProvider]:
         """Prefer the vendor that owns ``model``; keep remaining as fallback."""
         if not model:
-            return self._promote_fallback(list(self.providers), after=1)
+            return self._apply_configured_order(list(self.providers), after=0)
         preferred_id = resolve_provider_for_model(model)
         preferred: list[BaseLLMProvider] = []
         others: list[BaseLLMProvider] = []
@@ -204,41 +205,71 @@ class ResilientLLMGateway:
                 model=model,
                 preferred=preferred_id,
             )
-            return self._promote_fallback(list(self.providers), after=1)
-        return self._promote_fallback(preferred + others, after=len(preferred))
+            return self._apply_configured_order(list(self.providers), after=0)
+        # An explicit model pins the primary; only the retry order is configurable.
+        return self._promote(
+            preferred + others,
+            provider_id=str(getattr(settings, "FALLBACK_LLM_PROVIDER", "") or ""),
+            model=str(getattr(settings, "FALLBACK_LLM_MODEL", "") or ""),
+            after=len(preferred),
+        )
 
-    @staticmethod
-    def _promote_fallback(
+    def _apply_configured_order(
+        self,
         providers: list[BaseLLMProvider],
         *,
         after: int,
     ) -> list[BaseLLMProvider]:
         """
-        Move ``FALLBACK_LLM_PROVIDER`` directly behind the primary providers.
+        Put ``LLM_PROVIDER`` first and ``FALLBACK_LLM_PROVIDER`` second.
 
-        DB-registry chains are ordered by the model table, so without this the
-        first retry after an OpenRouter outage could land on a paid model instead
-        of the configured free fallback. Keyless providers are left in place —
-        promoting one would only add a guaranteed auth failure to the hot path.
+        Chains rebuilt from the model registry come in table order, so without
+        this the hot path could start on an arbitrary vendor and retry on a paid
+        model instead of the configured free fallback.
         """
-        from app.core.config import settings
+        ordered = self._promote(
+            providers,
+            provider_id=str(getattr(settings, "LLM_PROVIDER", "") or ""),
+            model=str(getattr(settings, "resolved_chat_model", "") or ""),
+            after=after,
+        )
+        return self._promote(
+            ordered,
+            provider_id=str(getattr(settings, "FALLBACK_LLM_PROVIDER", "") or ""),
+            model=str(getattr(settings, "FALLBACK_LLM_MODEL", "") or ""),
+            after=after + 1,
+        )
 
-        wanted_id = str(getattr(settings, "FALLBACK_LLM_PROVIDER", "") or "").strip().lower()
-        if not wanted_id or wanted_id in {"auto"} or after >= len(providers):
+    @staticmethod
+    def _promote(
+        providers: list[BaseLLMProvider],
+        *,
+        provider_id: str,
+        model: str,
+        after: int,
+    ) -> list[BaseLLMProvider]:
+        """
+        Move the configured vendor to position ``after``, preferring ``model``.
+
+        Keyless providers are never promoted — that would only add a guaranteed
+        auth failure in front of a vendor that can actually answer.
+        """
+        wanted_id = provider_id.strip().lower()
+        if not wanted_id or wanted_id == "auto" or after >= len(providers):
             return providers
 
-        wanted_model = str(getattr(settings, "FALLBACK_LLM_MODEL", "") or "").strip().lower()
+        wanted_model = model.strip().lower()
         chosen: int | None = None
         for index in range(after, len(providers)):
-            provider = providers[index]
+            candidate = providers[index]
             pid = str(
-                getattr(provider, "provider_id", None) or type(provider).__name__
+                getattr(candidate, "provider_id", None) or type(candidate).__name__
             ).strip().lower()
-            if pid != wanted_id or not getattr(provider, "api_key", None):
+            if pid != wanted_id or not getattr(candidate, "api_key", None):
                 continue
             if chosen is None:
                 chosen = index
-            if wanted_model and str(getattr(provider, "model", "") or "").lower() == wanted_model:
+            if wanted_model and str(getattr(candidate, "model", "") or "").lower() == wanted_model:
                 chosen = index
                 break
 

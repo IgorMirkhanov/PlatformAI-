@@ -179,9 +179,9 @@ async def test_gateway_retries_configured_fallback_before_other_vendors() -> Non
     )
     groq = FakeProvider(
         "groq",
-        complete_return=_ok("from-groq", model="llama-3.1-8b-instant"),
+        complete_return=_ok("from-groq", model="openai/gpt-oss-20b"),
         api_key="gsk-test",
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
     )
 
     gateway = ResilientLLMGateway([primary, paid, groq])
@@ -190,6 +190,21 @@ async def test_gateway_retries_configured_fallback_before_other_vendors() -> Non
     assert result.content == "from-groq"
     assert groq.complete_calls == 1
     assert paid.complete_calls == 0
+
+
+def test_gateway_orders_registry_chain_by_configured_providers() -> None:
+    """Registry order must not put paid models ahead of the free primary/fallback."""
+    groq = FakeProvider("groq", api_key="gsk-test", model="openai/gpt-oss-20b")
+    paid = FakeProvider("openrouter", api_key="sk-or-test", model="openai/gpt-4o")
+    free = FakeProvider("openrouter", api_key="sk-or-test", model="openai/gpt-oss-20b:free")
+
+    gateway = ResilientLLMGateway([groq, paid, free])
+    chain = gateway.effective_chain()
+
+    assert [(p.provider_id, p.model) for p in chain[:2]] == [
+        ("openrouter", "openai/gpt-oss-20b:free"),
+        ("groq", "openai/gpt-oss-20b"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -203,9 +218,9 @@ async def test_gateway_drops_foreign_model_hint_on_fallback() -> None:
     )
     groq = FakeProvider(
         "groq",
-        complete_return=_ok("from-groq", model="llama-3.1-8b-instant"),
+        complete_return=_ok("from-groq", model="openai/gpt-oss-20b"),
         api_key="gsk-test",
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
     )
 
     gateway = ResilientLLMGateway([primary, groq])

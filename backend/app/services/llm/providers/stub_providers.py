@@ -164,7 +164,7 @@ class GroqProvider(OpenAIProvider):
             else getattr(settings, "GROQ_API_KEY", None),
             model=model
             or getattr(settings, "GROQ_CHAT_MODEL", None)
-            or "llama-3.1-8b-instant",
+            or "openai/gpt-oss-20b",
             timeout_seconds=timeout_seconds,
             client=client,
             base_url=base_url

@@ -110,8 +110,8 @@ SEED_LLM_MODELS: list[dict[str, object]] = [
     },
     {
         "provider": "groq",
-        "model_name": "llama-3.1-8b-instant",
-        "display_name": "Llama 3.1 8B Instant (Groq Free)",
+        "model_name": "openai/gpt-oss-20b",
+        "display_name": "GPT-OSS 20B (Groq Free — fallback)",
         "base_url": "https://api.groq.com/openai/v1",
         "context_window": 131_072,
         "cost_per_1k_input": Decimal("0.000000"),
@@ -123,6 +123,7 @@ SEED_LLM_MODELS: list[dict[str, object]] = [
 # switch it off so routing and pricing never pick a slug that answers 404.
 RETIRED_LLM_MODELS: list[tuple[str, str]] = [
     ("openrouter", "meta-llama/llama-3.2-3b-instruct:free"),
+    ("groq", "llama-3.1-8b-instant"),
 ]
 
 # Per-plan limits (informational — QuotaService reads these same constants).
