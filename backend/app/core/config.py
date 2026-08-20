@@ -261,12 +261,46 @@ class Settings:
     # Public SPA URL (password-reset email stub links)
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-    # Host allow-list (comma-separated). Used to derive CORS origins in production.
-    ALLOWED_HOSTS: list[str] = [
-        host.strip()
-        for host in os.getenv("ALLOWED_HOSTS", "").split(",")
-        if host.strip()
-    ]
+    # Host allow-list (comma-separated). Used for TrustedHost + CORS origin synthesis.
+    # Ngrok tunnel wildcards are always appended so webhook tunnels are not rejected.
+    ALLOWED_HOSTS: list[str] = list(
+        dict.fromkeys(
+            [
+                *(
+                    host.strip()
+                    for host in os.getenv("ALLOWED_HOSTS", "").split(",")
+                    if host.strip()
+                ),
+                "*.ngrok-free.dev",
+                "*.ngrok-free.app",
+            ]
+        )
+    )
+
+    @property
+    def trusted_hosts(self) -> list[str]:
+        """Hostnames accepted by TrustedHostMiddleware (includes ngrok wildcards)."""
+        hosts = [h for h in self.ALLOWED_HOSTS if h and h.strip()]
+        for local in ("localhost", "127.0.0.1", "backend_api", "backend"):
+            if local not in hosts:
+                hosts.append(local)
+        # Empty / unrestricted env still needs "*" so production domains are not blocked.
+        configured = [
+            h
+            for h in hosts
+            if h
+            not in {
+                "*.ngrok-free.dev",
+                "*.ngrok-free.app",
+                "localhost",
+                "127.0.0.1",
+                "backend_api",
+                "backend",
+            }
+        ]
+        if not configured:
+            return ["*"]
+        return hosts
 
     # Optional fastapi-users router mount (refresh/reset remain on /api/v1/auth)
     FASTAPI_USERS_ENABLED: bool = os.getenv("FASTAPI_USERS_ENABLED", "false").lower() == "true"
@@ -355,7 +389,7 @@ class Settings:
 
         for host in self.ALLOWED_HOSTS:
             host_clean = host.strip().rstrip("/")
-            if not host_clean or host_clean == "*":
+            if not host_clean or host_clean == "*" or host_clean.startswith("*."):
                 continue
             if host_clean.startswith("http://") or host_clean.startswith("https://"):
                 candidate = host_clean
@@ -439,10 +473,15 @@ def is_seeded_superadmin_email(email: str | None) -> bool:
 
 
 def resolve_webhook_base_url() -> str:
-    """Prefer NGROK_TUNNEL_URL in development when a public tunnel is active."""
+    """Prefer NGROK_TUNNEL_URL when set, else WEBHOOK_BASE_URL."""
     if settings.NGROK_TUNNEL_URL:
         return settings.NGROK_TUNNEL_URL.rstrip("/")
     return settings.WEBHOOK_BASE_URL.rstrip("/")
+
+
+def webhook_base_is_public() -> bool:
+    """True when Telegram setWebhook can use the configured public HTTPS base."""
+    return is_public_https_webhook_url(f"{resolve_webhook_base_url()}/x")
 
 
 def is_public_https_webhook_url(url: str) -> bool:

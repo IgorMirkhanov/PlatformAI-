@@ -159,6 +159,9 @@ def setup_logging() -> None:
     # Silence noisy third-party debug noise unless LOG_LEVEL is DEBUG.
     if level.upper() != "DEBUG":
         logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+        # Avoid leaking Telegram bot tokens via ``HTTP Request: …/bot<token>/…``.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     logger.info(
         "Logging.configured | format={fmt} level={level} env={env}",

@@ -101,6 +101,29 @@ class TelegramService:
         if bot is not None:
             return bot
 
+        # Omnichannel hub: token_hash lives on BotChannel.meta_data after connect.
+        try:
+            from app.models.channels import BotChannel, HubChannelType
+
+            channel_result = await db.execute(
+                select(BotChannel).where(
+                    BotChannel.channel_type.in_(
+                        [HubChannelType.TELEGRAM, HubChannelType.TELEGRAM_BUSINESS]
+                    ),
+                    BotChannel.meta_data["token_hash"].as_string() == lookup_hash,
+                )
+            )
+            channel = channel_result.scalar_one_or_none()
+            if channel is not None:
+                hub_bot = await db.get(Bot, channel.bot_id)
+                if hub_bot is not None and bool(getattr(hub_bot, "is_active", True)):
+                    return hub_bot
+        except Exception as exc:
+            logger.warning(
+                "TelegramService.channel_token_hash_lookup_failed | error={error}",
+                error=str(exc),
+            )
+
         # Omnichannel bots may only store the hash under credentials.channels.telegram.
         result = await db.execute(select(Bot).where(Bot.is_active.is_(True)))
         for candidate in result.scalars().all():
@@ -108,9 +131,10 @@ class TelegramService:
             if credentials.get("token_hash") == lookup_hash:
                 return candidate
             channels = credentials.get("channels") if isinstance(credentials.get("channels"), dict) else {}
-            telegram_channel = channels.get("telegram") if isinstance(channels.get("telegram"), dict) else {}
-            if telegram_channel.get("token_hash") == lookup_hash:
-                return candidate
+            for key in ("telegram", "telegram_business"):
+                telegram_channel = channels.get(key) if isinstance(channels.get(key), dict) else {}
+                if telegram_channel.get("token_hash") == lookup_hash:
+                    return candidate
         return None
 
     def extract_bot_token(self, bot: Bot) -> str:
@@ -652,10 +676,21 @@ class TelegramService:
         token_hash: str,
         *,
         secret_token: str | None = None,
+        on_non_public: str = "polling",
     ) -> tuple[str, str]:
-        """Register Telegram setWebhook, or switch to getUpdates on localhost."""
+        """Register Telegram setWebhook, or handle non-public base URL.
+
+        ``on_non_public``:
+          - ``polling`` — deleteWebhook and fall back to getUpdates (connect/local).
+          - ``skip`` — leave Telegram webhook untouched (startup bootstrap).
+          - ``raise`` — raise ValueError without mutating Telegram state.
+        """
         from app.core.config import is_public_https_webhook_url, resolve_webhook_base_url
         from app.core.security import generate_webhook_secret
+
+        mode = (on_non_public or "polling").strip().lower()
+        if mode not in {"polling", "skip", "raise"}:
+            mode = "polling"
 
         webhook_url = (
             f"{resolve_webhook_base_url()}/api/v1/webhooks/telegram/{token_hash}"
@@ -663,6 +698,18 @@ class TelegramService:
         secret = (secret_token or "").strip() or generate_webhook_secret()
 
         if not is_public_https_webhook_url(webhook_url):
+            if mode == "skip":
+                logger.warning(
+                    "TelegramService.webhook_skip_non_public | url={url} "
+                    "action=preserve_existing_telegram_webhook",
+                    url=webhook_url,
+                )
+                return webhook_url, secret
+            if mode == "raise":
+                raise ValueError(
+                    "WEBHOOK_BASE_URL / NGROK_TUNNEL_URL must be public HTTPS "
+                    f"for setWebhook (got {webhook_url!r})."
+                )
             await self.delete_webhook(bot_token)
             logger.info(
                 "TelegramService.polling_mode | reason=webhook_base_not_public",

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from loguru import logger
@@ -10,7 +9,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.celery_app import celery_app
-from app.core.database import async_session_factory
+from app.core.database import async_session_factory, run_celery_async
 from app.core.redis_client import claim_inbound_event, get_redis_client
 from app.core.security import decrypt_credential
 from app.models.channels import BotChannel, HubChannelStatus, HubChannelType
@@ -116,7 +115,7 @@ def poll_telegram_updates() -> dict[str, Any]:
     try:
         if acquired:
             redis.set("telegram:poller:armed", "1", ex=60)
-            processed = asyncio.run(_poll_connected_bots())
+            processed = run_celery_async(_poll_connected_bots())
     except Exception as exc:
         logger.exception("TelegramPoll.failed | error={error}", error=str(exc))
     finally:

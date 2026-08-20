@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import suppress
+from typing import Any
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import (
@@ -121,3 +122,25 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
         request.state.error_occurred = True
         await _abort_request_db(request)
         raise
+
+
+def run_celery_async(coro: Any) -> Any:
+    """
+    Run an async coroutine from a Celery prefork worker safely.
+
+    SQLAlchemy/asyncpg connections are bound to the event loop that created
+    them. ``asyncio.run`` closes that loop after each call, so the next
+    ``asyncio.run`` must not reuse pooled connections from the previous loop.
+    Disposing the shared engine after each run keeps Celery pollers healthy.
+    """
+    import asyncio
+    from typing import Any as TypingAny
+
+    async def _runner() -> TypingAny:
+        try:
+            return await coro
+        finally:
+            with suppress(Exception):
+                await engine.dispose()
+
+    return asyncio.run(_runner())

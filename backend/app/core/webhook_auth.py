@@ -84,16 +84,32 @@ def verify_telegram_secret_token(
     expected_secret: str | None,
 ) -> bool:
     """Constant-time compare of Telegram ``X-Telegram-Bot-Api-Secret-Token``."""
+    ok, _reason = verify_telegram_secret_token_detailed(provided_header, expected_secret)
+    return ok
+
+
+def verify_telegram_secret_token_detailed(
+    provided_header: str | None,
+    expected_secret: str | None,
+) -> tuple[bool, str]:
+    """
+    Return ``(ok, reason)`` for Telegram secret-token checks.
+
+    Reasons are safe for logs (no secret values):
+    ``ok``, ``missing_stored_secret``, ``missing_header``, ``secret_mismatch``.
+    """
     expected = (expected_secret or "").strip()
     provided = (provided_header or "").strip()
     if not expected:
         if settings.is_production:
-            return False
+            return False, "missing_stored_secret"
         # Legacy bots without a stored secret — allow only outside production.
-        return True
+        return True, "ok_dev_bypass_no_stored_secret"
     if not provided:
-        return False
-    return secrets.compare_digest(provided, expected)
+        return False, "missing_header"
+    if not secrets.compare_digest(provided, expected):
+        return False, "secret_mismatch"
+    return True, "ok"
 
 
 def extract_telegram_webhook_secret(credentials: dict[str, Any] | None) -> str | None:
@@ -113,3 +129,45 @@ def extract_telegram_webhook_secret(credentials: dict[str, Any] | None) -> str |
                     return secret.strip()
     return None
 
+
+async def resolve_telegram_webhook_secret_for_bot(
+    db: Any,
+    bot: Any,
+) -> str | None:
+    """
+    Resolve Telegram webhook secret from bot credentials, then BotChannel.meta_data.
+
+    Path secret in ``/webhooks/telegram/{token_hash}`` identifies the bot; the
+    ``X-Telegram-Bot-Api-Secret-Token`` header must match the secret stored when
+    ``setWebhook`` was called.
+    """
+    credentials = bot.credentials if isinstance(getattr(bot, "credentials", None), dict) else None
+    secret = extract_telegram_webhook_secret(credentials)
+    if secret:
+        return secret
+
+    try:
+        from sqlalchemy import select
+
+        from app.models.channels import BotChannel, HubChannelType
+
+        result = await db.execute(
+            select(BotChannel).where(
+                BotChannel.bot_id == bot.id,
+                BotChannel.channel_type.in_(
+                    [HubChannelType.TELEGRAM, HubChannelType.TELEGRAM_BUSINESS]
+                ),
+            )
+        )
+        for row in result.scalars().all():
+            meta = row.meta_data if isinstance(row.meta_data, dict) else {}
+            candidate = meta.get("webhook_secret_token") or meta.get("telegram_webhook_secret")
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+    except Exception as exc:
+        logger.warning(
+            "WebhookAuth.channel_secret_lookup_failed | bot_id={bot_id} error={error}",
+            bot_id=getattr(bot, "id", None),
+            error=str(exc),
+        )
+    return None

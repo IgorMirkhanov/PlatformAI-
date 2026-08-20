@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.router import api_v1_router
 from app.core.config import settings
@@ -26,6 +27,7 @@ from app.core.rate_limit import limiter
 from app.core.telemetry import init_telemetry
 from app.core.tenant import TenantMiddleware
 from app.core.ws_pubsub import run_operator_ws_subscriber
+from app.services.telegram_webhook_manager import register_all_webhooks
 
 
 def _mark_request_error(request: Request) -> None:
@@ -48,6 +50,20 @@ async def lifespan(app: FastAPI):
         tenant=settings.TENANT_BASE_DOMAIN,
         cors=settings.cors_allow_origins,
     )
+    try:
+        logger.info("[STARTUP] Запуск TelegramWebhookManager...")
+        from app.core.config import webhook_base_is_public
+
+        if not webhook_base_is_public():
+            logger.warning(
+                "[STARTUP] WEBHOOK_BASE_URL is not public HTTPS — Telegram will use "
+                "Celery getUpdates polling. For commercial deploy set WEBHOOK_BASE_URL "
+                "or NGROK_TUNNEL_URL to https://<public-host> and keep celery_worker up."
+            )
+        await register_all_webhooks()
+        logger.info("TelegramWebhookManager.bootstrap_done")
+    except Exception as e:
+        logger.error(f" Ошибка TelegramWebhookManager: {e}")
     ws_subscriber_task = asyncio.create_task(run_operator_ws_subscriber())
     yield
     ws_subscriber_task.cancel()
@@ -239,7 +255,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 # Order (last added = outermost):
-# CORS → SecurityHeaders → Impersonation → Correlation → Tenant → SlowAPI → DBSession
+# TrustedHost → CORS → SecurityHeaders → Impersonation → Correlation → Tenant → SlowAPI → DBSession
 app.add_middleware(DBSessionMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(TenantMiddleware)
@@ -261,6 +277,12 @@ app.add_middleware(
         "X-Correlation-ID",
         "X-Impersonation-Token",
     ],
+)
+# Allow ngrok tunnel hosts (*.ngrok-free.dev / *.ngrok-free.app) alongside ALLOWED_HOSTS.
+# When ALLOWED_HOSTS is unset, trusted_hosts is ["*"] so production domains stay open.
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=settings.trusted_hosts,
 )
 
 app.include_router(api_v1_router)

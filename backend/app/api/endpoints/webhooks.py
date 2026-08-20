@@ -183,16 +183,25 @@ async def telegram_webhook(
             return Response(status_code=status.HTTP_200_OK)
 
         from app.core.webhook_auth import (
-            extract_telegram_webhook_secret,
-            verify_telegram_secret_token,
+            resolve_telegram_webhook_secret_for_bot,
+            verify_telegram_secret_token_detailed,
         )
 
-        expected_secret = extract_telegram_webhook_secret(bot.credentials)
+        expected_secret = await resolve_telegram_webhook_secret_for_bot(db, bot)
         header_secret = request.headers.get("x-telegram-bot-api-secret-token")
-        if not verify_telegram_secret_token(header_secret, expected_secret):
-            logger.warning(
-                "WebhookEndpoint.telegram_secret_rejected | bot_id={bot_id}",
+        secret_ok, secret_reason = verify_telegram_secret_token_detailed(
+            header_secret,
+            expected_secret,
+        )
+        if not secret_ok:
+            logger.error(
+                "[Telegram Webhook Error 403] reason={reason} bot_id={bot_id} "
+                "path_token={path} has_header={has_header} has_stored_secret={has_stored}",
+                reason=secret_reason,
                 bot_id=bot.id,
+                path=bot_token[:16],
+                has_header=bool((header_secret or "").strip()),
+                has_stored=bool((expected_secret or "").strip()),
             )
             return Response(status_code=status.HTTP_403_FORBIDDEN)
 
@@ -1010,17 +1019,19 @@ async def unified_payments_webhook(
 
 @router.post(
     "/webhooks/payments/{provider}",
-    summary="Payment provider webhook (Stripe / YooKassa / manual)",
+    summary="Payment provider webhook (Stripe / TipTop Pay / manual)",
     include_in_schema=True,
 )
 async def payment_provider_webhook(
     provider: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> dict[str, str | bool]:
+) -> dict[str, str | bool | float | None]:
     """
-    Must be registered *before* ``/webhooks/{channel_type}/{bot_id}`` so
-    ``payments`` is not parsed as a channel and ``manual`` as a bot UUID.
+    TipTop Pay: ``POST /api/v1/webhooks/payments/tiptop`` with ``Content-HMAC`` header.
+
+    Handles CloudPayments Pay notifications — verifies HMAC, reads ``Data.organization_id``
+    and ``Amount``, credits org wallet via pending ``PaymentInvoice``.
     """
     from app.services.billing.payment_billing_service import payment_billing_service
     from app.services.billing_service import process_successful_payment
@@ -1117,20 +1128,30 @@ async def universal_webhook_receiver(
             require_meta_signature(request, raw_bytes)
         elif platform == "TELEGRAM":
             from app.core.webhook_auth import (
-                extract_telegram_webhook_secret,
-                verify_telegram_secret_token,
+                resolve_telegram_webhook_secret_for_bot,
+                verify_telegram_secret_token_detailed,
             )
             from app.models.core_models import Bot as BotModel
 
             bot_row = await db.get(BotModel, bot_id)
-            expected = extract_telegram_webhook_secret(
-                bot_row.credentials if bot_row else None
+            expected = (
+                await resolve_telegram_webhook_secret_for_bot(db, bot_row)
+                if bot_row is not None
+                else None
             )
             header_secret = request.headers.get("x-telegram-bot-api-secret-token")
-            if not verify_telegram_secret_token(header_secret, expected):
-                logger.warning(
-                    "WebhookReceiver.telegram_secret_rejected | bot_id={bot_id}",
+            secret_ok, secret_reason = verify_telegram_secret_token_detailed(
+                header_secret,
+                expected,
+            )
+            if not secret_ok:
+                logger.error(
+                    "[Telegram Webhook Error 403] reason={reason} bot_id={bot_id} "
+                    "has_header={has_header} has_stored_secret={has_stored}",
+                    reason=secret_reason,
                     bot_id=bot_id_str,
+                    has_header=bool((header_secret or "").strip()),
+                    has_stored=bool((expected or "").strip()),
                 )
                 return Response(status_code=status.HTTP_403_FORBIDDEN)
         else:

@@ -11,7 +11,6 @@ from sqlalchemy.orm import joinedload
 from app.models.core_models import UserRole
 from app.models.crm.deal import CrmDeal, DealStatus
 from app.repositories.crm.base_crm_repository import BaseCrmRepository
-from app.services.crm.deal_access import CRM_GLOBAL_DEAL_ROLES
 
 
 class DealRepository(BaseCrmRepository[CrmDeal]):
@@ -32,6 +31,9 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
     @property
     def _viewer_scoped(self) -> bool:
         """True when OPERATOR (or other non-global role) scoping must apply."""
+        # Lazy import avoids circular edges via app.repositories.crm ↔ app.services.crm.
+        from app.services.crm.deal_access import CRM_GLOBAL_DEAL_ROLES
+
         if self.viewer_user_id is None:
             return False
         if self.viewer_role is None:

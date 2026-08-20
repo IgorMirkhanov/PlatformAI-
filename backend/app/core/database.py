@@ -12,6 +12,7 @@ from app.db.session import (
     async_session_factory,
     engine,
     get_db,
+    run_celery_async,
 )
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "async_session_factory",
     "engine",
     "get_db",
+    "run_celery_async",
     "AsyncSession",
     "AsyncGenerator",
 ]
