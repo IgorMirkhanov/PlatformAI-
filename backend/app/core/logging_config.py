@@ -35,11 +35,20 @@ _DEV_FORMAT = (
 )
 
 
+_TELEGRAM_BOT_TOKEN_RE = re.compile(
+    r"(?i)(/bot)(\d{6,}:[A-Za-z0-9_\-]{20,})"
+)
+
+
 def scrub_api_keys(text: str) -> str:
-    """Replace OpenAI / Anthropic / DeepSeek-style API keys in free-form text."""
-    if not text or "sk-" not in text.lower():
+    """Replace LLM API keys and Telegram bot tokens in free-form text."""
+    if not text:
         return text
-    return _API_KEY_RE.sub(REDACTED_KEY, text)
+    if "sk-" in text.lower():
+        text = _API_KEY_RE.sub(REDACTED_KEY, text)
+    if "/bot" in text.lower():
+        text = _TELEGRAM_BOT_TOKEN_RE.sub(r"\1[REDACTED_TELEGRAM_TOKEN]", text)
+    return text
 
 
 def _ensure_correlation_id(record: dict[str, Any]) -> bool:
