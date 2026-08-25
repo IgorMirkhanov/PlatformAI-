@@ -196,13 +196,139 @@ class TipTopService:
 
     @staticmethod
     def parse_webhook_payload(raw_body: bytes) -> dict[str, Any] | None:
+        text = raw_body.decode("utf-8") or ""
+        if not text.strip():
+            return None
         try:
-            data = json.loads(raw_body.decode("utf-8") or "{}")
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        try:
+            from urllib.parse import parse_qs
+
+            parsed = parse_qs(text, keep_blank_values=True)
+            if not parsed:
+                return None
+            return {key: values[0] if len(values) == 1 else values for key, values in parsed.items()}
         except Exception:
             return None
-        if not isinstance(data, dict):
-            return None
-        return data
+
+    @staticmethod
+    def _parse_json_field(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        return {}
+
+    @classmethod
+    def extract_metadata(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        for key in ("Data", "JsonData", "data", "metadata"):
+            blob = cls._parse_json_field(payload.get(key))
+            if blob:
+                return blob
+        model = payload.get("Model")
+        if isinstance(model, dict):
+            for key in ("Data", "JsonData", "data"):
+                blob = cls._parse_json_field(model.get(key))
+                if blob:
+                    return blob
+        return {}
+
+    @classmethod
+    def extract_card_token(cls, payload: dict[str, Any]) -> str | None:
+        for key in ("Token", "token", "RebillId", "rebill_id"):
+            value = payload.get(key)
+            if value:
+                return str(value).strip()
+        model = payload.get("Model")
+        if isinstance(model, dict):
+            for key in ("Token", "token"):
+                if model.get(key):
+                    return str(model[key]).strip()
+        return None
+
+    @classmethod
+    def extract_card_last_four(cls, payload: dict[str, Any]) -> str | None:
+        for key in ("CardLastFour", "CardLast4", "card_last_four"):
+            value = payload.get(key)
+            if value:
+                raw = str(value).strip()
+                return raw[-4:] if len(raw) >= 4 else raw
+        return None
+
+    @classmethod
+    def extract_card_type(cls, payload: dict[str, Any]) -> str | None:
+        for key in ("CardType", "card_type", "PaymentMethod"):
+            value = payload.get(key)
+            if value:
+                return str(value).strip()
+        return None
+
+    @classmethod
+    def extract_organization_id(cls, payload: dict[str, Any]) -> str | None:
+        meta = cls.extract_metadata(payload)
+        for key in ("organization_id", "organizationId", "org_id"):
+            value = meta.get(key)
+            if value:
+                return str(value)
+        return None
+
+    @classmethod
+    def extract_invoice_id(cls, payload: dict[str, Any]) -> str | None:
+        for key in ("InvoiceId", "invoice_id", "InvoiceID"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+        meta = cls.extract_metadata(payload)
+        for key in ("invoice_id", "invoiceId"):
+            value = meta.get(key)
+            if value:
+                return str(value)
+        return None
+
+    @classmethod
+    def extract_amount(cls, payload: dict[str, Any]) -> Decimal | None:
+        for key in ("Amount", "amount"):
+            value = payload.get(key)
+            if value is not None:
+                try:
+                    return Decimal(str(value))
+                except Exception:
+                    pass
+        model = payload.get("Model")
+        if isinstance(model, dict):
+            for key in ("Amount", "amount"):
+                value = model.get(key)
+                if value is not None:
+                    try:
+                        return Decimal(str(value))
+                    except Exception:
+                        pass
+        return None
+
+    @classmethod
+    def is_pay_event(cls, payload: dict[str, Any]) -> bool:
+        """TipTop / CloudPayments successful Pay (Payment) notification."""
+        operation = str(
+            payload.get("OperationType") or payload.get("operationType") or ""
+        ).strip().lower()
+        status = str(payload.get("Status") or payload.get("status") or "").strip().lower()
+
+        if operation in {"payment", "pay"}:
+            if status in {"completed", "success", "succeeded", "paid", "authorized"}:
+                return True
+            if not status:
+                return cls.is_completed_status(payload)
+            return False
+
+        return cls.is_completed_status(payload)
 
     @staticmethod
     def extract_external_payment_id(payload: dict[str, Any]) -> str | None:

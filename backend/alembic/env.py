@@ -3,7 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from logging.config import fileConfig
+
+# `backend/alembic/` (revision scripts) is a PEP 420 namespace that shadows the
+# PyPI `alembic` package whenever cwd/pythonpath is `backend/`. Prefer site-packages.
+for _entry in list(sys.path):
+    if "site-packages" in _entry.replace("\\", "/").lower():
+        sys.path.insert(0, _entry)
+_alembic_mod = sys.modules.get("alembic")
+if _alembic_mod is not None and getattr(_alembic_mod, "__file__", None) is None:
+    for _name in list(sys.modules):
+        if _name == "alembic" or _name.startswith("alembic."):
+            del sys.modules[_name]
 
 from alembic import context
 from sqlalchemy import pool

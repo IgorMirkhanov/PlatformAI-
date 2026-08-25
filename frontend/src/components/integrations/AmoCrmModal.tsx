@@ -23,6 +23,7 @@ interface AmoCrmModalProps {
   definition: CRMIntegrationDefinition | null;
   status: CRMPlatformStatus | null;
   saving: boolean;
+  platform?: "amocrm" | "kommo";
   onClose: () => void;
   onSave: (payload: CRMIntegrationPatchRequest) => Promise<void>;
 }
@@ -41,11 +42,16 @@ export function AmoCrmModal({
   definition,
   status,
   saving,
+  platform = "amocrm",
   onClose,
   onSave,
 }: AmoCrmModalProps) {
+  const defaultDomain = platform === "kommo" ? "company.kommo.com" : "company.amocrm.ru";
   const [step, setStep] = useState<1 | 2>(1);
-  const [credentials, setCredentials] = useState<AmoCRMCredentialsForm>(DEFAULT_CREDENTIALS);
+  const [credentials, setCredentials] = useState<AmoCRMCredentialsForm>({
+    ...DEFAULT_CREDENTIALS,
+    base_domain: defaultDomain,
+  });
   const [mapping, setMapping] = useState<CRMPipelineMappingForm>({
     pipeline_id: "",
     stage_id: "",
@@ -61,7 +67,7 @@ export function AmoCrmModal({
       setError(null);
       return;
     }
-    setCredentials(DEFAULT_CREDENTIALS);
+    setCredentials({ ...DEFAULT_CREDENTIALS, base_domain: defaultDomain });
     setMapping({
       pipeline_id: status?.pipeline_id ?? "",
       stage_id: status?.stage_id ?? "",
@@ -73,11 +79,11 @@ export function AmoCrmModal({
   const loadPipelines = async (): Promise<void> => {
     setPipelinesLoading(true);
     try {
-      const response = await fetchCRMPipelines(botId, "amocrm");
+      const response = await fetchCRMPipelines(botId, platform === "kommo" ? "amocrm" : platform);
       setStages(response.pipelines);
     } catch {
       setStages([]);
-      setError("Не удалось загрузить воронки amoCRM.");
+      setError(`Не удалось загрузить воронки ${platform === "kommo" ? "Kommo" : "amoCRM"}.`);
     } finally {
       setPipelinesLoading(false);
     }

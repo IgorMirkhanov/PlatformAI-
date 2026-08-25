@@ -1,5 +1,8 @@
 import type { BillingCurrency, BillingTransactionStatus, SubscriptionPlanName } from "@/types/billing";
 
+/** Matches backend ``pricing_service.USD_TO_KZT`` for live conversion hints in UI. */
+export const USD_TO_KZT_RATE = 450;
+
 export function formatBillingCurrency(
   value: number,
   currency: BillingCurrency = "KZT",

@@ -55,6 +55,13 @@ x-backend-env: &backend-env
   SENTRY_DSN: ${SENTRY_DSN:-}
   AI_GUARDRAILS_ENABLED: ${AI_GUARDRAILS_ENABLED:-true}
   AI_MODERATION_ENABLED: ${AI_MODERATION_ENABLED:-false}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-120/minute}
+  LLM_REQUEST_TIMEOUT_SECONDS: ${LLM_REQUEST_TIMEOUT_SECONDS:-45}
+  RAG_SEARCH_TIMEOUT_SECONDS: ${RAG_SEARCH_TIMEOUT_SECONDS:-8}
+  ALLOW_SOFT_LAUNCH_AUTH: ${ALLOW_SOFT_LAUNCH_AUTH:-false}
+  ALLOW_PLAIN_CREDENTIAL_FALLBACK: ${ALLOW_PLAIN_CREDENTIAL_FALLBACK:-false}
+  ALLOW_OAUTH_STUB: ${ALLOW_OAUTH_STUB:-false}
 
 services:
   postgres:
@@ -360,6 +367,7 @@ services:
       - --web.enable-lifecycle
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
     ports:
       - "${PROMETHEUS_HOST_PORT:-127.0.0.1:9090}:9090"

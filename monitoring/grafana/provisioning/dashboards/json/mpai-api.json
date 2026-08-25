@@ -1,0 +1,78 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "HTTP requests by status",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (code) (rate(mpai_http_requests_total[5m]))",
+          "legendFormat": "{{code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "5xx share",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(mpai_http_requests_total{code=~\"5..\"}[5m])) / clamp_min(sum(rate(mpai_http_requests_total[5m])), 0.001)",
+          "legendFormat": "5xx ratio",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "Stripe webhook failures",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "increase(mpai_webhook_failures_total{platform=\"stripe\"}[15m])",
+          "legendFormat": "failures / 15m",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "title": "HTTP 402 (quota)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(mpai_http_requests_total{code=\"402\"}[5m]))",
+          "legendFormat": "402 rps",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["mpai", "api"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "title": "MP.AI API",
+  "uid": "mpai-api",
+  "version": 1
+}

@@ -42,7 +42,7 @@ export default function WabaChannelPage() {
     try {
       const response = await connectHubChannel(botId, "waba", {
         phone_number_id: phoneNumberId.trim(),
-        business_account_id: businessAccountId.trim(),
+        business_account_id: businessAccountId.trim() || undefined,
         access_token: accessToken.trim(),
         verify_token: verifyToken.trim() || undefined,
       });
@@ -85,7 +85,7 @@ export default function WabaChannelPage() {
         <>
           <p>1. Создайте приложение в Meta for Developers.</p>
           <p>2. Добавьте продукт WhatsApp и получите Phone Number ID.</p>
-          <p>3. Скопируйте постоянный Access Token и Business Account ID.</p>
+          <p>3. Скопируйте постоянный Access Token. Business Account ID — по желанию.</p>
           <p>4. Укажите Verify Token и пропишите webhook URL в Meta Console.</p>
         </>
       }
@@ -103,7 +103,7 @@ export default function WabaChannelPage() {
         />
       </label>
       <label className="block text-xs font-medium text-zinc-400">
-        Business Account ID
+        Business Account ID (опционально)
         <input
           value={businessAccountId}
           disabled={isPending}

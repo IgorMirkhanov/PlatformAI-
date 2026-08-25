@@ -116,9 +116,53 @@ def decrypt_credential(stored: str) -> str:
                 )
                 return value.removeprefix("plain:")
 
-    # Unencrypted historical test records — pass through without raising.
-    logger.debug("Security.decrypt_passthrough_plaintext")
+    # Unencrypted historical test records — fail closed in production.
+    if settings.is_production:
+        logger.error(
+            "Security.unencrypted_credential_in_production | value_prefix={prefix}",
+            prefix=(value[:6] if value else "empty"),
+        )
+        raise RuntimeError("Unencrypted credential found in production storage.")
+    logger.warning("Security.decrypt_passthrough_plaintext | mode=dev_only")
     return value
+
+
+class EncryptionService:
+    """
+    Multi-tenant credential vault.
+
+    Customer API keys (Telegram, Wazzup, Bitrix24, amoCRM, OpenAI BYOK, Green-API,
+    WhatsApp Cloud, Instagram, …) MUST be sealed with ``encrypt`` before write to
+    ``bot_channels.encrypted_token`` / ``bot.credentials`` / integration JSON.
+    Uses AES-256-GCM keyed by ``ENCRYPTION_KEY`` / ``CREDENTIALS_ENCRYPTION_KEY``.
+    """
+
+    @staticmethod
+    def encrypt(value: str) -> str:
+        return encrypt_credential(value)
+
+    @staticmethod
+    def decrypt(stored: str) -> str:
+        return decrypt_credential(stored)
+
+    @staticmethod
+    def is_sealed(value: str | None) -> bool:
+        if not value or not isinstance(value, str):
+            return False
+        return value.startswith((AESGCM_PREFIX, "enc:", "plain:")) or looks_encrypted(value)
+
+    @staticmethod
+    def seal_mapping(payload: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
+        """Encrypt listed string fields in a shallow dict copy (idempotent)."""
+        sealed = dict(payload)
+        for field in fields:
+            raw = sealed.get(field)
+            if isinstance(raw, str) and raw and not EncryptionService.is_sealed(raw):
+                sealed[field] = encrypt_credential(raw)
+        return sealed
+
+
+encryption_service = EncryptionService()
 
 
 def hash_password(password: str) -> str:

@@ -20,7 +20,10 @@ export default function WazzupChannelPage() {
   const [error, setError] = useState<string | null>(null);
 
   const handleConnect = async () => {
-    const validationError = validateHubWazzupForm({ api_key: apiKey });
+    const validationError = validateHubWazzupForm({
+      api_key: apiKey,
+      channel_id: referenceId,
+    });
     if (validationError) {
       setError(validationError);
       return;
@@ -31,7 +34,7 @@ export default function WazzupChannelPage() {
     try {
       const response = await connectHubChannel(botId, "wazzup", {
         api_key: apiKey.trim(),
-        reference_id: referenceId.trim() || undefined,
+        reference_id: referenceId.trim(),
       });
       showToast(response.message || "Wazzup подключён.", "success");
       setApiKey("");
@@ -72,7 +75,7 @@ export default function WazzupChannelPage() {
         <>
           <p>1. Войдите в кабинет Wazzup24.</p>
           <p>2. Создайте API-ключ в разделе интеграций.</p>
-          <p>3. Укажите channel / frame ID при необходимости.</p>
+          <p>3. Укажите Channel ID из кабинета Wazzup.</p>
           <p>4. Пропишите webhook URL из статуса подключения в настройках Wazzup.</p>
         </>
       }
@@ -91,7 +94,7 @@ export default function WazzupChannelPage() {
         />
       </label>
       <label className="block text-xs font-medium text-zinc-400">
-        Channel / Reference ID (опционально)
+        Channel ID
         <input
           value={referenceId}
           disabled={isPending}

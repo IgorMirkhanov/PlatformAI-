@@ -29,7 +29,7 @@ export function validateHubTelegramToken(token: string): string | null {
 
 export function validateHubWabaForm(values: {
   phone_number_id: string;
-  business_account_id: string;
+  business_account_id?: string;
   access_token: string;
   verify_token?: string;
 }): string | null {
@@ -39,10 +39,7 @@ export function validateHubWabaForm(values: {
   if (!/^\d{5,}$/.test(values.phone_number_id.trim())) {
     return "Phone Number ID должен содержать только цифры.";
   }
-  if (!values.business_account_id.trim()) {
-    return "Business Account ID обязателен.";
-  }
-  if (!/^\d{5,}$/.test(values.business_account_id.trim())) {
+  if (values.business_account_id?.trim() && !/^\d{5,}$/.test(values.business_account_id.trim())) {
     return "Business Account ID должен содержать только цифры.";
   }
   if (!values.access_token.trim()) {
@@ -57,33 +54,44 @@ export function validateHubWabaForm(values: {
   return null;
 }
 
-export function validateHubWazzupForm(values: { api_key: string }): string | null {
+export function validateHubWazzupForm(values: {
+  api_key: string;
+  channel_id?: string;
+}): string | null {
   if (!values.api_key.trim()) {
     return "Укажите API-ключ Wazzup.";
   }
   if (values.api_key.trim().length < 16) {
     return "API-ключ Wazzup слишком короткий.";
   }
+  if (!values.channel_id?.trim()) {
+    return "Укажите Channel ID.";
+  }
+  return null;
+}
+
+/** Green API (WhatsApp / Instagram): idInstance + apiTokenInstance. */
+export function validateHubGreenApiForm(values: {
+  instance_id: string;
+  api_token: string;
+}): string | null {
+  if (!values.instance_id.trim()) {
+    return "Укажите Instance ID.";
+  }
+  if (!values.api_token.trim()) {
+    return "Укажите API Token.";
+  }
+  if (values.api_token.trim().length < 8) {
+    return "API Token слишком короткий.";
+  }
   return null;
 }
 
 export function validateHubInstagramForm(values: {
-  page_id: string;
-  access_token: string;
+  instance_id: string;
+  api_token: string;
 }): string | null {
-  if (!values.page_id.trim()) {
-    return "Page ID обязателен.";
-  }
-  if (!/^\d{5,}$/.test(values.page_id.trim())) {
-    return "Page ID должен содержать только цифры.";
-  }
-  if (!values.access_token.trim()) {
-    return "Access Token обязателен.";
-  }
-  if (values.access_token.trim().length < 20) {
-    return "Access Token слишком короткий.";
-  }
-  return null;
+  return validateHubGreenApiForm(values);
 }
 
 export function validateTelegramForm(
@@ -125,16 +133,16 @@ export function validateInstagramForm(
   values: InstagramChannelFormValues,
 ): FieldErrors<keyof InstagramChannelFormValues> {
   const errors: FieldErrors<keyof InstagramChannelFormValues> = {};
-  const banner = validateHubInstagramForm({
-    page_id: values.instagram_page_id,
-    access_token: values.instagram_access_token,
-  });
-  if (banner) {
-    if (banner.includes("Page ID")) {
-      errors.instagram_page_id = banner;
-    } else {
-      errors.instagram_access_token = banner;
-    }
+  const pageId = values.instagram_page_id.trim();
+  if (!pageId) {
+    errors.instagram_page_id = "Page ID обязателен.";
+  } else if (!/^\d{5,}$/.test(pageId)) {
+    errors.instagram_page_id = "Page ID должен содержать только цифры.";
+  }
+  if (!values.instagram_access_token.trim()) {
+    errors.instagram_access_token = "Access Token обязателен.";
+  } else if (values.instagram_access_token.trim().length < 20) {
+    errors.instagram_access_token = "Access Token слишком короткий.";
   }
   return errors;
 }

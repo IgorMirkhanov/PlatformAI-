@@ -177,6 +177,13 @@ export const HUB_CHANNEL_NAV: HubChannelNavItem[] = [
   },
 ];
 
+export function isHubChannelConnected(
+  status: HubChannelStatusItem | null | undefined,
+): boolean {
+  if (!status) return false;
+  return status.connected === true && status.status === "connected";
+}
+
 export function mergeHubStatuses(
   channels: HubChannelStatusItem[] | undefined,
 ): Record<HubChannelType, HubChannelStatusItem> {

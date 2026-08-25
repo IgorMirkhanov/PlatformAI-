@@ -20,6 +20,7 @@ import type {
   BillingTransactionListResponse,
   CardTopupRequest,
   CardTopupResponse,
+  SavedTipTopPaymentMethod,
   DepositRequestPayload,
   DepositRequestResponse,
   SubscribeRequest,
@@ -597,6 +598,96 @@ export async function fetchOrganizationWallet(): Promise<{
   return apiRequest("/api/v1/billing/wallet");
 }
 
+export interface TokenWalletTransaction {
+  id: string;
+  tx_type: string;
+  amount_tokens: number;
+  balance_after: number;
+  bot_id: string | null;
+  model_used: string | null;
+  created_at: string;
+}
+
+export interface TokenWalletOverview {
+  organization_id: string;
+  balance_tokens: number;
+  credit_balance: number;
+  status: string;
+  low_balance_threshold: number;
+  blocked_at: string | null;
+  transactions: TokenWalletTransaction[];
+}
+
+export interface TokenUsageByBot {
+  organization_id: string;
+  days: number;
+  items: Array<{ bot_id: string | null; amount_tokens: number }>;
+}
+
+export async function fetchTokenWallet(): Promise<TokenWalletOverview> {
+  return apiRequest("/api/v1/wallet");
+}
+
+export async function fetchTokenUsageByBot(days = 7): Promise<TokenUsageByBot> {
+  return apiRequest(`/api/v1/wallet/usage-by-bot?days=${days}`);
+}
+
+export interface VaultCredential {
+  id: string;
+  kind: string;
+  label: string | null;
+  status: string;
+  last_error: string | null;
+  last_validated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchVaultCredentials(): Promise<{ items: VaultCredential[] }> {
+  return apiRequest("/api/v1/credentials");
+}
+
+export async function createVaultCredential(body: {
+  kind: string;
+  payload: Record<string, string>;
+  label?: string;
+  validate_before_save?: boolean;
+}): Promise<VaultCredential> {
+  return apiRequest("/api/v1/credentials", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function revalidateVaultCredential(id: string): Promise<VaultCredential> {
+  return apiRequest(`/api/v1/credentials/${encodeURIComponent(id)}/validate`, {
+    method: "POST",
+  });
+}
+
+export interface PlaygroundChatResponse {
+  text: string;
+  model_name: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost_tokens: number;
+  dry_run: boolean;
+  wallet_blocked: boolean;
+  rag_context: Array<{ text: string; similarity_score: number; file_name?: string | null }>;
+}
+
+export async function sendPlaygroundChat(body: {
+  bot_id: string;
+  message: string;
+  dry_run?: boolean;
+}): Promise<PlaygroundChatResponse> {
+  return apiRequest("/api/v1/playground/chat", {
+    method: "POST",
+    body: JSON.stringify({ dry_run: true, ...body }),
+  });
+}
+
 /** Customer Portal — GET /api/v1/billing/portal */
 export async function openBillingPortal(): Promise<{ url: string }> {
   return apiRequest("/api/v1/billing/portal");
@@ -688,6 +779,7 @@ export async function topUpByCard(payload: CardTopupRequest): Promise<CardTopupR
       provider: payload.provider ?? "stripe",
       use_saved_card: payload.use_saved_card ?? false,
       tiptop_token: payload.tiptop_token,
+      widget_mode: payload.widget_mode ?? false,
       success_url: payload.success_url ?? `${origin}/dashboard/billing?status=success`,
       cancel_url: payload.cancel_url ?? `${origin}/dashboard/billing?status=cancel`,
     }),
@@ -696,6 +788,10 @@ export async function topUpByCard(payload: CardTopupRequest): Promise<CardTopupR
 
 /** Alias — wallet top-up by card */
 export const topUpWallet = topUpByCard;
+
+export async function fetchSavedTipTopPaymentMethod(): Promise<SavedTipTopPaymentMethod> {
+  return apiRequest<SavedTipTopPaymentMethod>("/api/v1/billing/payment-methods/tiptop");
+}
 
 export async function fetchBillingNotifications(
   limit = 25,
@@ -852,6 +948,14 @@ export async function fetchAppIntegrationsStatus(botId: string) {
       meta?: Record<string, unknown>;
     }>;
   }>(`/api/v1/bots/${botId}/app-integrations/status`);
+}
+
+export async function fetchGoogleCalendarAuthUrl(
+  botId: string,
+): Promise<{ auth_url: string; state: string }> {
+  return apiRequest<{ auth_url: string; state: string }>(
+    `/api/v1/bots/${botId}/integrations/google/auth-url`,
+  );
 }
 
 export async function connectAppIntegration(
@@ -1255,6 +1359,17 @@ export async function disconnectHubChannel(
       method: "POST",
     },
   );
+}
+
+export async function patchHubChannelEnabled(
+  botId: string,
+  channelType: HubChannelType,
+  enabled: boolean,
+): Promise<{ success?: boolean; message: string; enabled: boolean }> {
+  return apiRequest(`/api/v1/bots/${botId}/channels/${encodeURIComponent(channelType)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 export function getWhatsAppQrWsUrl(botId: string): string {

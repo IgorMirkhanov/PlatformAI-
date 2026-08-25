@@ -26,6 +26,7 @@ def normalize_telegram(
         bot_id=bot_id,
         message_text=message_text,
         metadata={
+            "hub_channel_type": "telegram",
             "username": username,
             "client_name": display,
             "first_name": first_name,
@@ -44,12 +45,14 @@ def normalize_whatsapp(
     provider: str = "whatsapp",
     raw_payload: dict[str, Any] | None = None,
 ) -> NormalizedInboundMessage:
+    hub_type = provider or "whatsapp"
     return NormalizedInboundMessage(
         channel=InboundChannel.WHATSAPP,
         channel_user_id=str(phone),
         bot_id=bot_id,
         message_text=message_text,
         metadata={
+            "hub_channel_type": hub_type,
             "client_name": client_name or phone,
             "provider": provider,
             "phone": phone,
@@ -72,6 +75,7 @@ def normalize_web_widget(
         bot_id=bot_id,
         message_text=message_text,
         metadata={
+            "hub_channel_type": "web_widget",
             "username": username or "web-visitor",
             "client_name": username or "web-visitor",
             "raw_payload": raw_payload or {},

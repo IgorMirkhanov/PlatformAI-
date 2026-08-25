@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, X } from "lucide-react";
 
-import { fetchBillingStatus, fetchOrganizationUsage } from "@/lib/api";
+import { fetchBillingStatus, fetchOrganizationUsage, fetchTokenWallet } from "@/lib/api";
 import { formatBillingCurrency } from "@/lib/billing-utils";
 import { useBotStore } from "@/store/useBotStore";
 
@@ -17,6 +17,9 @@ export function LowBalanceBanner() {
   const [visible, setVisible] = useState(false);
   const [balance, setBalance] = useState<number | null>(null);
   const [threshold, setThreshold] = useState(2500);
+
+  const [tokenBlocked, setTokenBlocked] = useState(false);
+  const [tokenBalance, setTokenBalance] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -33,14 +36,19 @@ export function LowBalanceBanner() {
       return;
     }
 
-    void (async () => {
+    const load = async () => {
       try {
-        const [status, usage] = await Promise.all([
+        const [status, usage, wallet] = await Promise.all([
           billing ?? loadBilling(),
           fetchOrganizationUsage().catch(() => null),
+          fetchTokenWallet().catch(() => null),
         ]);
         if (cancelled) return;
+        const blocked = wallet?.status === "blocked";
+        setTokenBlocked(blocked);
+        setTokenBalance(typeof wallet?.balance_tokens === "number" ? wallet.balance_tokens : null);
         const low =
+          blocked ||
           Boolean(usage?.is_low_balance) ||
           Boolean(status && "is_low_balance" in status && status.is_low_balance) ||
           (typeof status?.balance === "number" && status.balance < (usage?.low_balance_threshold_kzt ?? 2500));
@@ -50,23 +58,38 @@ export function LowBalanceBanner() {
       } catch {
         if (!cancelled) setVisible(false);
       }
-    })();
+    };
+
+    void load();
+    const timer = window.setInterval(() => void load(), 10_000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [billing, loadBilling]);
 
   if (!visible) return null;
 
   return (
-    <div className="relative z-20 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-amber-100">
+    <div
+      data-testid={tokenBlocked ? "wallet-blocked-banner" : "low-balance-banner"}
+      className="relative z-20 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-amber-100"
+    >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3">
         <div className="flex items-start gap-2.5 text-sm">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
           <p>
-            <span className="font-semibold text-amber-50">Низкий баланс кошелька.</span>{" "}
-            {balance != null ? (
+            {tokenBlocked ? (
+              <span className="font-semibold text-amber-50">Кошелёк заблокирован — ИИ остановлен. </span>
+            ) : (
+              <span className="font-semibold text-amber-50">Низкий баланс кошелька.</span>
+            )}{" "}
+            {tokenBlocked ? (
+              <>
+                {tokenBalance != null ? <>Остаток {tokenBalance} ток. </> : null}
+              </>
+            ) : balance != null ? (
               <>
                 Сейчас {formatBillingCurrency(balance, "KZT")} (порог{" "}
                 {formatBillingCurrency(threshold, "KZT")}).{" "}
@@ -77,10 +100,10 @@ export function LowBalanceBanner() {
         </div>
         <div className="flex items-center gap-2">
           <Link
-            href="/dashboard/billing"
+            href="/dashboard/wallet"
             className="inline-flex items-center rounded-lg bg-amber-400 px-3 py-1.5 text-xs font-semibold text-zinc-950 transition hover:bg-amber-300"
           >
-            Пополнить баланс
+            Пополнить
           </Link>
           <button
             type="button"

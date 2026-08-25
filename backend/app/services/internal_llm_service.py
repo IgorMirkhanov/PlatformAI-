@@ -17,6 +17,46 @@ DEFAULT_INTERNAL_MODEL = (
 )
 
 
+def _mask_key(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return "missing"
+    if len(raw) <= 8:
+        return "***"
+    return f"{raw[:4]}…{raw[-4:]} (len={len(raw)})"
+
+
+_credentials_logged = False
+
+
+def log_llm_credentials_status(*, source: str = "internal_llm") -> None:
+    """Log whether production LLM keys are loaded (never print full secrets)."""
+    global _credentials_logged
+    if _credentials_logged:
+        return
+    _credentials_logged = True
+    openai_key = getattr(settings, "OPENAI_API_KEY", None)
+    openrouter_key = getattr(settings, "OPENROUTER_API_KEY", None)
+    groq_key = getattr(settings, "GROQ_API_KEY", None)
+    logger.info(
+        "LLM.credentials | source={source} provider={provider} "
+        "OPENAI_API_KEY={openai} OPENROUTER_API_KEY={openrouter} GROQ_API_KEY={groq} "
+        "primary_model={primary} fallback_provider={fb_provider} fallback_model={fb_model} "
+        "base_url={base}",
+        source=source,
+        provider=(settings.LLM_PROVIDER or "").strip() or "auto",
+        openai=_mask_key(openai_key),
+        openrouter=_mask_key(openrouter_key),
+        groq=_mask_key(groq_key),
+        primary=getattr(settings, "resolved_chat_model", None) or settings.OPENAI_CHAT_MODEL,
+        fb_provider=getattr(settings, "FALLBACK_LLM_PROVIDER", None) or "-",
+        fb_model=getattr(settings, "FALLBACK_LLM_MODEL", None)
+        or getattr(settings, "OPENAI_FALLBACK_MODEL", None)
+        or "-",
+        base=getattr(settings, "resolved_openai_base_url", None) or "-",
+    )
+
+
 async def resolve_bot_organization_id(
     db: AsyncSession,
     bot_id: uuid.UUID,
@@ -59,9 +99,11 @@ async def complete_via_gateway(
     Org-billed completion through ``ResilientLLMGateway`` (preflight + metering).
 
     Raises ``InsufficientCreditsForLLMError`` when the wallet is underfunded.
+    Gateway itself retries ``FALLBACK_LLM_PROVIDER`` on 429 / 503 / timeout.
     """
     from app.services.llm.factory import get_llm_gateway
 
+    log_llm_credentials_status(source=source)
     gateway = get_llm_gateway(include_unconfigured=True)
     model = normalize_model_name(model_name or DEFAULT_INTERNAL_MODEL)
     ref = (reference_id or "").strip() or f"{source}-{bot_id or 'na'}-{uuid.uuid4()}"
@@ -82,13 +124,54 @@ async def complete_via_gateway(
     except InsufficientCreditsForLLMError:
         raise
     except LLMProviderError as exc:
-        logger.warning(
-            "InternalLLM.gateway_failed | org={org} source={source} error={error}",
+        logger.error(
+            "InternalLLM.gateway_failed | org={org} source={source} error={error}\n{traceback}",
             org=organization_id,
             source=source,
-            error=str(exc),
+            error=f"{type(exc).__name__}: {exc}",
+            traceback=__import__("traceback").format_exc(),
         )
-        raise
+        # Last resort: platform settings.OPENAI_API_KEY (or OpenRouter / Groq).
+        platform_key = (
+            settings.OPENAI_API_KEY
+            or getattr(settings, "OPENROUTER_API_KEY", None)
+            or getattr(settings, "GROQ_API_KEY", None)
+        )
+        if not platform_key:
+            raise
+        logger.warning(
+            "InternalLLM.platform_key_fallback | org={org} source={source} "
+            "reason=org_gateway_exhausted using=settings.OPENAI_API_KEY_chain",
+            org=organization_id,
+            source=source,
+        )
+        try:
+            from app.services.llm.client import OpenAIChatClient
+
+            client = OpenAIChatClient()
+            fb = await client.chat_completion(
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                tools=tools,
+                api_key=platform_key,
+                base_url=getattr(settings, "resolved_openai_base_url", None),
+            )
+            return LLMResponse(
+                content=(fb.text or "").strip(),
+                tool_calls=None,
+                prompt_tokens=fb.input_tokens,
+                completion_tokens=fb.output_tokens,
+                model_name=fb.model or model,
+            )
+        except Exception as platform_exc:
+            logger.error(
+                "InternalLLM.platform_key_fallback_failed | org={org} error={error}\n{traceback}",
+                org=organization_id,
+                error=f"{type(platform_exc).__name__}: {platform_exc}",
+                traceback=__import__("traceback").format_exc(),
+            )
+            raise exc from platform_exc
 
     logger.info(
         "InternalLLM.gateway_success | org={org} source={source} model={model} "

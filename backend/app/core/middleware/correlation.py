@@ -42,4 +42,10 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             finally:
                 correlation_id_ctx.reset(token)
         response.headers[CORRELATION_HEADER] = cid
+        try:
+            from app.core.metrics import record_http_request
+
+            record_http_request(request.method, response.status_code)
+        except Exception:  # noqa: BLE001 — metrics must never break a response
+            pass
         return response

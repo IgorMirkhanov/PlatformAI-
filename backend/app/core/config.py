@@ -68,11 +68,23 @@ class Settings:
     AI_MODERATION_ENABLED: bool = os.getenv("AI_MODERATION_ENABLED", "false").lower() == "true"
 
     # LLM providers
-    OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
+    OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY") or os.getenv(
+        "PLATFORM_OPENAI_FALLBACK_KEY"
+    )
     OPENAI_CHAT_MODEL: str = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
     OPENAI_BASE_URL: str | None = os.getenv("OPENAI_BASE_URL") or None
     OPENAI_FALLBACK_MODEL: str = os.getenv("OPENAI_FALLBACK_MODEL", "gpt-4o-mini")
-    OPENAI_EMBEDDING_MODEL: str = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+    OPENAI_EMBEDDING_MODEL: str = (
+        os.getenv("OPENAI_EMBEDDING_MODEL")
+        or os.getenv("OPENAI_EMBEDDINGS_MODEL")
+        or "text-embedding-3-small"
+    )
+    # Alias used in release docs / .env.production.example
+    OPENAI_EMBEDDINGS_MODEL: str = (
+        os.getenv("OPENAI_EMBEDDINGS_MODEL")
+        or os.getenv("OPENAI_EMBEDDING_MODEL")
+        or "text-embedding-3-small"
+    )
     LLM_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "20"))
     LOW_BALANCE_THRESHOLD_KZT: float = float(os.getenv("LOW_BALANCE_THRESHOLD_KZT", "2500"))
 
@@ -89,7 +101,9 @@ class Settings:
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "auto")  # auto | openai | groq | openrouter | ollama
 
     # Groq (OpenAI-compatible, free-tier models)
-    GROQ_API_KEY: str | None = os.getenv("GROQ_API_KEY") or None
+    GROQ_API_KEY: str | None = os.getenv("GROQ_API_KEY") or os.getenv(
+        "PLATFORM_GROQ_FALLBACK_KEY"
+    ) or None
     GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
     GROQ_CHAT_MODEL: str = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-20b")
 
@@ -127,6 +141,8 @@ class Settings:
     REGISTER_WALLET_STARTER_CREDITS: int = int(
         os.getenv("REGISTER_WALLET_STARTER_CREDITS", "0")
     )
+    WALLET_MIN_TOKENS_RESERVE: int = int(os.getenv("WALLET_MIN_TOKENS_RESERVE", "1"))
+    WALLET_LAUNCH_GRACE_TOKENS: int = int(os.getenv("WALLET_LAUNCH_GRACE_TOKENS", "100000"))
     # Emails auto-promoted to is_superadmin on every seed / API start.
     PLATFORM_SUPERADMIN_EMAILS: list[str] = [
         email.strip().lower()
@@ -148,11 +164,18 @@ class Settings:
     )
 
     # Multi-vendor LLM Gateway credentials (OpenAI-compatible where noted).
-    ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY") or None
+    ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY") or os.getenv(
+        "PLATFORM_ANTHROPIC_FALLBACK_KEY"
+    ) or None
     GEMINI_API_KEY: str | None = (
-        os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_AI_API_KEY") or None
+        os.getenv("GEMINI_API_KEY")
+        or os.getenv("GOOGLE_AI_API_KEY")
+        or os.getenv("PLATFORM_GEMINI_FALLBACK_KEY")
+        or None
     )
-    DEEPSEEK_API_KEY: str | None = os.getenv("DEEPSEEK_API_KEY") or None
+    DEEPSEEK_API_KEY: str | None = os.getenv("DEEPSEEK_API_KEY") or os.getenv(
+        "PLATFORM_DEEPSEEK_FALLBACK_KEY"
+    ) or None
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     DEEPSEEK_CHAT_MODEL: str = os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-chat")
     GLM_API_KEY: str | None = os.getenv("GLM_API_KEY") or os.getenv("ZHIPU_API_KEY") or None
@@ -179,6 +202,8 @@ class Settings:
     MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "3"))
     RAG_MIN_SIMILARITY_SCORE: float = float(os.getenv("RAG_MIN_SIMILARITY_SCORE", "0.35"))
+    RAG_SEARCH_TIMEOUT_SECONDS: float = float(os.getenv("RAG_SEARCH_TIMEOUT_SECONDS", "8.0"))
+    LLM_FALLBACK_TIMEOUT_SECONDS: float = float(os.getenv("LLM_FALLBACK_TIMEOUT_SECONDS", "25.0"))
 
     # Knowledge base chunking (semantic windows; 500–1000 chars recommended)
     KB_CHUNK_SIZE: int = int(os.getenv("KB_CHUNK_SIZE", "800"))
@@ -198,7 +223,52 @@ class Settings:
         "TELEGRAM_API_BASE_URL",
         os.getenv("TELEGRAM_API_BASE", "https://api.telegram.org"),
     ).rstrip("/")
-    TELEGRAM_DEFAULT_BOT_TOKEN: str | None = os.getenv("TELEGRAM_DEFAULT_BOT_TOKEN") or None
+    # Platform/system Telegram bot (optional). Per-tenant bots store encrypted
+    # tokens on BotChannel / Bot.credentials — never put customer tokens here.
+    TELEGRAM_DEFAULT_BOT_TOKEN: str | None = (
+        os.getenv("TELEGRAM_DEFAULT_BOT_TOKEN")
+        or os.getenv("TELEGRAM_BOT_TOKEN")
+        or None
+    )
+    # Alias for ops docs / .env.production.example (same value as DEFAULT).
+    TELEGRAM_BOT_TOKEN: str | None = (
+        os.getenv("TELEGRAM_BOT_TOKEN")
+        or os.getenv("TELEGRAM_DEFAULT_BOT_TOKEN")
+        or None
+    )
+
+    # Wazzup24 — optional platform defaults; tenant keys live on BotChannel.encrypted_token.
+    WAZZUP_API_KEY: str | None = os.getenv("WAZZUP_API_KEY") or None
+    WAZZUP_CHANNEL_ID: str | None = os.getenv("WAZZUP_CHANNEL_ID") or None
+    WAZZUP_API_BASE_URL: str = os.getenv(
+        "WAZZUP_API_BASE_URL", "https://api.wazzup24.com/v3"
+    ).rstrip("/")
+
+    # Green-API (WhatsApp) — optional platform defaults; tenant instance/token sealed in DB.
+    WHATSAPP_GREENAPI_INSTANCE: str | None = (
+        os.getenv("WHATSAPP_GREENAPI_INSTANCE")
+        or os.getenv("GREENAPI_INSTANCE_ID")
+        or None
+    )
+    WHATSAPP_GREENAPI_TOKEN: str | None = (
+        os.getenv("WHATSAPP_GREENAPI_TOKEN")
+        or os.getenv("GREENAPI_TOKEN")
+        or None
+    )
+    WHATSAPP_GREENAPI_API_URL: str = os.getenv(
+        "WHATSAPP_GREENAPI_API_URL",
+        "https://api.green-api.com",
+    ).rstrip("/")
+
+    # CRM platform OAuth / defaults (tenant Bitrix webhooks & amo tokens are DB-encrypted).
+    BITRIX24_WEBHOOK_URL: str | None = os.getenv("BITRIX24_WEBHOOK_URL") or None
+    BITRIX_APP_ID: str | None = os.getenv("BITRIX_APP_ID") or None
+    BITRIX_APP_SECRET: str | None = os.getenv("BITRIX_APP_SECRET") or None
+    AMOCRM_CLIENT_ID: str | None = os.getenv("AMOCRM_CLIENT_ID") or None
+    AMOCRM_CLIENT_SECRET: str | None = os.getenv("AMOCRM_CLIENT_SECRET") or None
+    AMOCRM_REDIRECT_URI: str | None = os.getenv("AMOCRM_REDIRECT_URI") or None
+    AMOCRM_BASE_URL: str | None = os.getenv("AMOCRM_BASE_URL") or None
+
     GOOGLE_CLIENT_ID: str | None = os.getenv("GOOGLE_CLIENT_ID") or None
     GOOGLE_CLIENT_SECRET: str | None = os.getenv("GOOGLE_CLIENT_SECRET") or None
 
@@ -246,7 +316,7 @@ class Settings:
     # Dev-only: allow X-User-Id / demo user when Authorization is absent.
     # Always forced off in production regardless of this flag.
     ALLOW_SOFT_LAUNCH_AUTH: bool = (
-        os.getenv("ALLOW_SOFT_LAUNCH_AUTH", "true").lower() == "true"
+        os.getenv("ALLOW_SOFT_LAUNCH_AUTH", "false").lower() == "true"
     )
     # Dev-only: allow OAuth stub that trusts client-supplied email (NEVER in prod).
     ALLOW_OAUTH_STUB: bool = os.getenv("ALLOW_OAUTH_STUB", "false").lower() == "true"
@@ -410,6 +480,9 @@ class Settings:
     WS_HEARTBEAT_INTERVAL: int = int(os.getenv("WS_HEARTBEAT_INTERVAL", "30"))
 
     # Redis & Celery task queue
+    # REDIS_HOST / REDIS_PORT are Docker-network aliases; REDIS_URL remains canonical.
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CELERY_BROKER_URL: str = os.getenv(
         "CELERY_BROKER_URL",
@@ -419,6 +492,23 @@ class Settings:
         "CELERY_RESULT_BACKEND",
         "redis://localhost:6379/2",
     )
+
+    # PostgreSQL connection aliases (Docker Compose service DNS).
+    # Canonical async DSN remains DATABASE_URL — absence of these must not block boot.
+    POSTGRES_SERVER: str = (
+        os.getenv("POSTGRES_SERVER")
+        or os.getenv("POSTGRES_HOST")
+        or "localhost"
+    )
+    POSTGRES_HOST: str = (
+        os.getenv("POSTGRES_HOST")
+        or os.getenv("POSTGRES_SERVER")
+        or "localhost"
+    )
+    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_USER: str | None = os.getenv("POSTGRES_USER") or None
+    POSTGRES_PASSWORD: str | None = os.getenv("POSTGRES_PASSWORD") or None
+    POSTGRES_DB: str | None = os.getenv("POSTGRES_DB") or None
 
     # SQLAlchemy async connection pool (see app.db.session)
     DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "50"))
@@ -434,6 +524,29 @@ class Settings:
     )
     CELERY_INBOUND_QUEUE: str = os.getenv("CELERY_INBOUND_QUEUE", "inbound_messages")
     CELERY_CRM_QUEUE: str = os.getenv("CELERY_CRM_QUEUE", "crm_actions")
+    # Hub webhooks (inbound) and adapter calls (outbound). Defaults reuse the
+    # existing Redis/Celery queues — BullMQ equivalent in this stack.
+    CELERY_HUB_INBOUND_QUEUE: str = os.getenv(
+        "CELERY_HUB_INBOUND_QUEUE",
+        os.getenv("CELERY_INBOUND_QUEUE", "inbound_messages"),
+    )
+    CELERY_HUB_OUTBOUND_QUEUE: str = os.getenv(
+        "CELERY_HUB_OUTBOUND_QUEUE",
+        os.getenv("CELERY_CRM_QUEUE", "crm_actions"),
+    )
+    # Redis NX lock TTL for outbound hub jobs. Must exceed soft job timeout
+    # so kill -9 releases the connection automatically via EX expiry.
+    HUB_OUTBOUND_LOCK_TTL_SECONDS: int = int(os.getenv("HUB_OUTBOUND_LOCK_TTL_SECONDS", "90"))
+    # Soft ceiling for one outbound adapter job (< lock TTL).
+    HUB_OUTBOUND_JOB_TIMEOUT_SECONDS: int = int(
+        os.getenv("HUB_OUTBOUND_JOB_TIMEOUT_SECONDS", "60")
+    )
+    # After this many Celery retries, webhook events land in dead_letter.
+    HUB_WEBHOOK_MAX_RETRIES: int = int(os.getenv("HUB_WEBHOOK_MAX_RETRIES", "8"))
+    # Reclaim PROCESSING webhook rows stuck after worker crash (seconds).
+    HUB_WEBHOOK_STALE_PROCESSING_SECONDS: int = int(
+        os.getenv("HUB_WEBHOOK_STALE_PROCESSING_SECONDS", "300")
+    )
     CELERY_INBOUND_MAX_RETRIES: int = int(os.getenv("CELERY_INBOUND_MAX_RETRIES", "3"))
     CELERY_INBOUND_RETRY_BACKOFF: int = int(os.getenv("CELERY_INBOUND_RETRY_BACKOFF", "30"))
     # When true, deal mutations enqueue automation runs on crm_actions instead of
@@ -447,14 +560,135 @@ class Settings:
     LLM_CACHE_TTL_SECONDS: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", str(24 * 60 * 60)))
 
     # Production vector store (optional dedicated Chroma server)
-    CHROMA_SERVER_HOST: str | None = os.getenv("CHROMA_SERVER_HOST") or None
-    CHROMA_SERVER_PORT: int = int(os.getenv("CHROMA_SERVER_PORT", "8000"))
+    # CHROMADB_* aliases accepted for ops naming consistency.
+    CHROMA_SERVER_HOST: str | None = (
+        os.getenv("CHROMA_SERVER_HOST")
+        or os.getenv("CHROMADB_HOST")
+        or None
+    )
+    CHROMA_SERVER_PORT: int = int(
+        os.getenv("CHROMA_SERVER_PORT")
+        or os.getenv("CHROMADB_PORT")
+        or "8000"
+    )
+    CHROMADB_HOST: str | None = (
+        os.getenv("CHROMADB_HOST")
+        or os.getenv("CHROMA_SERVER_HOST")
+        or None
+    )
+    CHROMADB_PORT: int = int(
+        os.getenv("CHROMADB_PORT")
+        or os.getenv("CHROMA_SERVER_PORT")
+        or "8000"
+    )
 
     # Local file uploads (bot avatars, etc.)
     UPLOADS_DIR: str = os.getenv(
         "UPLOADS_DIR",
         str(_backend_root / "data" / "uploads"),
     )
+
+    def integration_secrets_audit(self) -> dict[str, bool]:
+        """Return presence map for release-critical / integration env keys (no values)."""
+
+        def _configured(value: str | None) -> bool:
+            raw = (value or "").strip()
+            if not raw:
+                return False
+            low = raw.lower()
+            if low in {"replace-me", "changeme", "your-key-here", "none", "null"}:
+                return False
+            if "replace" in low or raw.endswith("..."):
+                return False
+            return True
+
+        return {
+            # Security (required in production)
+            "ENCRYPTION_KEY": _configured(self.ENCRYPTION_KEY or self.CREDENTIALS_ENCRYPTION_KEY),
+            "JWT_SECRET_KEY": _configured(self.JWT_SECRET_KEY),
+            "INTERNAL_SERVICE_API_KEY": _configured(self.INTERNAL_SERVICE_API_KEY),
+            "WEBHOOK_BASE_URL": _configured(self.WEBHOOK_BASE_URL),
+            # LLM (all optional — missing key must not block boot)
+            "OPENAI_API_KEY": _configured(self.OPENAI_API_KEY),
+            "ANTHROPIC_API_KEY": _configured(self.ANTHROPIC_API_KEY),
+            "GROQ_API_KEY": _configured(self.GROQ_API_KEY),
+            "DEEPSEEK_API_KEY": _configured(self.DEEPSEEK_API_KEY),
+            "OPENROUTER_API_KEY": _configured(self.OPENROUTER_API_KEY),
+            # Channels (platform defaults; tenants encrypt their own in DB)
+            "TELEGRAM_BOT_TOKEN": _configured(
+                self.TELEGRAM_BOT_TOKEN or self.TELEGRAM_DEFAULT_BOT_TOKEN
+            ),
+            "WAZZUP_API_KEY": _configured(self.WAZZUP_API_KEY),
+            "WAZZUP_CHANNEL_ID": _configured(self.WAZZUP_CHANNEL_ID),
+            "WHATSAPP_GREENAPI_INSTANCE": _configured(self.WHATSAPP_GREENAPI_INSTANCE),
+            "WHATSAPP_GREENAPI_TOKEN": _configured(self.WHATSAPP_GREENAPI_TOKEN),
+            "WHATSAPP_ACCESS_TOKEN": _configured(self.WHATSAPP_ACCESS_TOKEN),
+            # CRM platform OAuth (optional)
+            "BITRIX24_WEBHOOK_URL": _configured(self.BITRIX24_WEBHOOK_URL),
+            "AMOCRM_CLIENT_ID": _configured(self.AMOCRM_CLIENT_ID),
+            "AMOCRM_CLIENT_SECRET": _configured(self.AMOCRM_CLIENT_SECRET),
+            "AMOCRM_REDIRECT_URI": _configured(self.AMOCRM_REDIRECT_URI),
+            # Vector / KB
+            "CHROMA_SERVER_HOST": _configured(self.CHROMA_SERVER_HOST or self.CHROMADB_HOST),
+            "OPENAI_EMBEDDING_MODEL": _configured(self.OPENAI_EMBEDDING_MODEL),
+        }
+
+    def format_integration_secrets_audit(self) -> str:
+        """Human-readable provider status block for startup logs."""
+        audit = self.integration_secrets_audit()
+        groups = {
+            "security": (
+                "ENCRYPTION_KEY",
+                "JWT_SECRET_KEY",
+                "INTERNAL_SERVICE_API_KEY",
+                "WEBHOOK_BASE_URL",
+            ),
+            "llm": (
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "GROQ_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "OPENROUTER_API_KEY",
+            ),
+            "channels": (
+                "TELEGRAM_BOT_TOKEN",
+                "WAZZUP_API_KEY",
+                "WAZZUP_CHANNEL_ID",
+                "WHATSAPP_GREENAPI_INSTANCE",
+                "WHATSAPP_GREENAPI_TOKEN",
+                "WHATSAPP_ACCESS_TOKEN",
+            ),
+            "crm": (
+                "BITRIX24_WEBHOOK_URL",
+                "AMOCRM_CLIENT_ID",
+                "AMOCRM_CLIENT_SECRET",
+                "AMOCRM_REDIRECT_URI",
+            ),
+            "kb": ("CHROMA_SERVER_HOST", "OPENAI_EMBEDDING_MODEL"),
+        }
+        parts: list[str] = []
+        for group, keys in groups.items():
+            flags = []
+            for key in keys:
+                ok = audit.get(key, False)
+                flags.append(f"{key}={'ON' if ok else 'OFF'}")
+            parts.append(f"{group}[{', '.join(flags)}]")
+        return " | ".join(parts)
+
+    def validate_production_secrets(self) -> list[str]:
+        """Return list of missing required production secrets (empty = OK)."""
+        if not self.is_production:
+            return []
+        missing: list[str] = []
+        if not (self.ENCRYPTION_KEY or self.CREDENTIALS_ENCRYPTION_KEY):
+            missing.append("ENCRYPTION_KEY|CREDENTIALS_ENCRYPTION_KEY")
+        if not self.JWT_SECRET_KEY:
+            missing.append("JWT_SECRET_KEY")
+        if not self.INTERNAL_SERVICE_API_KEY:
+            missing.append("INTERNAL_SERVICE_API_KEY")
+        if not (self.WEBHOOK_BASE_URL or "").strip():
+            missing.append("WEBHOOK_BASE_URL")
+        return missing
 
 
 settings = Settings()

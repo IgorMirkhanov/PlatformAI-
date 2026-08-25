@@ -72,25 +72,34 @@ class OpenAIChatClient:
         temperature: float = 0.4,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: Any | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
     ) -> LLMCompletion:
-        api_key = (
-            settings.OPENAI_API_KEY
+        resolved_key = (
+            api_key
+            or settings.OPENAI_API_KEY
             or getattr(settings, "OPENROUTER_API_KEY", None)
             or getattr(settings, "GROQ_API_KEY", None)
         )
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+        if not resolved_key:
+            raise RuntimeError("OPENAI_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY is not configured")
 
+        resolved_base = (
+            base_url
+            if base_url is not None
+            else getattr(settings, "resolved_openai_base_url", None)
+        )
         client = await _get_openai_client(
-            api_key=api_key,
+            api_key=resolved_key,
             timeout_seconds=self.timeout_seconds,
-            base_url=getattr(settings, "resolved_openai_base_url", None),
+            base_url=resolved_base,
         )
         logger.debug(
-            "LLMClient.openai_request | model={model} timeout={timeout}s messages={count}",
+            "LLMClient.openai_request | model={model} timeout={timeout}s messages={count} base={base}",
             model=model,
             timeout=self.timeout_seconds,
             count=len(messages),
+            base=(resolved_base or "default"),
         )
         try:
             kwargs: dict[str, Any] = {

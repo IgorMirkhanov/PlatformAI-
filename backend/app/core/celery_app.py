@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import task_failure, task_prerun, worker_process_init, worker_ready
 from loguru import logger
 
@@ -21,6 +22,13 @@ celery_app = Celery(
         "app.tasks.telegram_poll_task",
         "app.workers.crm_tasks",
         "app.workers.crm_webhook_tasks",
+        "app.tasks.oauth_refresh_task",
+        "app.tasks.integration_health_task",
+        "app.tasks.bitrix24_tasks",
+        "app.tasks.amocrm_tasks",
+        "app.tasks.wazzup_tasks",
+        "app.tasks.hub_queue_tasks",
+        "app.tasks.process_message",
     ],
 )
 
@@ -71,13 +79,44 @@ celery_app.conf.update(
         "app.workers.crm_tasks.dispatch_webhook_task": {
             "queue": settings.CELERY_CRM_QUEUE,
         },
-        "app.workers.crm_webhook_tasks.dispatch_webhook_task": {
+        "app.tasks.bitrix24_tasks.process_bitrix24_event_task": {
             "queue": settings.CELERY_CRM_QUEUE,
+        },
+        "app.tasks.bitrix24_tasks.bind_bitrix24_events_task": {
+            "queue": settings.CELERY_CRM_QUEUE,
+        },
+        "app.tasks.bitrix24_tasks.execute_bitrix_rest_task": {
+            "queue": settings.CELERY_CRM_QUEUE,
+        },
+        "app.tasks.amocrm_tasks.process_amocrm_event_task": {
+            "queue": settings.CELERY_CRM_QUEUE,
+        },
+        "app.tasks.amocrm_tasks.bind_amocrm_webhooks_task": {
+            "queue": settings.CELERY_CRM_QUEUE,
+        },
+        "app.tasks.wazzup_tasks.process_wazzup_event_task": {
+            "queue": settings.CELERY_INBOUND_QUEUE,
+        },
+        "app.tasks.hub_queue_tasks.process_hub_webhook_event": {
+            "queue": settings.CELERY_HUB_INBOUND_QUEUE,
+        },
+        "app.tasks.hub_queue_tasks.execute_hub_adapter_action": {
+            "queue": settings.CELERY_HUB_OUTBOUND_QUEUE,
         },
     },
     task_reject_on_worker_lost=True,
     broker_connection_retry_on_startup=True,
     result_expires=3600,
+    beat_schedule={
+        "refresh-expiring-oauth-tokens": {
+            "task": "app.tasks.oauth_refresh_task.refresh_expiring_oauth_tokens",
+            "schedule": 60.0,
+        },
+        "integration-hub-health-check": {
+            "task": "app.tasks.integration_health_task.check_connected_integrations",
+            "schedule": crontab(minute=0),
+        },
+    },
     task_always_eager=settings.CELERY_TASK_ALWAYS_EAGER,
     task_eager_propagates=settings.CELERY_TASK_ALWAYS_EAGER,
 )

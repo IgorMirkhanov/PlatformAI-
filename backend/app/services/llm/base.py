@@ -121,6 +121,20 @@ class BaseLLMProvider(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement streaming yet."
         )
-        # Make this an async generator for typing / subclass overrides.
         if False:  # pragma: no cover
             yield ""
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        timeout: float | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Architecture-spec alias around ``complete``."""
+        extra = dict(kwargs)
+        if model is not None:
+            extra["model"] = model
+        if timeout is not None:
+            extra["timeout_seconds"] = timeout
+        return await self.complete(messages, **extra)

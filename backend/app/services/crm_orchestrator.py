@@ -39,8 +39,20 @@ class CRMPermanentError(RuntimeError):
 class CRMOrchestrator:
     """Production async CRM engine for amoCRM and Bitrix24."""
 
+    _shared_client: httpx.AsyncClient | None = None
+
     def __init__(self, http_client: httpx.AsyncClient | None = None) -> None:
         self._external_client = http_client
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._external_client is not None:
+            return self._external_client
+        if CRMOrchestrator._shared_client is None or CRMOrchestrator._shared_client.is_closed:
+            CRMOrchestrator._shared_client = httpx.AsyncClient(
+                timeout=CRM_HTTP_TIMEOUT,
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
+            )
+        return CRMOrchestrator._shared_client
 
     async def execute_crm_action(
         self,
@@ -413,6 +425,17 @@ class CRMOrchestrator:
             headers=headers,
             json=payload,
         )
+        if create.status_code in {400, 422}:
+            # Parallel create race — re-query by phone/telegram before failing.
+            retry = await http.get(
+                f"https://{domain}/api/v4/contacts",
+                params={"query": query, "limit": 1},
+                headers=headers,
+            )
+            retry.raise_for_status()
+            retry_contacts = (retry.json().get("_embedded") or {}).get("contacts") or []
+            if retry_contacts:
+                return int(retry_contacts[0]["id"])
         create.raise_for_status()
         created = (create.json().get("_embedded") or {}).get("contacts") or []
         if not created:
@@ -689,23 +712,48 @@ class CRMOrchestrator:
         bot: Bot,
         config: dict[str, Any],
     ) -> None:
-        domain = config["base_domain"]
+        from app.core.pg_locks import LOCK_NS_CRM_OAUTH, pg_advisory_xact_lock_uuid
+
+        # Serialize refreshes per bot — amoCRM rotates refresh tokens.
+        await pg_advisory_xact_lock_uuid(db, LOCK_NS_CRM_OAUTH, bot.id)
+
+        # Re-read sealed config under the lock in case another worker already refreshed.
+        fresh = await self._get_amocrm_config(db, bot) or config
+        expires_at = fresh.get("expires_at")
+        if expires_at:
+            try:
+                expiry = datetime.fromisoformat(str(expires_at))
+                if expiry > datetime.now(UTC) + timedelta(minutes=2):
+                    return
+            except ValueError:
+                pass
+
+        domain = fresh["base_domain"]
+        refresh_token = fresh.get("refresh_token") or config.get("refresh_token")
+        if not refresh_token:
+            raise ValueError("amoCRM refresh_token is missing; reconnect OAuth.")
+
         payload = {
-            "client_id": config["client_id"],
-            "client_secret": config["client_secret"],
+            "client_id": fresh.get("client_id") or config["client_id"],
+            "client_secret": fresh.get("client_secret") or config["client_secret"],
             "grant_type": "refresh_token",
-            "refresh_token": config["refresh_token"],
-            "redirect_uri": config.get("redirect_uri", "https://localhost/oauth"),
+            "refresh_token": refresh_token,
+            "redirect_uri": fresh.get("redirect_uri")
+            or config.get("redirect_uri", "https://localhost/oauth"),
         }
         token_data = await self._amocrm_token_request(domain, payload)
+        # Preserve previous refresh_token when amoCRM omits a rotation.
+        if not token_data.get("refresh_token"):
+            token_data = {**token_data, "refresh_token": refresh_token}
         await self._persist_amocrm_tokens(
             db,
             bot,
             domain=domain,
-            client_id=config["client_id"],
-            client_secret=config["client_secret"],
+            client_id=str(payload["client_id"]),
+            client_secret=str(payload["client_secret"]),
             token_data=token_data,
-            redirect_uri=config.get("redirect_uri", "https://localhost/oauth"),
+            redirect_uri=str(payload["redirect_uri"]),
+            previous_refresh_token=refresh_token,
         )
         await db.commit()
 
@@ -728,11 +776,19 @@ class CRMOrchestrator:
         client_secret: str,
         token_data: dict[str, Any],
         redirect_uri: str = "https://localhost/oauth",
+        previous_refresh_token: str | None = None,
     ) -> None:
         expires_in = int(token_data.get("expires_in") or 86400)
         expires_at = (datetime.now(UTC) + timedelta(seconds=expires_in)).isoformat()
         credentials = dict(bot.credentials or {})
         crm = dict(credentials.get("crm") or {})
+        refresh = (
+            token_data.get("refresh_token")
+            or previous_refresh_token
+            or ""
+        )
+        if not refresh:
+            raise ValueError("amoCRM refresh_token missing after token exchange.")
         # Seal OAuth secrets with AES-256-GCM before JSONB persistence.
         crm["amocrm"] = seal_amocrm_config(
             {
@@ -741,7 +797,7 @@ class CRMOrchestrator:
                 "client_secret": client_secret,
                 "redirect_uri": redirect_uri,
                 "access_token": token_data["access_token"],
-                "refresh_token": token_data.get("refresh_token"),
+                "refresh_token": refresh,
                 "expires_at": expires_at,
                 "connected": True,
                 "sync_enabled": True,
@@ -750,6 +806,7 @@ class CRMOrchestrator:
         )
         credentials["crm"] = crm
         bot.credentials = credentials
+        await db.flush()
 
     async def _get_amocrm_config(self, db: AsyncSession, bot: Bot) -> dict[str, Any] | None:
         crm = (bot.credentials or {}).get("crm") or {}
@@ -966,10 +1023,150 @@ class CRMOrchestrator:
             domain = f"{domain}.amocrm.ru"
         return domain
 
-    def _client(self) -> httpx.AsyncClient:
-        if self._external_client is not None:
-            return self._external_client
-        return httpx.AsyncClient(timeout=CRM_HTTP_TIMEOUT)
+    async def refresh_credential_row(self, db: AsyncSession, row: Any) -> None:
+        """Refresh amoCRM/Bitrix OAuth on a vault credential under the caller's advisory lock."""
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.crypto_service import current_key_version, decrypt_payload, encrypt_payload
+
+        payload = decrypt_payload(
+            row.encrypted_payload,
+            row.encryption_iv,
+            row.encryption_tag,
+            key_version=int(row.key_version or 1),
+        )
+        kind = str(getattr(row, "kind", "") or "")
+        if kind != "crm_amocrm":
+            raise ValueError(f"OAuth refresh not implemented for kind={kind}")
+
+        domain = self._normalize_amocrm_domain(
+            str(payload.get("base_domain") or payload.get("subdomain") or "")
+        )
+        refresh_token = str(payload.get("refresh_token") or "")
+        if not domain or not refresh_token:
+            raise ValueError("amoCRM credential is missing subdomain/refresh_token.")
+
+        token_data = await self._amocrm_token_request(
+            domain,
+            {
+                "client_id": payload.get("client_id") or "",
+                "client_secret": payload.get("client_secret") or "",
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "redirect_uri": payload.get("redirect_uri") or "https://localhost/oauth",
+            },
+        )
+        merged = {
+            **payload,
+            "access_token": token_data.get("access_token"),
+            "refresh_token": token_data.get("refresh_token") or refresh_token,
+            "base_domain": domain,
+        }
+        ciphertext, iv, tag = encrypt_payload(merged)
+        row.encrypted_payload = ciphertext
+        row.encryption_iv = iv
+        row.encryption_tag = tag
+        row.key_version = current_key_version()
+        expires_in = int(token_data.get("expires_in") or 3600)
+        row.oauth_expires_at = datetime.now(timezone.utc) + timedelta(seconds=max(60, expires_in))
+        row.last_error = None
+        row.status = "active"
+        await db.flush()
+
+    async def handle_new_message_for_crm(
+        self,
+        db: AsyncSession,
+        *,
+        bot: Bot,
+        client: Client,
+        message_text: str,
+        channel_type: str,
+        external_chat_id: str,
+    ) -> dict[str, Any] | None:
+        """
+        Idempotent native-CRM deal upsert + optional external CRM lead.
+
+        Failures are logged and never raised — messenger reply must already be independent.
+        """
+        org_id = getattr(bot, "organization_id", None)
+        if org_id is None:
+            return None
+        try:
+            from app.repositories.crm.deal_repository import compute_dedup_key, deal_repository
+            from app.services.crm.pipeline_service import pipeline_service
+
+            pipeline = await pipeline_service.create_default_pipeline(db, org_id)
+            stages = sorted(pipeline.stages or [], key=lambda s: s.position)
+            open_stage = next((s for s in stages if not s.is_won and not s.is_lost), None)
+            if open_stage is None and stages:
+                open_stage = stages[0]
+            if open_stage is None:
+                logger.warning("CRM.handle_new_message_no_stage | org={org}", org=org_id)
+                return None
+
+            dedup = compute_dedup_key(org_id, channel_type, external_chat_id)
+            title = (client.first_name or client.username or external_chat_id or "Lead")[:255]
+            result = await deal_repository(db, organization_id=org_id).upsert_idempotent(
+                organization_id=org_id,
+                dedup_key=dedup,
+                title=title,
+                pipeline_id=pipeline.id,
+                stage_id=open_stage.id,
+                bot_id=bot.id,
+                crm_integration_id=getattr(bot, "crm_integration_id", None),
+                source=channel_type[:50],
+                custom_fields={
+                    "conversation_id": str(client.id),
+                    "external_chat_id": external_chat_id,
+                    "channel_type": channel_type,
+                },
+            )
+            if result.was_inserted:
+                try:
+                    from app.services.crm.adapters import get_crm_adapter
+
+                    platform = "amocrm"
+                    crm = (bot.credentials or {}).get("crm") or {}
+                    if isinstance(crm, dict) and crm.get("bitrix24"):
+                        platform = "bitrix24"
+                    adapter = get_crm_adapter(platform)
+                    await adapter.create_lead(
+                        payload={
+                            "bot": bot,
+                            "db": db,
+                            "name": title,
+                            "phone": external_chat_id,
+                            "comment": (message_text or "")[:2000],
+                            "channel": channel_type,
+                            "channel_user_id": external_chat_id,
+                        }
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "CRM.external_lead_failed | deal={deal} error={error}",
+                        deal=result.deal_id,
+                        error=str(exc),
+                    )
+            else:
+                try:
+                    from app.services.crm.adapters import get_crm_adapter
+
+                    adapter = get_crm_adapter("amocrm")
+                    await adapter.add_note(str(result.deal_id), (message_text or "")[:2000])
+                except Exception as exc:
+                    logger.debug(
+                        "CRM.add_note_skipped | deal={deal} error={error}",
+                        deal=result.deal_id,
+                        error=str(exc),
+                    )
+            return {"deal_id": str(result.deal_id), "was_inserted": result.was_inserted}
+        except Exception as exc:
+            logger.warning(
+                "CRM.handle_new_message_failed | bot_id={bot_id} error={error}",
+                bot_id=bot.id,
+                error=str(exc),
+            )
+            return None
 
 
 crm_orchestrator = CRMOrchestrator()

@@ -32,6 +32,12 @@ const TABS: Array<{
     icon: KeyRound,
     visible: (role) => canManageSettings(role),
   },
+  {
+    href: "/dashboard/byok-vault",
+    label: "BYOK Vault",
+    icon: KeyRound,
+    visible: (role) => canManageSettings(role),
+  },
 ];
 
 export function SettingsSectionNav({ role }: { role: UserRole | null | undefined }) {

@@ -102,12 +102,13 @@ export interface CardTopupRequest {
   provider?: "stripe" | "tiptop";
   use_saved_card?: boolean;
   tiptop_token?: string;
+  widget_mode?: boolean;
   success_url?: string;
   cancel_url?: string;
 }
 
 export interface CardTopupResponse {
-  status: "redirect" | "processing" | string;
+  status: "redirect" | "processing" | "widget" | string;
   checkout_url?: string;
   payment_url?: string;
   invoice_id?: string;
@@ -117,7 +118,15 @@ export interface CardTopupResponse {
     amount?: number;
     currency?: string;
     invoice_id?: string;
+    description?: string;
   };
+}
+
+export interface SavedTipTopPaymentMethod {
+  provider: string;
+  has_saved_card: boolean;
+  card_last_four?: string | null;
+  card_type?: string | null;
 }
 
 export interface SystemNotificationRead {

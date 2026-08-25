@@ -46,8 +46,27 @@ from app.models.saas_metering import (
 from app.models.auth_tokens import OAuthAccount, PasswordResetToken, RefreshToken
 from app.models.integration import Integration, IntegrationProvider, IntegrationStatus
 from app.models.integrations import OrganizationDbConnection
-from app.models.organization_api_key import OrganizationApiKey
+from app.models.tenant_credentials import (
+    CredentialKind,
+    CredentialStatus,
+    TenantCredential,
+    WebhookEventLog,
+)
+from app.models.integration_hub import (
+    AgentActionStatus,
+    HubAuthType,
+    HubConnectionStatus,
+    HubProvider,
+    IntegrationAgentAction,
+    IntegrationConnection,
+    IntegrationOAuthApp,
+    IntegrationProvider,
+    IntegrationUsageEvent,
+    IntegrationWebhookEvent,
+    WebhookEventStatus,
+)
 from app.models.llm_model import LLMModel
+from app.models.organization_api_key import OrganizationApiKey
 from app.models.security.audit_log import AuditLog as SecurityAuditLog
 from app.models.crm import (
     ActivityType,
@@ -91,9 +110,13 @@ import app.models.saas_metering  # noqa: E402, F401
 import app.models.usage  # noqa: E402, F401
 import app.models.auth_tokens  # noqa: E402, F401
 import app.models.integration  # noqa: E402, F401
-import app.models.security.audit_log  # noqa: E402, F401
+import app.models.tenant_credentials  # noqa: E402, F401
+import app.models.integration_hub  # noqa: E402, F401
+import app.models.organization_api_key  # noqa: E402, F401
 import app.models.crm  # noqa: E402, F401
 import app.models.billing  # noqa: E402, F401
+import app.models.wallet  # noqa: E402, F401
+import app.models.operator_notification  # noqa: E402, F401
 import app.models.llm  # noqa: E402, F401
 import app.models.omnichannel  # noqa: E402, F401
 
@@ -177,6 +200,21 @@ __all__ = [
     "IntegrationProvider",
     "IntegrationStatus",
     "OrganizationDbConnection",
+    "TenantCredential",
+    "WebhookEventLog",
+    "CredentialKind",
+    "CredentialStatus",
+    "AgentActionStatus",
+    "HubAuthType",
+    "HubConnectionStatus",
+    "HubProvider",
+    "IntegrationAgentAction",
+    "IntegrationConnection",
+    "IntegrationOAuthApp",
+    "IntegrationProvider",
+    "IntegrationUsageEvent",
+    "IntegrationWebhookEvent",
+    "WebhookEventStatus",
     "OrganizationApiKey",
     "LLMModel",
 ]

@@ -4,6 +4,8 @@
 **Release:** `v1.0.0`  
 **Gate:** all Go-Live Criteria checked or explicitly waived (owner + date).
 
+Engineering artifacts in this repo (2026-08-24): §2.7 env defaults, §2.8 correlation IDs on HTTP 4xx/5xx, §4.3 [secrets rotation runbook](./ops/SECRETS_ROTATION.md), §7.2 Prometheus alert pack + Grafana API dashboard, §8.1–8.2 / 8.4–8.5 legal+help pages, CI security **fails on `v*` tags**. Ops/Product still sign live boxes (TLS, backups, Stripe live, Locust, soft-launch).
+
 | Field | Value |
 |-------|--------|
 | Target GA date | _______________ |
@@ -22,7 +24,7 @@
 | 1.1 | CI green on release branch (backend pytest, frontend build, e2e smoke, security job) | Eng | T-3d | [ ] |
 | 1.2 | Alembic head applied: `020_org_stripe_customer` (after `019_saas_core`) | Eng | T-2d | [ ] |
 | 1.3 | Org-level StripeCustomer backfill verified on staging | Eng | T-2d | [ ] |
-| 1.4 | OpenAPI / version string = `1.0.0` (not `-rc`) | Eng | T-1d | [ ] |
+| 1.4 | OpenAPI / version string = `1.0.0` (not `-rc`) | Eng | T-1d | [x] in-repo (`backend/main.py`) |
 | 1.5 | No known Sev-0/1 bugs open on Flow Builder, Execute, Billing | Eng | T-1d | [ ] |
 | 1.6 | CHANGELOG + RELEASE_NOTES reviewed by Product | Product | T-1d | [ ] |
 
@@ -38,8 +40,8 @@
 | 2.4 | TLS Let's Encrypt (not self-signed) on public domain | Ops | T-2d | [ ] |
 | 2.5 | Postgres / Redis not publicly reachable | Ops | T-2d | [ ] |
 | 2.6 | Trivy / pip-audit / npm audit / Gitleaks reviewed; CRITICAL fixed or waived | Security | T-2d | [ ] |
-| 2.7 | `AI_GUARDRAILS_ENABLED=true`, `RATE_LIMIT_ENABLED=true`, `LOG_FORMAT=json` | Eng | T-1d | [ ] |
-| 2.8 | Correlation IDs present on 5xx / 402 responses | Eng | T-1d | [ ] |
+| 2.7 | `AI_GUARDRAILS_ENABLED=true`, `RATE_LIMIT_ENABLED=true`, `LOG_FORMAT=json` | Eng | T-1d | [x] in-repo (example + compose; confirm live `.env.production`) |
+| 2.8 | Correlation IDs present on 5xx / 402 responses | Eng | T-1d | [x] in-repo |
 
 ---
 
@@ -51,7 +53,7 @@
 | 3.2 | nginx rate limits + TLS terminate verified | Ops | T-2d | [ ] |
 | 3.3 | Health: `/api/v1/health/live` + readiness behind LB | Ops | T-2d | [ ] |
 | 3.4 | Disk alerts > 80%; container restart policy confirmed | Ops | T-2d | [ ] |
-| 3.5 | WhatsApp Baileys session volume persists across restart | Eng | T-2d | [ ] |
+| 3.5 | WhatsApp Baileys session volume persists across restart | Eng | T-2d | [x] in-repo (`mpai_whatsapp_sessions`) |
 
 ---
 
@@ -61,7 +63,7 @@
 |---|------|-------|-----|------|
 | 4.1 | Automated Postgres backup (daily) + retention ≥ 30 days | Ops | T-3d | [ ] |
 | 4.2 | **Restore drill** signed off (restore to staging, smoke auth + billing) | Ops | T-2d | [ ] |
-| 4.3 | Secrets rotation runbook documented | Security | T-2d | [ ] |
+| 4.3 | Secrets rotation runbook documented | Security | T-2d | [x] [ops/SECRETS_ROTATION.md](./ops/SECRETS_ROTATION.md) |
 | 4.4 | Rollback plan rehearsed (previous image + alembic downgrade note) | Ops | T-1d | [ ] |
 | 4.5 | Data migration note for org Stripe executed — see § Billing | Eng | T-2d | [ ] |
 
@@ -112,8 +114,8 @@ Locust quick start: see `docs/LOAD_TESTING.md` and `backend/locustfile.py`.
 | # | Item | Owner | Due | Done |
 |---|------|-------|-----|------|
 | 7.1 | Prometheus scrapes `/metrics` | Ops | T-2d | [ ] |
-| 7.2 | Alerts: 5xx rate, Stripe webhook failures, disk, container restarts | Ops | T-1d | [ ] |
-| 7.3 | Structured JSON logs + correlation_id searchable | Eng | T-1d | [ ] |
+| 7.2 | Alerts: 5xx rate, Stripe webhook failures, disk, container restarts | Ops | T-1d | [x] pack in `monitoring/alerts.yml` (enable profile; wire receivers) |
+| 7.3 | Structured JSON logs + correlation_id searchable | Eng | T-1d | [x] in-repo (`LOG_FORMAT=json`) |
 | 7.4 | Dashboard: Usage meters match `UsageEvent` / org analytics | Eng | T-1d | [ ] |
 
 ---
@@ -122,11 +124,11 @@ Locust quick start: see `docs/LOAD_TESTING.md` and `backend/locustfile.py`.
 
 | # | Item | Owner | Due | Done |
 |---|------|-------|-----|------|
-| 8.1 | Privacy Policy + Terms linked in product footer | Product | T-2d | [ ] |
-| 8.2 | Support contact published | Product | T-2d | [ ] |
+| 8.1 | Privacy Policy + Terms linked in product footer | Product | T-2d | [x] `/privacy` `/terms` (counsel review before GA copy) |
+| 8.2 | Support contact published | Product | T-2d | [x] `/support` + `NEXT_PUBLIC_SUPPORT_EMAIL` |
 | 8.3 | RELEASE_NOTES + CHANGELOG published to design partners | Product | T-1d | [ ] |
-| 8.4 | User guides (constructor, billing) linked from app help | Product | T-1d | [ ] |
-| 8.5 | Known limitations disclosed (email/OAuth stubs) | Product | T-1d | [ ] |
+| 8.4 | User guides (constructor, billing) linked from app help | Product | T-1d | [x] `/help` |
+| 8.5 | Known limitations disclosed (email/OAuth stubs) | Product | T-1d | [x] `/legal/limitations` |
 
 ---
 

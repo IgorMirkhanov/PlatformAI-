@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 
 import { registerAccount } from "@/lib/auth/session";
 import { useBotStore } from "@/store/useBotStore";
+import { SiteFooter } from "@/components/legal/SiteFooter";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -74,6 +75,17 @@ export default function RegisterPage() {
             onChange={(e) => setPassword(e.target.value)}
           />
           {error ? <p className="text-xs text-red-300">{error}</p> : null}
+          <p className="text-[11px] leading-4 text-zinc-500">
+            Регистрируясь, вы принимаете{" "}
+            <Link href="/terms" className="text-zinc-300 underline">
+              условия
+            </Link>{" "}
+            и{" "}
+            <Link href="/privacy" className="text-zinc-300 underline">
+              политику конфиденциальности
+            </Link>
+            .
+          </p>
           <button
             type="submit"
             disabled={loading}
@@ -90,6 +102,7 @@ export default function RegisterPage() {
           </Link>
         </p>
       </div>
+      <SiteFooter className="mt-8" />
     </div>
   );
 }

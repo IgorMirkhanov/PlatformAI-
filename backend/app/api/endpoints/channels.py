@@ -136,6 +136,29 @@ async def connect_hub_channel(
         ) from exc
 
 
+@router.patch(
+    "/bots/{bot_id}/channels/{channel_type}",
+    summary="Enable or pause an already connected hub channel",
+)
+async def patch_hub_channel(
+    bot_id: uuid.UUID,
+    channel_type: HubChannelType,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_credential_access()),
+) -> dict:
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="enabled must be boolean")
+    try:
+        result = await channels_hub_service.set_channel_enabled(db, bot_id, channel_type, enabled)
+        await db.commit()
+        return result
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post(
     "/bots/{bot_id}/channels/{channel_type}/disconnect",
     response_model=ChannelDisconnectResponse,

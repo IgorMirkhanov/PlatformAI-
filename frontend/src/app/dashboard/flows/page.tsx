@@ -86,7 +86,10 @@ export default function FlowsListPage() {
             Flows
           </h1>
           <p className="mt-1 text-sm text-zinc-500">
-            Organization conversation graphs for the Flow Builder engine
+            Organization conversation graphs for the Flow Builder engine.{" "}
+            <Link href="/dashboard/templates" className="text-emerald-400 hover:underline">
+              Шаблоны
+            </Link>
           </p>
         </div>
         <button

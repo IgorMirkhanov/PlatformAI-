@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ from app.services.knowledge_base_service import knowledge_base_service
 from app.services.llm.types import TransientLLMError
 from app.services.pricing_service import pricing_service
 from app.services.wallet_service import InsufficientFundsException as WalletInsufficientFundsError
+from app.services.quota_service import QuotaExceeded
 from app.services.media_dispatch_service import (
     HIGH_RELEVANCE_THRESHOLD,
     MEDIA_METADATA_KEYS,
@@ -42,11 +44,12 @@ from app.services.media_dispatch_service import (
 
 USD_TO_KZT = float(getattr(settings, "USD_TO_KZT", 450.0) or 450.0)
 
+# Legacy USD estimates for diagnostics only — billing uses ``app.services.llm.pricing``.
 MODEL_COST_USD_PER_1K: dict[str, float] = {
-    "gpt-4o-mini": 0.002,
-    "gpt-4o": 0.015,
+    "gpt-4o-mini": 0.00015,
+    "gpt-4o": 0.005,
     "llama3": 0.0,
-    "claude-3.5-sonnet": 0.012,
+    "claude-3.5-sonnet": 0.003,
 }
 
 WHATSAPP_FAMILY = {
@@ -91,7 +94,7 @@ URL_IN_TEXT_PATTERN = re.compile(
 )
 
 
-@dataclass(frozen=True)
+@dataclass
 class LLMCompletionResult:
     text: str
     input_tokens: int
@@ -101,6 +104,10 @@ class LLMCompletionResult:
     model_name: str | None = None
     # True when Gateway (or another upstream stage) already settled wallet debit.
     billing_handled: bool = False
+    # Tool names executed during this completion (empty when no function calling).
+    tools_executed: list[str] = field(default_factory=list)
+    # True when at least one booking/CRM tool returned a successful status.
+    booking_tools_succeeded: bool = False
 
 
 @dataclass
@@ -139,6 +146,19 @@ class AIOrchestrator:
     FUNDS_FALLBACK_MESSAGE = (
         "AI agent is temporarily unavailable. Transferring to an operator."
     )
+    # Used when tools succeed but the model returns empty content (common with tool-only turns).
+    TOOL_SUCCESS_CONFIRMATION_MESSAGE = (
+        "Отлично! Записал вас на консультацию и зафиксировал заявку. "
+        "Наш менеджер свяжется с вами."
+    )
+
+    BOOKING_TOOL_NAMES = frozenset(
+        {
+            "create_calendar_event",
+            "save_lead_to_crm",
+            "check_calendar_availability",
+        }
+    )
 
     async def generate_ai_response(
         self,
@@ -151,6 +171,7 @@ class AIOrchestrator:
         node_id: str | None = None,
         channel: str | None = None,
         propagate_transient: bool = False,
+        dry_run: bool = False,
     ) -> OrchestratorResult:
         logger.info(
             "AIOrchestrator.start | client_id={client_id} channel={channel} message_len={length}",
@@ -161,7 +182,9 @@ class AIOrchestrator:
 
         try:
             if bot_id is not None:
-                await self._assert_sufficient_balance(db_session, bot_id, client_id, node_id=node_id)
+                await self._assert_sufficient_balance(
+                    db_session, bot_id, client_id, node_id=node_id
+                )
                 try:
                     from app.models.core_models import Bot
                     from app.services.quota_service import quota_service
@@ -170,11 +193,9 @@ class AIOrchestrator:
                     org_id = getattr(bot, "organization_id", None) if bot is not None else None
                     if org_id is not None:
                         await quota_service.assert_token_quota(db_session, org_id)
+                except QuotaExceeded:
+                    raise
                 except Exception as quota_exc:
-                    from app.services.quota_service import QuotaExceeded
-
-                    if isinstance(quota_exc, QuotaExceeded):
-                        raise
                     logger.warning(
                         "AIOrchestrator.token_quota_check_skipped | bot_id={bot_id} error={error}",
                         bot_id=bot_id,
@@ -252,8 +273,20 @@ class AIOrchestrator:
                     completion_tokens=completion.output_tokens,
                     model_name=used_model,
                     billing_handled=completion.billing_handled,
+                    client_id=client_id,
+                    dry_run=dry_run,
                 )
-            response_text = completion.text
+            response_text = (completion.text or "").strip()
+            if not response_text and (
+                completion.booking_tools_succeeded
+                or any(name in self.BOOKING_TOOL_NAMES for name in completion.tools_executed)
+            ):
+                response_text = self.TOOL_SUCCESS_CONFIRMATION_MESSAGE
+                logger.info(
+                    "AIOrchestrator.tool_success_fallback | client_id={client_id} tools={tools}",
+                    client_id=client_id,
+                    tools=completion.tools_executed,
+                )
             attachments = self._collect_media_attachments(
                 rag_hits=rag_hits,
                 llm_text=response_text,
@@ -265,30 +298,81 @@ class AIOrchestrator:
                 count=len(attachments),
             )
             return OrchestratorResult(text=response_text, media_attachments=attachments)
-        except (InsufficientFundsError, WalletInsufficientFundsError, OrganizationSuspendedError) as exc:
+        except (
+            InsufficientFundsError,
+            WalletInsufficientFundsError,
+            OrganizationSuspendedError,
+            QuotaExceeded,
+        ) as exc:
             logger.error(
                 "LLM_REQUEST_FAILED | code={code} | client_id={client_id} | error={error}",
-                code="INSUFFICIENT_FUNDS",
+                code=getattr(exc, "code", None) or "INSUFFICIENT_FUNDS",
                 client_id=client_id,
                 error=str(exc),
             )
-            return OrchestratorResult(text=self.FUNDS_FALLBACK_MESSAGE)
+            return OrchestratorResult(text=await self._low_balance_reply(db_session, bot_id))
         except TransientLLMError as exc:
+            if propagate_transient:
+                raise
             logger.error(
-                "LLM_REQUEST_FAILED | code={code} | client_id={client_id} | error={error}",
+                "AIOrchestrator.transient_llm_error | client_id={client_id} bot_id={bot_id} "
+                "error={error}\n{traceback}",
+                client_id=client_id,
+                bot_id=bot_id,
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=__import__("traceback").format_exc(),
+            )
+            logger.warning(
+                "[LLM Fallback] Primary model failed with {error}, switching to fallback model",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            try:
+                recovered = await asyncio.wait_for(
+                    self._try_emergency_provider_fallback(
+                        db_session,
+                        client_id=client_id,
+                        current_node_data=current_node_data,
+                        incoming_message=incoming_message,
+                        bot_id=bot_id,
+                        node_id=node_id,
+                        channel=channel,
+                    ),
+                    timeout=float(getattr(settings, "LLM_FALLBACK_TIMEOUT_SECONDS", 25.0)),
+                )
+                if recovered is not None and (recovered.text or "").strip():
+                    logger.info(
+                        "[LLM Fallback] Fallback model succeeded | client_id={client_id} response_len={length}",
+                        client_id=client_id,
+                        length=len(recovered.text),
+                    )
+                    return recovered
+            except asyncio.TimeoutError:
+                logger.error(
+                    "[LLM Fallback] Fallback model timed out | client_id={client_id}\n{traceback}",
+                    client_id=client_id,
+                    traceback=__import__("traceback").format_exc(),
+                )
+            except Exception as recovery_exc:
+                logger.error(
+                    "[LLM Fallback] Fallback model failed | error={error}\n{traceback}",
+                    error=f"{type(recovery_exc).__name__}: {recovery_exc}",
+                    traceback=__import__("traceback").format_exc(),
+                )
+            logger.error(
+                "LLM_REQUEST_FAILED | code={code} | client_id={client_id} | error={error}\n{traceback}",
                 code=diagnostic_log_service.classify_llm_failure_code(exc),
                 client_id=client_id,
                 error=str(exc),
+                traceback=__import__("traceback").format_exc(),
             )
-            if propagate_transient:
-                raise
             return OrchestratorResult(text=self.FALLBACK_MESSAGE)
         except Exception as exc:
             logger.error(
-                "LLM_REQUEST_FAILED | code={code} | client_id={client_id} | error={error}",
+                "LLM_REQUEST_FAILED | code={code} | client_id={client_id} | error={error}\n{traceback}",
                 code=diagnostic_log_service.classify_llm_failure_code(exc),
                 client_id=client_id,
-                error=str(exc),
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=__import__("traceback").format_exc(),
             )
             logger.exception(
                 "AIOrchestrator.failed | client_id={client_id} error={error}",
@@ -320,6 +404,7 @@ class AIOrchestrator:
         bot_id: uuid.UUID | None = None,
         node_id: str | None = None,
         channel: str | None = None,
+        dry_run: bool = False,
     ) -> tuple[str, LLMMetricsTrace]:
         """Generate an AI reply and capture prompt, RAG, token, and cost diagnostics."""
         resolved_model = model_name or self.DEFAULT_FAST_MODEL
@@ -407,24 +492,33 @@ class AIOrchestrator:
                     completion_tokens=completion.output_tokens,
                     model_name=completion.model_name or resolved_model,
                     billing_handled=completion.billing_handled,
+                    client_id=client_id,
+                    dry_run=dry_run,
                 )
             return completion.text, metrics
-        except (InsufficientFundsError, WalletInsufficientFundsError, OrganizationSuspendedError):
+        except (
+            InsufficientFundsError,
+            WalletInsufficientFundsError,
+            OrganizationSuspendedError,
+            QuotaExceeded,
+        ):
+            fallback = await self._low_balance_reply(db_session, bot_id)
             fallback_metrics = LLMMetricsTrace(
                 model_name=resolved_model,
                 system_prompt=merged_prompt or "You are a helpful support assistant.",
                 user_query=incoming_message.strip(),
-                raw_response=self.FUNDS_FALLBACK_MESSAGE,
+                raw_response=fallback,
                 temperature=resolved_temperature,
             )
             if trace is not None:
                 trace.record_error("insufficient_funds")
                 trace.record_llm_metrics(fallback_metrics)
-            return self.FUNDS_FALLBACK_MESSAGE, fallback_metrics
+            return fallback, fallback_metrics
         except TransientLLMError as exc:
             logger.warning(
-                "AIOrchestrator.trace_transient | error={error}",
+                "AIOrchestrator.trace_transient | error={error}\n{traceback}",
                 error=str(exc),
+                traceback=__import__("traceback").format_exc(),
             )
             if trace is not None:
                 trace.record_error(str(exc))
@@ -454,9 +548,10 @@ class AIOrchestrator:
                     trace.record_llm_metrics(fallback_metrics)
                 return self.FUNDS_FALLBACK_MESSAGE, fallback_metrics
 
-            logger.exception(
-                "AIOrchestrator.trace_failed | error={error}",
-                error=str(exc),
+            logger.error(
+                "AIOrchestrator.trace_failed | error={error}\n{traceback}",
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=__import__("traceback").format_exc(),
             )
             if trace is not None:
                 trace.record_error(str(exc))
@@ -478,6 +573,19 @@ class AIOrchestrator:
             if trace is not None:
                 trace.record_llm_metrics(fallback_metrics)
             return self.FALLBACK_MESSAGE, fallback_metrics
+
+    async def _low_balance_reply(
+        self, db_session: AsyncSession, bot_id: uuid.UUID | None
+    ) -> str:
+        if bot_id is not None:
+            try:
+                bot = await db_session.get(Bot, bot_id)
+            except Exception:
+                bot = None
+            custom = getattr(bot, "low_balance_message", None) if bot is not None else None
+            if isinstance(custom, str) and custom.strip():
+                return custom.strip()
+        return self.FUNDS_FALLBACK_MESSAGE
 
     async def _assert_sufficient_balance(
         self,
@@ -510,6 +618,27 @@ class AIOrchestrator:
                 )
                 raise OrganizationSuspendedError(message)
 
+            from app.core.metrics import record_wallet_blocked
+            from app.services.token_wallet_service import token_wallet_service
+
+            token_check = await token_wallet_service.check_wallet_before_generation(
+                db_session, org_id
+            )
+            if not token_check.allowed:
+                record_wallet_blocked("precheck")
+                message = (bot.low_balance_message or "").strip() or (
+                    "Subscription balance depleted. Top up to resume AI responses."
+                )
+                await diagnostic_log_service.log(
+                    db_session,
+                    bot_id=bot_id,
+                    client_id=client_id,
+                    error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
+                    error_message=message,
+                    node_id=node_id,
+                )
+                raise InsufficientFundsError(message)
+
         subscription_result = await db_session.execute(
             select(Subscription)
             .where(
@@ -521,66 +650,23 @@ class AIOrchestrator:
         )
         subscription = subscription_result.scalar_one_or_none()
         if subscription is None:
-            message = "No active subscription. Top up to resume AI responses."
-            await diagnostic_log_service.log(
-                db_session,
-                bot_id=bot_id,
-                client_id=client_id,
-                error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
-                error_message=message,
-                node_id=node_id,
-            )
-            raise InsufficientFundsError(message)
-
-        # Row-lock the wallet so concurrent LLM calls cannot race past a soft >0 check.
-        try:
-            from decimal import Decimal
-
-            from app.services.wallet_service import wallet_service
-
-            org_for_wallet = org_id or getattr(bot, "organization_id", None)
-            if org_for_wallet is not None:
-                locked = await wallet_service.get_locked_subscription(
-                    db_session,
-                    (await wallet_service.resolve_wallet_owner(db_session, org_for_wallet))[0],
-                )
-                balance = Decimal(str(locked.balance)).quantize(Decimal("0.01"))
-                # Minimum hold: enough for a tiny completion (~1 KZT floor).
-                min_hold = Decimal("1.00")
-                if balance < min_hold:
-                    message = "Subscription balance depleted. Top up to resume AI responses."
-                    await diagnostic_log_service.log(
-                        db_session,
-                        bot_id=bot_id,
-                        client_id=client_id,
-                        error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
-                        error_message=message,
-                        node_id=node_id,
-                    )
-                    raise InsufficientFundsError(message)
-                return
-        except InsufficientFundsError:
-            raise
-        except Exception as exc:
-            logger.warning(
-                "AIOrchestrator.wallet_lock_fallback | bot_id={bot_id} error={error}",
-                bot_id=bot_id,
-                error=str(exc),
-            )
+            # Token wallet already passed (or org has no wallet gate); do not block on missing KZT plan.
+            return
 
         if float(subscription.balance) > 0:
             return
 
-        message = "Subscription balance depleted. Top up to resume AI responses."
-        await diagnostic_log_service.log(
-            db_session,
-            bot_id=bot_id,
-            client_id=client_id,
-            error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
-            error_message=message,
-            node_id=node_id,
-        )
-        raise InsufficientFundsError(message)
+        if org_id is not None:
+            try:
+                from app.services.billing.wallet_service import wallet_service as credit_wallet
+
+                credit_balance = await credit_wallet.get_balance(db_session, org_id)
+                if int(credit_balance) > 0:
+                    return
+            except Exception:
+                pass
+        # Token pre-check already allowed this org; skip KZT hard-fail.
+        return
 
     async def _record_llm_usage_and_debit(
         self,
@@ -591,6 +677,8 @@ class AIOrchestrator:
         completion_tokens: int,
         model_name: str,
         billing_handled: bool = False,
+        client_id: uuid.UUID | None = None,
+        dry_run: bool = False,
     ) -> None:
         """Persist LLMUsageLog (USD) and debit org wallet (credits or legacy KZT)."""
         from decimal import Decimal
@@ -638,17 +726,33 @@ class AIOrchestrator:
         db_session.add(usage_log)
         await db_session.flush()
 
-        if billing_handled:
+        total_tokens = max(0, int(prompt_tokens) + int(completion_tokens))
+        if not dry_run and total_tokens > 0:
+            from app.services.token_wallet_service import token_wallet_service
+
+            token_key = f"{client_id or bot_id}:{usage_log.id}"
+            await token_wallet_service.debit_after_generation(
+                db_session,
+                org_id=org_id,
+                amount_tokens=total_tokens,
+                idempotency_key=token_key,
+                bot_id=bot_id,
+                conversation_id=client_id,
+                model_used=str(model_name or "")[:100],
+                metadata={"usage_log_id": str(usage_log.id), "source": "ai_orchestrator"},
+            )
+
+        if billing_handled or dry_run:
             logger.warning(
                 "AIOrchestrator.dual_billing_skipped | bot_id={bot_id} "
-                "reason=billing_already_handled usage_log={usage_log_id}",
+                "reason={reason} usage_log={usage_log_id}",
                 bot_id=bot_id,
+                reason="dry_run" if dry_run else "billing_already_handled",
                 usage_log_id=usage_log.id,
             )
             return
 
         reference_id = f"orchestrator-{usage_log.id}"
-        total_tokens = max(0, int(prompt_tokens) + int(completion_tokens))
 
         try:
             from app.services.billing.wallet_service import wallet_service as credit_wallet
@@ -960,7 +1064,17 @@ class AIOrchestrator:
             )
             return [], []
 
-        activation = await knowledge_base_service.get_activation_snapshot(db_session, bot_uuid)
+        try:
+            activation = await knowledge_base_service.get_activation_snapshot(
+                db_session, bot_uuid
+            )
+        except Exception as exc:
+            logger.warning(
+                "AIOrchestrator.rag_snapshot_failed | kb_id={kb_id} error={error}",
+                kb_id=knowledge_base_id,
+                error=str(exc),
+            )
+            return [], []
         inactive_document_ids = list(activation.inactive_document_ids)
         # Zero active documents → skip Chroma entirely (avoids empty $in/$nin errors).
         if not activation.active_document_ids:
@@ -971,12 +1085,31 @@ class AIOrchestrator:
             )
             return [], []
 
-        hits = await search_knowledge_base(
-            knowledge_base_id=knowledge_base_id,
-            query=incoming_message,
-            top_k=settings.RAG_TOP_K,
-            excluded_document_ids=inactive_document_ids,
-        )
+        try:
+            from app.core.embeddings import embedding_api_keys_available
+
+            if not embedding_api_keys_available():
+                logger.warning(
+                    "AIOrchestrator.rag_skipped | kb_id={kb_id} reason=missing_embedding_api_key "
+                    "— continuing without RAG",
+                    kb_id=knowledge_base_id,
+                )
+                return [], []
+
+            hits = await search_knowledge_base(
+                knowledge_base_id=knowledge_base_id,
+                query=incoming_message,
+                top_k=settings.RAG_TOP_K,
+                excluded_document_ids=inactive_document_ids,
+            )
+        except Exception as exc:
+            logger.error(
+                "AIOrchestrator.rag_search_failed | kb_id={kb_id} error={error}\n{traceback}",
+                kb_id=knowledge_base_id,
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=__import__("traceback").format_exc(),
+            )
+            return [], []
         if not hits and bot_id is not None:
             await diagnostic_log_service.log(
                 db_session,
@@ -991,14 +1124,19 @@ class AIOrchestrator:
             trace.record_rag_chunks(trace_chunks)
         return hits, [str(hit["text"]) for hit in hits if hit.get("text")]
 
-    async def _fetch_chat_history(        self,
+    async def _fetch_chat_history(
+        self,
         db_session: AsyncSession,
         client_id: uuid.UUID,
     ) -> list[dict[str, str]]:
         limit = settings.MAX_CHAT_HISTORY_MESSAGES
         result = await db_session.execute(
             select(ChatMessage)
-            .where(ChatMessage.client_id == client_id)
+            .where(
+                ChatMessage.client_id == client_id,
+                ChatMessage.sender.in_([MessageSender.CLIENT, MessageSender.BOT]),
+                ~ChatMessage.message_text.like("[System]%"),
+            )
             .order_by(ChatMessage.created_at.desc())
             .limit(limit)
         )
@@ -1060,12 +1198,30 @@ class AIOrchestrator:
             )
             return []
 
-        chunks = await search_knowledge_base(
-            knowledge_base_id=knowledge_base_id,
-            query=incoming_message,
-            top_k=settings.RAG_TOP_K,
-            excluded_document_ids=inactive_document_ids,
-        )
+        try:
+            from app.core.embeddings import embedding_api_keys_available
+
+            if not embedding_api_keys_available():
+                logger.warning(
+                    "AIOrchestrator.rag_skipped | kb_id={kb_id} reason=missing_embedding_api_key "
+                    "— continuing without RAG",
+                    kb_id=knowledge_base_id,
+                )
+                return []
+            chunks = await search_knowledge_base(
+                knowledge_base_id=knowledge_base_id,
+                query=incoming_message,
+                top_k=settings.RAG_TOP_K,
+                excluded_document_ids=inactive_document_ids,
+            )
+        except Exception as exc:
+            logger.error(
+                "AIOrchestrator.rag_search_failed | kb_id={kb_id} error={error}\n{traceback}",
+                kb_id=knowledge_base_id,
+                error=f"{type(exc).__name__}: {exc}",
+                traceback=__import__("traceback").format_exc(),
+            )
+            return []
         chunk_texts = [str(hit["text"]) for hit in chunks if hit.get("text")]
         if not chunk_texts:
             logger.info(
@@ -1116,6 +1272,61 @@ class AIOrchestrator:
         )
         return self._truncate_messages(messages)
 
+    async def _try_emergency_provider_fallback(
+        self,
+        db: AsyncSession,
+        *,
+        client_id: uuid.UUID,
+        current_node_data: dict[str, Any],
+        incoming_message: str,
+        bot_id: uuid.UUID | None,
+        node_id: str | None,
+        channel: str | None,
+    ) -> OrchestratorResult | None:
+        """
+        Last-chance recovery after primary TransientLLMError (429/503/timeout).
+
+        Forces the configured ``FALLBACK_LLM_PROVIDER`` (Groq) / ``OPENAI_FALLBACK_MODEL``
+        so the user does not immediately get the overload stub.
+        """
+        from app.services.llm.client import OpenAIChatClient
+        from app.services.llm_orchestrator import llm_orchestrator
+
+        history = await self._fetch_chat_history(db, client_id)
+        system_prompt = self._apply_platform_prompt_routing(
+            str(current_node_data.get("prompt_context", "")),
+            channel=channel,
+        )
+        messages = self._build_llm_messages(
+            system_prompt=system_prompt,
+            rag_context=[],
+            history=history,
+            incoming_message=incoming_message,
+        )
+
+        fallback_model, fallback_key, fallback_base = llm_orchestrator._resolve_fallback_endpoint()
+        if not fallback_model:
+            return None
+
+        logger.warning(
+            "[LLM Fallback] Primary model failed with transient error, switching to fallback model {model}",
+            model=fallback_model,
+        )
+        client = OpenAIChatClient(
+            timeout_seconds=float(getattr(settings, "LLM_REQUEST_TIMEOUT_SECONDS", 45.0))
+        )
+        completion = await client.chat_completion(
+            messages=messages,
+            model=fallback_model,
+            temperature=float(current_node_data.get("temperature") or 0.4),
+            api_key=fallback_key,
+            base_url=fallback_base,
+        )
+        text = (completion.text or "").strip()
+        if not text:
+            return None
+        return OrchestratorResult(text=text, media_attachments=[])
+
     async def _gateway_completion_with_usage(
         self,
         db: AsyncSession,
@@ -1132,6 +1343,8 @@ class AIOrchestrator:
     ) -> LLMCompletionResult:
         from app.services.internal_llm_service import complete_via_gateway
         from app.services.llm.base import InsufficientCreditsForLLMError
+        from app.services.llm.types import LLMCompletion
+        from app.services.llm_orchestrator import llm_orchestrator
 
         try:
             response = await complete_via_gateway(
@@ -1147,13 +1360,57 @@ class AIOrchestrator:
         except InsufficientCreditsForLLMError as exc:
             raise InsufficientFundsError(str(exc)) from exc
 
+        text = (response.content or "").strip()
+        tools_executed: list[str] = []
+        booking_ok = False
+
+        # Gateway returns tool_calls with empty content — execute tools and get a user reply.
+        if response.tool_calls and bot_id is not None:
+            interim = LLMCompletion(
+                text=text,
+                model=response.model_name or model_name,
+                input_tokens=response.prompt_tokens,
+                output_tokens=response.completion_tokens,
+                total_tokens=response.total_tokens,
+                tool_calls=list(response.tool_calls),
+            )
+            resolved = await llm_orchestrator._resolve_tool_calls(
+                interim,
+                messages=list(messages),
+                model=response.model_name or model_name,
+                temperature=temperature,
+                tools=tools,
+                bot_id=bot_id,
+                client_id=client_id,
+                db=db,
+            )
+            text = (resolved.text or "").strip()
+            tools_executed = list(getattr(resolved, "tools_executed", None) or [])
+            booking_ok = bool(getattr(resolved, "booking_tools_succeeded", False))
+            if not tools_executed and response.tool_calls:
+                for tc in response.tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+                    name = str((fn or {}).get("name") if fn else tc.get("name") or "")
+                    if name:
+                        tools_executed.append(name)
+
+        if not text and (
+            booking_ok or any(name in self.BOOKING_TOOL_NAMES for name in tools_executed)
+        ):
+            text = self.TOOL_SUCCESS_CONFIRMATION_MESSAGE
+            booking_ok = True
+
         return LLMCompletionResult(
-            text=response.content,
+            text=text,
             input_tokens=response.prompt_tokens,
             output_tokens=response.completion_tokens,
             total_tokens=response.total_tokens,
             model_name=response.model_name or model_name,
             billing_handled=True,
+            tools_executed=tools_executed,
+            booking_tools_succeeded=booking_ok,
         )
 
     async def _request_completion(
@@ -1275,11 +1532,13 @@ class AIOrchestrator:
                     raise
                 except Exception as exc:
                     logger.error(
-                        "LLM_REQUEST_FAILED | code={code} | bot_id={bot_id} | error={error}",
+                        "LLM_REQUEST_FAILED | code={code} | bot_id={bot_id} | error={error}\n{traceback}",
                         code=diagnostic_log_service.classify_llm_failure_code(exc),
                         bot_id=bot_id,
-                        error=str(exc),
+                        error=f"{type(exc).__name__}: {exc}",
+                        traceback=__import__("traceback").format_exc(),
                     )
+                    # Fall through to platform settings.OPENAI_API_KEY path below.
 
         if completion is None and provider in {"auto", "openai", "openrouter", "groq"} and (
             settings.OPENAI_API_KEY
@@ -1297,11 +1556,54 @@ class AIOrchestrator:
                     tools=openai_tools,
                     db=db,
                 )
+            except TransientLLMError as exc:
+                logger.warning(
+                    "[LLM Fallback] Primary model failed with {error}, switching to fallback model",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                from app.services.llm_orchestrator import llm_orchestrator
+
+                fb_model, fb_key, fb_base = llm_orchestrator._resolve_fallback_endpoint()
+                if fb_model and fb_model != resolved_model:
+                    try:
+                        from app.services.llm.client import OpenAIChatClient
+
+                        client = OpenAIChatClient()
+                        fb_result = await client.chat_completion(
+                            messages=messages,
+                            model=fb_model,
+                            temperature=resolved_temperature,
+                            tools=openai_tools,
+                            api_key=fb_key,
+                            base_url=fb_base,
+                        )
+                        completion = LLMCompletionResult(
+                            text=(fb_result.text or "").strip(),
+                            input_tokens=fb_result.input_tokens,
+                            output_tokens=fb_result.output_tokens,
+                            total_tokens=fb_result.total_tokens,
+                            model_name=fb_result.model or fb_model,
+                        )
+                        logger.info(
+                            "[LLM Fallback] Fallback model succeeded | primary={primary} fallback={fallback}",
+                            primary=resolved_model,
+                            fallback=fb_model,
+                        )
+                    except Exception as fb_exc:
+                        logger.error(
+                            "[LLM Fallback] Fallback model failed | error={error}",
+                            error=str(fb_exc),
+                        )
+                        if provider in {"openai", "openrouter", "groq"}:
+                            raise exc from fb_exc
+                elif provider in {"openai", "openrouter", "groq"}:
+                    raise
             except Exception as exc:
                 logger.error(
-                    "LLM_REQUEST_FAILED | code={code} | error={error}",
+                    "LLM_REQUEST_FAILED | code={code} | error={error}\n{traceback}",
                     code=diagnostic_log_service.classify_llm_failure_code(exc),
-                    error=str(exc),
+                    error=f"{type(exc).__name__}: {exc}",
+                    traceback=__import__("traceback").format_exc(),
                 )
                 # Transient failures are retried by Celery / fallback chain — avoid noisy vault spam.
                 if bot_id is not None and not isinstance(exc, TransientLLMError):
@@ -1377,12 +1679,22 @@ class AIOrchestrator:
             tools=tools,
             degrade_on_exhaustion=False,
         )
+        text = (result.text or "").strip()
+        tools_executed = list(getattr(result, "tools_executed", None) or [])
+        booking_ok = bool(getattr(result, "booking_tools_succeeded", False))
+        if not text and (
+            booking_ok or any(name in self.BOOKING_TOOL_NAMES for name in tools_executed)
+        ):
+            text = self.TOOL_SUCCESS_CONFIRMATION_MESSAGE
+            booking_ok = True
         return LLMCompletionResult(
-            text=result.text,
+            text=text,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             total_tokens=result.total_tokens,
             model_name=result.model,
+            tools_executed=tools_executed,
+            booking_tools_succeeded=booking_ok,
         )
 
     async def _ollama_completion(

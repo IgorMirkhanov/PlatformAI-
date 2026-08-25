@@ -10,11 +10,14 @@ import {
   Briefcase,
   CreditCard,
   LayoutDashboard,
+  LayoutTemplate,
   Menu,
   MessageCircle,
   Settings,
   Sparkles,
   TestTube2,
+  Wallet,
+  KeyRound,
   Workflow,
   X,
   Zap,
@@ -68,6 +71,24 @@ const WORKSPACE_NAV = [
     isActive: (pathname: string) => pathname.startsWith("/dashboard/crm"),
   },
   {
+    href: "/dashboard/wallet",
+    label: "Кошелёк",
+    icon: Wallet,
+    isActive: (pathname: string) => pathname.startsWith("/dashboard/wallet"),
+  },
+  {
+    href: "/dashboard/byok-vault",
+    label: "BYOK",
+    icon: KeyRound,
+    isActive: (pathname: string) => pathname.startsWith("/dashboard/byok-vault"),
+  },
+  {
+    href: "/dashboard/playground",
+    label: "Playground",
+    icon: TestTube2,
+    isActive: (pathname: string) => pathname.startsWith("/dashboard/playground"),
+  },
+  {
     href: "/dashboard/knowledge",
     label: "База знаний",
     icon: BookOpen,
@@ -78,6 +99,12 @@ const WORKSPACE_NAV = [
     label: "Flows",
     icon: Workflow,
     isActive: (pathname: string) => pathname.startsWith("/dashboard/flows"),
+  },
+  {
+    href: "/dashboard/templates",
+    label: "Шаблоны",
+    icon: LayoutTemplate,
+    isActive: (pathname: string) => pathname.startsWith("/dashboard/templates"),
   },
   {
     href: "/flow-builder",
@@ -121,8 +148,17 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     if (item.href === "/dashboard/knowledge") {
       return hasPermission(userRole, "bot:knowledge");
     }
-    if (item.href === "/flow-builder" || item.href === "/dashboard/flows") {
+    if (item.href === "/flow-builder" || item.href === "/dashboard/flows" || item.href === "/dashboard/templates") {
       return canAccessFlowBuilder(userRole);
+    }
+    if (item.href === "/dashboard/wallet") {
+      return canAccessBilling(userRole);
+    }
+    if (item.href === "/dashboard/byok-vault") {
+      return canManageSettings(userRole);
+    }
+    if (item.href === "/dashboard/playground") {
+      return canAccessSandbox(userRole);
     }
     if (item.href === "/inbox") {
       return hasPermission(userRole, "inbox:read");
@@ -144,7 +180,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const activeProfile = workspaceBotId ? agentProfiles[workspaceBotId] : undefined;
 
   const agentList = useMemo(() => {
-    if (agents.length > 0) {
+    if ((agents ?? []).length > 0) {
       return agents;
     }
     return Object.values(agentProfiles).map((profile) => ({
@@ -161,7 +197,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const loadAgents = useCallback(async (): Promise<void> => {
     try {
       const stats = await fetchDashboardStats();
-      setAgents(stats.agents);
+      setAgents(Array.isArray(stats.agents) ? stats.agents : []);
     } catch {
       setAgents([]);
     }
@@ -450,6 +486,20 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/50 px-3 py-2.5">
           <p className="text-[10px] uppercase tracking-wider text-zinc-600">MP.AI Platform</p>
           <p className="mt-1 text-xs text-zinc-500">Единая консоль · KZT billing</p>
+          <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-zinc-500">
+            <Link href="/dashboard/help" className="hover:text-zinc-300">
+              Справка
+            </Link>
+            <Link href="/support" className="hover:text-zinc-300">
+              Поддержка
+            </Link>
+            <Link href="/privacy" className="hover:text-zinc-300">
+              Privacy
+            </Link>
+            <Link href="/terms" className="hover:text-zinc-300">
+              Terms
+            </Link>
+          </div>
         </div>
       </div>
     </div>
@@ -470,10 +520,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     pathname === "/register" ||
     pathname === "/forgot-password" ||
     pathname === "/reset-password" ||
+    pathname === "/privacy" ||
+    pathname === "/terms" ||
+    pathname === "/support" ||
+    pathname === "/help" ||
+    pathname.startsWith("/legal") ||
     pathname.startsWith("/login/") ||
     pathname.startsWith("/register/") ||
     pathname.startsWith("/forgot-password/") ||
-    pathname.startsWith("/reset-password/");
+    pathname.startsWith("/reset-password/") ||
+    pathname.startsWith("/integrations/hub/oauth-result");
 
   if (isAuthSurface) {
     return (

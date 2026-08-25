@@ -66,6 +66,10 @@ class CardTopupRequest(BaseModel):
     provider: str = Field(default="stripe", description="stripe or tiptop")
     use_saved_card: bool = Field(default=False, description="Charge saved card token / Stripe PM")
     tiptop_token: str | None = Field(default=None, description="TipTop saved card token")
+    widget_mode: bool = Field(
+        default=False,
+        description="TipTop Pay embedded widget (CloudPayments.js) — skip hosted redirect",
+    )
     success_url: str | None = None
     cancel_url: str | None = None
 
@@ -77,6 +81,44 @@ class CardTopupResponse(BaseModel):
     invoice_id: str | None = None
     message: str | None = None
     widget_params: dict | None = None
+
+
+class SavedPaymentMethodResponse(BaseModel):
+    provider: str = "tiptop"
+    has_saved_card: bool = False
+    card_last_four: str | None = None
+    card_type: str | None = None
+
+
+@router.get(
+    "/payment-methods/tiptop",
+    response_model=SavedPaymentMethodResponse,
+    summary="Saved TipTop Pay card for one-click top-up",
+)
+async def get_saved_tiptop_payment_method(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_permission(Permission.BILLING_READ)),
+) -> SavedPaymentMethodResponse:
+    org_id = getattr(current_user, "company_id", None)
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Active organization is required.",
+        )
+    from app.services.billing.payment_method_service import payment_method_service
+
+    row = await payment_method_service.get_default_token(
+        db,
+        uuid.UUID(str(org_id)),
+        provider="tiptop",
+    )
+    if row is None:
+        return SavedPaymentMethodResponse(has_saved_card=False)
+    return SavedPaymentMethodResponse(
+        has_saved_card=True,
+        card_last_four=row.card_last_four,
+        card_type=row.card_type,
+    )
 
 
 @router.get(
@@ -300,6 +342,7 @@ async def topup_by_card(
             success_url=success,
             cancel_url=cancel,
             tiptop_token=payload.tiptop_token,
+            widget_mode=payload.widget_mode,
         )
         return CardTopupResponse(**result)
     except (StripeNotConfigured, TipTopNotConfigured) as exc:
@@ -543,7 +586,13 @@ async def stripe_billing_webhook(
     try:
         return await stripe_service.handle_webhook(db, payload, stripe_signature)
     except StripeNotConfigured as exc:
+        from app.core.metrics import record_webhook_failure
+
+        record_webhook_failure("stripe")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception as exc:
+        from app.core.metrics import record_webhook_failure
+
+        record_webhook_failure("stripe")
         logger.exception("Billing.webhook_error | error={error}", error=str(exc))
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.core_models import Bot, Client
 from app.services.crm.save_lead_tool import save_lead_to_crm
+from app.services.integrations.google_calendar_service import check_calendar_availability as gcal_check_availability
+from app.services.bot_app_integrations_service import bot_app_integrations_service
 
 
 BUILTIN_SAVE_LEAD_TOOL: dict[str, Any] = {
@@ -43,6 +45,43 @@ BUILTIN_SAVE_LEAD_TOOL: dict[str, Any] = {
 }
 
 
+BUILTIN_CALENDAR_TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "check_calendar_availability",
+            "description": "Check Google Calendar free/busy slots for the agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_iso": {"type": "string"},
+                    "end_iso": {"type": "string"},
+                },
+                "required": ["start_iso", "end_iso"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_calendar_event",
+            "description": "Book a meeting in Google Calendar for the client.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "start_iso": {"type": "string"},
+                    "end_iso": {"type": "string"},
+                    "client_email": {"type": "string"},
+                    "client_phone": {"type": "string"},
+                },
+                "required": ["title", "start_iso", "end_iso"],
+            },
+        },
+    },
+]
+
+
 async def execute_tool_call(
     db: AsyncSession,
     *,
@@ -71,6 +110,32 @@ async def execute_tool_call(
             comment=args.get("comment"),
             channel=channel,
             channel_user_id=channel_user_id,
+        )
+
+    if tool_name == "check_calendar_availability":
+        from app.services.bot_app_integrations_service import _reveal_block
+
+        config = _reveal_block(
+            "google_calendar",
+            bot_app_integrations_service._read_integration(bot, "google_calendar"),
+        )
+        if not config.get("connected"):
+            return {"status": "error", "message": "Google Calendar is not connected."}
+        return await gcal_check_availability(
+            bot,
+            start_iso=str(args.get("start_iso") or ""),
+            end_iso=str(args.get("end_iso") or ""),
+            config=config,
+        )
+
+    if tool_name == "create_calendar_event":
+        return await bot_app_integrations_service.create_calendar_event(
+            bot,
+            summary=str(args.get("title") or "Meeting"),
+            start_iso=str(args.get("start_iso") or ""),
+            end_iso=str(args.get("end_iso") or ""),
+            attendee_email=args.get("client_email"),
+            client_phone=args.get("client_phone"),
         )
 
     logger.warning("ToolExecutor.unknown_tool | name={name}", name=tool_name)

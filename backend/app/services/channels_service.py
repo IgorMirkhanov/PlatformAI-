@@ -62,7 +62,13 @@ class ChannelsHubService:
         payload: ChannelConnectRequest,
     ) -> ChannelConnectResponse:
         bot = await self._require_bot(db, bot_id)
-        row = await self._get_or_create_row(db, bot_id, channel_type)
+        reference_hint = (payload.reference_id or "").strip() or None
+        row = await self._get_or_create_row(
+            db,
+            bot_id,
+            channel_type,
+            reference_id=reference_hint if channel_type == HubChannelType.WAZZUP else None,
+        )
 
         if channel_type == HubChannelType.TELEGRAM:
             return await self._connect_telegram(db, bot, row, payload, business=False)
@@ -76,8 +82,8 @@ class ChannelsHubService:
                 bot,
                 row,
                 payload,
-                token=payload.access_token or payload.token,
-                reference=payload.page_id or payload.reference_id,
+                token=payload.access_token or payload.api_key or payload.token,
+                reference=payload.reference_id or payload.page_id,
                 label="Instagram",
             )
         if channel_type == HubChannelType.WAZZUP:
@@ -90,7 +96,31 @@ class ChannelsHubService:
                 reference=payload.reference_id,
                 label="Wazzup",
             )
+        if channel_type == HubChannelType.GREENAPI:
+            return await self._connect_token_channel(
+                db,
+                bot,
+                row,
+                payload,
+                token=payload.api_key or payload.access_token or payload.token,
+                reference=payload.reference_id,
+                label="Green API",
+            )
         if channel_type == HubChannelType.WHATSAPP_QR:
+            green_token = (
+                payload.api_key or payload.access_token or payload.token or ""
+            ).strip()
+            green_ref = (payload.reference_id or "").strip()
+            if green_token and green_ref:
+                return await self._connect_token_channel(
+                    db,
+                    bot,
+                    row,
+                    payload,
+                    token=green_token,
+                    reference=green_ref,
+                    label="WhatsApp (Green API)",
+                )
             raise ValueError(
                 "WhatsApp QR connects via WebSocket pairing. Open the QR modal to scan."
             )
@@ -133,6 +163,28 @@ class ChannelsHubService:
             connected=False,
             message=f"Канал {channel_type.value} отключён.",
         )
+
+    async def set_channel_enabled(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        channel_type: HubChannelType,
+        enabled: bool,
+    ) -> dict[str, object]:
+        await self._require_bot(db, bot_id)
+        row = await self._get_or_create_row(db, bot_id, channel_type)
+        if row.status != HubChannelStatus.CONNECTED:
+            raise ValueError("Channel must be connected before toggling enabled state.")
+        meta = dict(row.meta_data or {})
+        meta["enabled"] = enabled
+        row.meta_data = meta
+        row.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        return {
+            "success": True,
+            "enabled": enabled,
+            "message": "Канал включён." if enabled else "Канал приостановлен.",
+        }
 
     async def mark_whatsapp_qr_pending(
         self,
@@ -513,14 +565,28 @@ class ChannelsHubService:
         row.reference_id = (reference or payload.reference_id or "").strip() or None
         row.status = HubChannelStatus.CONNECTED
         webhook_url: str | None = None
-        if row.channel_type == HubChannelType.INSTAGRAM:
-            webhook_url = f"{resolve_webhook_base_url()}/api/v1/webhooks/instagram/{bot.id}"
+        origin = resolve_webhook_base_url()
+        if row.channel_type in {
+            HubChannelType.GREENAPI,
+            HubChannelType.WHATSAPP_QR,
+            HubChannelType.INSTAGRAM,
+        }:
+            webhook_url = f"{origin}/api/v1/webhooks/greenapi"
         elif row.channel_type == HubChannelType.WAZZUP:
-            webhook_url = f"{resolve_webhook_base_url()}/api/v1/webhooks/wazzup/{bot.id}"
+            webhook_url = f"{origin}/api/v1/webhooks/wazzup"
 
         row.meta_data = {
             **(payload.meta_data or {}),
-            "provider": label.lower(),
+            "provider": (
+                "greenapi"
+                if row.channel_type
+                in {
+                    HubChannelType.GREENAPI,
+                    HubChannelType.WHATSAPP_QR,
+                    HubChannelType.INSTAGRAM,
+                }
+                else label.lower()
+            ),
             **({"webhook_url": webhook_url} if webhook_url else {}),
         }
         row.updated_at = datetime.now(timezone.utc)
@@ -699,23 +765,66 @@ class ChannelsHubService:
         db: AsyncSession,
         bot_id: uuid.UUID,
     ) -> dict[HubChannelType, BotChannel]:
-        result = await db.execute(select(BotChannel).where(BotChannel.bot_id == bot_id))
+        result = await db.execute(
+            select(BotChannel)
+            .where(BotChannel.bot_id == bot_id)
+            .order_by(BotChannel.updated_at.desc())
+        )
         rows = list(result.scalars().all())
-        return {row.channel_type: row for row in rows}
+        # One representative row per type for hub UI (prefer connected, then newest).
+        mapping: dict[HubChannelType, BotChannel] = {}
+        for row in rows:
+            existing = mapping.get(row.channel_type)
+            if existing is None:
+                mapping[row.channel_type] = row
+                continue
+            if (
+                existing.status != HubChannelStatus.CONNECTED
+                and row.status == HubChannelStatus.CONNECTED
+            ):
+                mapping[row.channel_type] = row
+        return mapping
 
     async def _get_or_create_row(
         self,
         db: AsyncSession,
         bot_id: uuid.UUID,
         channel_type: HubChannelType,
+        *,
+        reference_id: str | None = None,
     ) -> BotChannel:
+        ref = (reference_id or "").strip() or None
+        if channel_type == HubChannelType.WAZZUP and ref:
+            result = await db.execute(
+                select(BotChannel).where(
+                    BotChannel.bot_id == bot_id,
+                    BotChannel.channel_type == channel_type,
+                    BotChannel.reference_id == ref,
+                )
+            )
+            row = result.scalar_one_or_none()
+            if row is not None:
+                return row
+            row = BotChannel(
+                bot_id=bot_id,
+                channel_type=channel_type,
+                status=HubChannelStatus.DISCONNECTED,
+                reference_id=ref,
+                meta_data={},
+            )
+            db.add(row)
+            await db.flush()
+            return row
+
         result = await db.execute(
-            select(BotChannel).where(
+            select(BotChannel)
+            .where(
                 BotChannel.bot_id == bot_id,
                 BotChannel.channel_type == channel_type,
             )
+            .order_by(BotChannel.updated_at.desc())
         )
-        row = result.scalar_one_or_none()
+        row = result.scalars().first()
         if row is not None:
             return row
         row = BotChannel(

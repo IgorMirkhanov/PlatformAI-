@@ -190,6 +190,16 @@ async def run_app_integration_action(
             )
             return {"ok": True, "result": data}
 
+        if platform == "google_calendar" and action == "check_availability":
+            if not payload.start_iso or not payload.end_iso:
+                raise ValueError("start_iso and end_iso are required.")
+            data = await bot_app_integrations_service.check_calendar_availability(
+                bot,
+                start_iso=payload.start_iso,
+                end_iso=payload.end_iso,
+            )
+            return {"ok": True, "result": data}
+
         if platform == "kaspi_pay" and action == "create_invoice":
             if payload.amount_kzt is None:
                 raise ValueError("amount_kzt is required.")

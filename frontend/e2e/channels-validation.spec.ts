@@ -1,8 +1,10 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
+import { AUTH_STORAGE_STATE_PATH, seedDashboardSession } from "./helpers/session";
+
 /** Deterministic bot id — all hub APIs are route-mocked; no live DB required. */
 const E2E_BOT_ID = "11111111-2222-4333-8444-555555555555";
-const E2E_BEARER = "Bearer e2e-channels-hub-validation";
+const E2E_COMPANY_ID = "e2e-company-id";
 
 const TIMEOUT_ERROR_BODY = {
   success: false,
@@ -17,6 +19,19 @@ const HUB_CHANNEL_TYPES = [
   "waba",
   "whatsapp_qr",
 ] as const;
+
+const HUB_USER = {
+  id: "e2e-user-id",
+  email: "e2e-hub@example.com",
+  full_name: "E2E Hub Operator",
+  company_name: "E2E Workspace",
+  company_id: E2E_COMPANY_ID,
+  role: "OWNER" as const,
+  timezone: "Asia/Almaty",
+  is_superadmin: true,
+  is_active: true,
+  is_verified: true,
+};
 
 function disconnectedChannels(botId: string) {
   return {
@@ -37,7 +52,7 @@ function disconnectedChannels(botId: string) {
 function mockAgentProfile(botId: string) {
   return {
     id: botId,
-    user_id: "e2e-user-id",
+    user_id: HUB_USER.id,
     name: "E2E Hub Agent",
     platform_type: "TELEGRAM",
     is_active: true,
@@ -65,42 +80,6 @@ async function fulfillJson(route: Route, status: number, body: unknown): Promise
   });
 }
 
-async function injectAuthSession(page: Page): Promise<void> {
-  const currentUser = {
-    id: "e2e-user-id",
-    email: "e2e-hub@example.com",
-    full_name: "E2E Hub Operator",
-    company_name: "E2E Workspace",
-    company_id: "e2e-company-id",
-    role: "OWNER",
-    timezone: "Asia/Almaty",
-    created_at: new Date().toISOString(),
-    is_superadmin: true,
-  };
-
-  await page.addInitScript(
-    ({ token, user, botId }) => {
-      window.localStorage.setItem("auth_token", token);
-      window.localStorage.setItem("access_token", token);
-      window.localStorage.setItem("mpai_e2e_bearer", token);
-
-      const persisted = {
-        state: {
-          connection: null,
-          activeBotId: botId,
-          activeCompanyId: user.company_id,
-          currentUser: user,
-          avatarByBotId: {},
-          agentProfiles: {},
-        },
-        version: 0,
-      };
-      window.localStorage.setItem("ai-bot-platform-store", JSON.stringify(persisted));
-    },
-    { token: E2E_BEARER, user: currentUser, botId: E2E_BOT_ID },
-  );
-}
-
 /**
  * Stub shell + hub APIs so validation UI can be exercised without a live backend.
  * Returns a mutable flag set when a Telegram connect POST is attempted.
@@ -108,22 +87,34 @@ async function injectAuthSession(page: Page): Promise<void> {
 async function installHubMocks(page: Page): Promise<{ telegramConnectAttempted: { value: boolean } }> {
   const telegramConnectAttempted = { value: false };
 
+  await page.route("**/api/v1/**", async (route) => {
+    if (route.request().method() === "GET") {
+      await fulfillJson(route, 200, {});
+      return;
+    }
+    await route.continue();
+  });
+
   await page.route("**/api/v1/team/me", async (route) => {
     if (route.request().method() === "GET") {
       await fulfillJson(route, 200, {
-        id: "e2e-user-id",
-        email: "e2e-hub@example.com",
-        full_name: "E2E Hub Operator",
-        company_name: "E2E Workspace",
-        company_id: "e2e-company-id",
-        role: "OWNER",
-        timezone: "Asia/Almaty",
+        ...HUB_USER,
         created_at: new Date().toISOString(),
-        is_superadmin: true,
       });
       return;
     }
     await route.continue();
+  });
+
+  await page.route("**/api/v1/auth/me", async (route) => {
+    await fulfillJson(route, 200, { ...HUB_USER, created_at: new Date().toISOString() });
+  });
+
+  await page.route("**/api/v1/team/organizations**", async (route) => {
+    await fulfillJson(route, 200, {
+      organizations: [{ id: E2E_COMPANY_ID, name: "E2E Workspace", is_active: true }],
+      active_company_id: E2E_COMPANY_ID,
+    });
   });
 
   await page.route("**/api/v1/billing/status**", async (route) => {
@@ -136,11 +127,20 @@ async function installHubMocks(page: Page): Promise<{ telegramConnectAttempted: 
   });
 
   await page.route("**/api/v1/billing/notifications**", async (route) => {
-    await fulfillJson(route, 200, { notifications: [], total: 0 });
+    await fulfillJson(route, 200, { notifications: [], total: 0, unread_critical: 0 });
   });
 
   await page.route("**/api/v1/dashboard/stats**", async (route) => {
     await fulfillJson(route, 200, { agents: [], total_agents: 0 });
+  });
+
+  await page.route("**/api/v1/wallet**", async (route) => {
+    await fulfillJson(route, 200, {
+      organization_id: E2E_COMPANY_ID,
+      balance_tokens: 10_000,
+      status: "active",
+      transactions: [],
+    });
   });
 
   await page.route(`**/api/v1/bots/${E2E_BOT_ID}/profile`, async (route) => {
@@ -153,6 +153,10 @@ async function installHubMocks(page: Page): Promise<{ telegramConnectAttempted: 
       return;
     }
     await route.continue();
+  });
+
+  await page.route(`**/api/v1/bots/${E2E_BOT_ID}/channel-integrations`, async (route) => {
+    await fulfillJson(route, 200, { bot_id: E2E_BOT_ID, channels: [] });
   });
 
   await page.route(`**/api/v1/bots/${E2E_BOT_ID}/channels/telegram/connect`, async (route) => {
@@ -176,13 +180,49 @@ async function openHubPanel(page: Page, slug: string): Promise<void> {
   await page.goto(`/dashboard/channels-agent/${E2E_BOT_ID}/${slug}`, {
     waitUntil: "domcontentloaded",
   });
-  await expect(page.getByRole("heading", { name: /E2E Hub Agent|Telegram|WABA/i }).first()).toBeVisible({
+  await expect(page).not.toHaveURL(/\/login/);
+  await expect(
+    page.getByRole("heading", { name: /E2E Hub Agent|Telegram|WABA/i }).first(),
+  ).toBeVisible({
     timeout: 30_000,
   });
 }
 
+async function openChannelsGrid(page: Page): Promise<void> {
+  await page.goto(`/dashboard/channels?botId=${E2E_BOT_ID}`, { waitUntil: "domcontentloaded" });
+  await expect(page).not.toHaveURL(/\/login/);
+  await expect(page.getByRole("heading", { name: "Каналы связи" })).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+function channelCard(page: Page, label: string) {
+  return page.locator("article").filter({ has: page.getByRole("heading", { name: label }) });
+}
+
+async function trackConnectAndPatch(page: Page, channelType: string) {
+  const hits = { connect: 0, patch: 0 };
+  await page.route(
+    `**/api/v1/bots/${E2E_BOT_ID}/channels/${channelType}/connect`,
+    async (route) => {
+      hits.connect += 1;
+      await fulfillJson(route, 400, { detail: "should not be called" });
+    },
+  );
+  await page.route(`**/api/v1/bots/${E2E_BOT_ID}/channels/${channelType}`, async (route) => {
+    if (route.request().method() === "PATCH") {
+      hits.patch += 1;
+      await fulfillJson(route, 400, {
+        detail: "Channel must be connected before toggling enabled state.",
+      });
+      return;
+    }
+    await route.continue();
+  });
+  return hits;
+}
+
 function crimsonBanner(page: Page, message: string | RegExp) {
-  // Exclude Next.js route announcer (`#__next-route-announcer__`).
   return page.getByRole("alert").filter({ hasText: message });
 }
 
@@ -201,10 +241,7 @@ async function expectCrimsonBanner(page: Page, message: string | RegExp): Promis
     };
   });
 
-  // Tailwind arbitrary crimson tokens must be present on the banner element.
   expect(styles.className).toMatch(/#DC143C/);
-
-  // Parsed RGB of #DC143C is rgb(220, 20, 60) — border uses /45 opacity.
   expect(styles.borderBottomColor).toMatch(/220,\s*20,\s*60/);
 }
 
@@ -267,8 +304,13 @@ function inspectHubScrollLayout(): {
 }
 
 test.describe("Omnichannel Hub validation & layout", () => {
+  test.use({ storageState: AUTH_STORAGE_STATE_PATH });
+
   test.beforeEach(async ({ page }) => {
-    await injectAuthSession(page);
+    await seedDashboardSession(page, {
+      botId: E2E_BOT_ID,
+      user: HUB_USER,
+    });
   });
 
   test("Empty Telegram token: blocks request, no pending, crimson banner", async ({ page }) => {
@@ -286,7 +328,6 @@ test.describe("Omnichannel Hub validation & layout", () => {
 
     await connectButton.click();
 
-    // Frontend must short-circuit before any connect POST.
     await expect.poll(() => telegramConnectAttempted.value).toBe(false);
 
     await expect(connectButton).toHaveAttribute("aria-busy", "false");
@@ -310,24 +351,19 @@ test.describe("Omnichannel Hub validation & layout", () => {
 
     await page.getByRole("textbox", { name: "Phone Number ID" }).fill("123456789012345");
     await page.getByRole("textbox", { name: "Business Account ID" }).fill("987654321098765");
-    // Passes FE length/format checks; backend is mocked as timed out.
-    await page
-      .getByRole("textbox", { name: "Access Token" })
-      .fill("mock-invalid-waba-token-xxxxxxxx");
+    await page.getByLabel("Access Token").fill("mock-invalid-waba-token-xxxxxxxx");
 
     const connectButton = page.getByRole("button", { name: /^Подключить$/ });
     await connectButton.click();
 
     await expect.poll(() => connectHits).toBe(1);
 
-    // Loading state must settle; UI must remain interactive.
     await expect(connectButton).toContainText("Подключить", { timeout: 15_000 });
     await expect(connectButton).toBeEnabled();
     await expect(connectButton).toHaveAttribute("aria-busy", "false");
 
     await expectCrimsonBanner(page, TIMEOUT_ERROR_BODY.error);
 
-    // Smoke: panel chrome still mounted (no crash / blank page).
     await expect(page.getByRole("heading", { name: "WABA" })).toBeVisible();
     await expect(page.getByText("Официальный WhatsApp Business API")).toBeVisible();
   });
@@ -340,7 +376,6 @@ test.describe("Omnichannel Hub validation & layout", () => {
     await page.setViewportSize({ width: 768, height: 700 });
     await openHubPanel(page, "telegram");
 
-    // Force content taller than the viewport so at least one scroller activates.
     await page.evaluate(() => {
       const section = document.querySelector("section.min-h-0");
       if (!section) return;
@@ -365,5 +400,73 @@ test.describe("Omnichannel Hub validation & layout", () => {
       0,
     );
     expect(layout.hubFitsViewport).toBe(true);
+  });
+
+  test("Empty Wazzup credentials: blocks connect POST", async ({ page }) => {
+    await installHubMocks(page);
+
+    let connectHits = 0;
+    await page.route(`**/api/v1/bots/${E2E_BOT_ID}/channels/wazzup/connect`, async (route) => {
+      connectHits += 1;
+      await fulfillJson(route, 200, {
+        success: true,
+        bot_id: E2E_BOT_ID,
+        channel_type: "wazzup",
+        status: "connected",
+        connected: true,
+        reference_id: null,
+        webhook_url: null,
+        message: "should not be called",
+      });
+    });
+
+    await openHubPanel(page, "wazzup");
+    await page.getByRole("button", { name: /^Подключить$/ }).click();
+
+    await expect.poll(() => connectHits).toBe(0);
+    await expectCrimsonBanner(page, /API-ключ|Channel ID/i);
+  });
+
+  for (const channel of [
+    { label: "Wazzup", type: "wazzup", field: "Channel ID" },
+    { label: "Instagram", type: "instagram", field: "Instance ID" },
+    { label: "WhatsApp", type: "whatsapp_qr", field: "Instance ID" },
+  ] as const) {
+    test(`Channels grid: ${channel.label} Connect opens keys modal without PATCH`, async ({
+      page,
+    }) => {
+      await installHubMocks(page);
+      const hits = await trackConnectAndPatch(page, channel.type);
+
+      await openChannelsGrid(page);
+
+      const card = channelCard(page, channel.label);
+      await card.getByRole("button", { name: "Подключить" }).click();
+
+      const modal = page.locator(".moonai-modal");
+      await expect(modal.getByRole("heading", { name: channel.label })).toBeVisible();
+      await expect(modal.getByRole("textbox", { name: channel.field })).toBeVisible();
+
+      await modal.getByRole("button", { name: "Сохранить и подключить" }).click();
+
+      await expect.poll(() => hits.connect).toBe(0);
+      await expect.poll(() => hits.patch).toBe(0);
+      await expect(modal.getByRole("alert")).toBeVisible();
+    });
+  }
+
+  test("Channels grid: toggle on disconnected channel opens modal, no PATCH", async ({ page }) => {
+    await installHubMocks(page);
+    const hits = await trackConnectAndPatch(page, "wazzup");
+
+    await openChannelsGrid(page);
+
+    const card = channelCard(page, "Wazzup");
+    await card.getByRole("switch").click();
+
+    const modal = page.locator(".moonai-modal");
+    await expect(modal.getByRole("heading", { name: "Wazzup" })).toBeVisible();
+    await expect.poll(() => hits.patch).toBe(0);
+    await expect.poll(() => hits.connect).toBe(0);
   });
 });

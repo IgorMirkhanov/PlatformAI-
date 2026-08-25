@@ -9,6 +9,7 @@ from loguru import logger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.db_integrity import is_unique_violation
 from app.models.billing.credit_transaction import CreditTransaction
 from app.models.billing.organization_wallet import OrganizationWallet
@@ -87,6 +88,10 @@ class WalletService:
         wallet = OrganizationWallet(
             organization_id=organization_id,
             balance=int(initial_balance),
+            balance_tokens=int(getattr(settings, "WALLET_LAUNCH_GRACE_TOKENS", 0) or 0)
+            if initial_balance == 0
+            else max(int(initial_balance), 0),
+            status="active",
         )
         return await repo.add_wallet(wallet)
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from celery.exceptions import MaxRetriesExceededError
@@ -8,7 +7,7 @@ from loguru import logger
 
 from app.config import settings
 from app.core.celery_app import celery_app
-from app.core.database import async_session_factory
+from app.core.database import async_session_factory, run_celery_async
 from app.models.core_models import ChatMessage, Client, MessageSender
 from app.services.chat_service import broadcast_chat_message
 from app.services.messenger_errors import MessengerAPIError
@@ -133,7 +132,7 @@ def process_inbound_message_task(
     )
 
     try:
-        result = asyncio.run(_execute_inbound_message(bot_id, platform_type, payload))
+        result = run_celery_async(_execute_inbound_message(bot_id, platform_type, payload))
         logger.info(
             "CeleryWorker.inbound_task_complete | task_id={task_id} bot_id={bot_id} platform={platform}",
             task_id=self.request.id,
@@ -163,7 +162,7 @@ def process_inbound_message_task(
             countdown = settings.CELERY_INBOUND_RETRY_BACKOFF * (2 ** self.request.retries)
             raise self.retry(exc=exc, countdown=countdown)
         except MaxRetriesExceededError:
-            asyncio.run(
+            run_celery_async(
                 _notify_operator_dead_letter(
                     bot_id=bot_id,
                     platform_type=platform_type,
@@ -185,7 +184,7 @@ def process_inbound_message_task(
             countdown = settings.CELERY_INBOUND_RETRY_BACKOFF * (2 ** self.request.retries)
             raise self.retry(exc=exc, countdown=countdown)
         except MaxRetriesExceededError:
-            asyncio.run(
+            run_celery_async(
                 _notify_operator_dead_letter(
                     bot_id=bot_id,
                     platform_type=platform_type,

@@ -136,6 +136,12 @@ async def stripe_webhook_alias(
     try:
         return await stripe_service.handle_webhook(db, payload, stripe_signature)
     except StripeNotConfigured as exc:
+        from app.core.metrics import record_webhook_failure
+
+        record_webhook_failure("stripe")
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except Exception as exc:
+        from app.core.metrics import record_webhook_failure
+
+        record_webhook_failure("stripe")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

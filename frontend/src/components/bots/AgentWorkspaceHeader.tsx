@@ -116,15 +116,6 @@ export function AgentWorkspaceHeader({ botId, profile }: AgentWorkspaceHeaderPro
 
         <div className="flex flex-col items-end gap-3">
           <OmnichannelStatusStrip statuses={channelMap} size="md" />
-          {activeTab === "settings" && (
-            <Link
-              href={getAgentTestChatPath(botId)}
-              className="inline-flex items-center gap-2 rounded-xl border border-zinc-700/80 bg-zinc-900/60 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-violet-500/40 hover:bg-zinc-800"
-            >
-              <MessageSquare className="h-4 w-4 text-violet-400" />
-              Тестовый чат
-            </Link>
-          )}
         </div>
       </div>
 
@@ -157,6 +148,24 @@ export function AgentWorkspaceHeader({ botId, profile }: AgentWorkspaceHeaderPro
               </Link>
             );
           })}
+          <Link
+            href={getAgentTestChatPath(botId)}
+            className={cn(
+              "group relative inline-flex items-center gap-2 px-3 py-3 text-sm font-medium transition",
+              isTestChat ? "text-violet-300" : "text-zinc-500 hover:text-zinc-200",
+            )}
+          >
+            <MessageSquare
+              className={cn(
+                "h-4 w-4 shrink-0",
+                isTestChat ? "text-violet-400" : "text-zinc-600 group-hover:text-zinc-400",
+              )}
+            />
+            Тестовый чат
+            {isTestChat && (
+              <span className="absolute inset-x-1 bottom-0 h-0.5 rounded-full bg-violet-500" />
+            )}
+          </Link>
         </div>
       </div>
     </header>

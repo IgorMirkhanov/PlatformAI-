@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -30,34 +30,85 @@ def _to_asyncpg_url(url: str) -> str:
     return url
 
 
+def _prefer_pypi_alembic() -> None:
+    """Stop `backend/alembic/` (revision scripts) from shadowing the PyPI package."""
+    for entry in list(sys.path):
+        if "site-packages" in entry.replace("\\", "/").lower():
+            sys.path.insert(0, entry)
+    mod = sys.modules.get("alembic")
+    if mod is not None and getattr(mod, "__file__", None) is None:
+        for name in list(sys.modules):
+            if name == "alembic" or name.startswith("alembic."):
+                del sys.modules[name]
+
+
+def _create_orm_schema(database_url: str) -> None:
+    """Materialize current models. Revision 017+ is additive on an existing SQL bootstrap."""
+    from app.core.database import Base
+    import app.models  # noqa: F401
+
+    async def _run() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
 def _run_alembic_upgrade(database_url: str) -> None:
+    """
+    Schema for real-DB tests: ORM ``create_all`` then Alembic stamp + upgrade.
+
+    Matches Docker entrypoint: empty Postgres has no ``users`` table, and
+    ``017_tenancy_auth`` only ALTERs existing tables.
+
+    Local pitfalls:
+
+    1. Microsoft Store stub ``WindowsApps\\PythonSoftwareFoundation.*`` — use
+       ``backend/.venv`` or the CI/Docker image.
+    2. Folder ``backend/alembic/`` shadows the PyPI package; prefer site-packages.
+    """
+    _create_orm_schema(database_url)
+    _prefer_pypi_alembic()
     backend_dir = Path(__file__).resolve().parents[1]
-    script = f"""
-import os
-import sys
-from pathlib import Path
+    try:
+        from alembic.config import Config
+        from alembic import command
+    except ImportError as exc:  # pragma: no cover - environment-dependent
+        message = (
+            "alembic is not installed in this interpreter. "
+            "Use backend/.venv or the CI/Docker image, not Windows Store Python "
+            f"(WindowsApps\\PythonSoftwareFoundation.*). sys.executable={sys.executable!r}. {exc}"
+        )
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
 
-backend = Path(r"{backend_dir}")
-from alembic.config import Config
-from alembic import command
+    import app.core.config as config_mod
 
-sys.path.insert(0, str(backend))
-os.chdir(str(backend))
-
-from app.core.config import settings
-
-settings.DATABASE_URL = os.environ["DATABASE_URL"]
-cfg = Config(str(backend / "alembic.ini"))
-command.upgrade(cfg, "head")
-"""
-    env = dict(os.environ)
-    env["DATABASE_URL"] = database_url
-    subprocess.run(
-        [sys.executable, "-c", script],
-        check=True,
-        cwd=str(Path(__file__).resolve().parents[2]),
-        env=env,
-    )
+    previous_url = config_mod.settings.DATABASE_URL
+    previous_cwd = os.getcwd()
+    previous_env = os.environ.get("DATABASE_URL")
+    if str(backend_dir) not in sys.path:
+        sys.path.insert(0, str(backend_dir))
+    try:
+        os.chdir(backend_dir)
+        os.environ["DATABASE_URL"] = database_url
+        config_mod.settings.DATABASE_URL = database_url
+        cfg = Config(str(backend_dir / "alembic.ini"))
+        cfg.set_main_option("sqlalchemy.url", database_url)
+        command.stamp(cfg, "head")
+        command.upgrade(cfg, "head")
+    finally:
+        config_mod.settings.DATABASE_URL = previous_url
+        if previous_env is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_env
+        os.chdir(previous_cwd)
 
 
 @pytest.fixture(scope="session")
@@ -71,7 +122,12 @@ def real_database_url() -> str:
         container = PostgresContainer("postgres:16-alpine")
         container.start()
     except Exception as exc:  # pragma: no cover - environment-dependent
-        pytest.skip(f"Docker / testcontainers unavailable: {exc}")
+        message = f"Docker / testcontainers unavailable: {exc}"
+        if os.environ.get("CI"):
+            pytest.fail(
+                message + " Wallet isolation / deal / OAuth race tests must run in CI, not skip."
+            )
+        pytest.skip(message)
 
     try:
         url = _to_asyncpg_url(container.get_connection_url())
@@ -81,14 +137,15 @@ def real_database_url() -> str:
         container.stop()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def real_session_factory(
     real_database_url: str,
 ) -> async_sessionmaker[AsyncSession]:
+    """Per-test engine so pytest-asyncio function loop matches the connection pool."""
     engine = create_async_engine(
         real_database_url,
-        pool_size=10,
-        max_overflow=5,
+        pool_size=40,
+        max_overflow=40,
         pool_pre_ping=True,
     )
     factory = async_sessionmaker(

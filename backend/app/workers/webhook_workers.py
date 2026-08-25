@@ -34,7 +34,6 @@ from app.services.media_dispatch_service import deliver_attachments_safely
 from app.services.messenger_errors import MessengerAPIError
 from app.services.telegram_service import telegram_service
 from app.services.wazzup_service import wazzup_service
-from app.services.webhook_service import process_inbound_message
 from app.services.whatsapp_qr_service import whatsapp_qr_service
 from app.services.whatsapp_service import whatsapp_service
 
@@ -107,8 +106,10 @@ async def execute_flow_for_inbound(
 
     # Shared orchestration instantiates FlowExecutor(compiled_graph) and walks
     # LLM / Condition / CRM nodes until a messenger reply is ready.
-    flow_result = await process_inbound_message(
-        db=db,
+    from app.services.inbound.inbound_service import process_inbound_with_diagnostics
+
+    flow_result = await process_inbound_with_diagnostics(
+        db,
         bot_id=bot_id,
         external_id=external_id,
         username=username,
@@ -170,6 +171,12 @@ async def process_inbound_message_worker(
             }
         except Exception:
             await db.rollback()
+            logger.error(
+                "WebhookWorker.inbound_unhandled | bot_id={bot_id} platform={platform}\n{traceback}",
+                bot_id=bot_id or "unresolved",
+                platform=platform,
+                traceback=__import__("traceback").format_exc(),
+            )
             raise
 
 
@@ -300,10 +307,18 @@ async def _dispatch_platform(
         )
 
     if platform == "WAZZUP":
+        bot_channel_raw = payload.get("bot_channel_id")
+        bot_channel_id = None
+        if bot_channel_raw:
+            try:
+                bot_channel_id = uuid.UUID(str(bot_channel_raw))
+            except ValueError:
+                bot_channel_id = None
         return await wazzup_service.process_queued_webhook(
             db=db,
             bot_id=uuid.UUID(str(payload.get("bot_id") or bot_id)),
             webhook_body=payload.get("body") or {},
+            bot_channel_id=bot_channel_id,
         )
 
     if platform == "WEB_WIDGET":

@@ -81,8 +81,8 @@ function writeIdSet(storageKey: string, ids: Set<string>): void {
   window.sessionStorage.setItem(storageKey, JSON.stringify(Array.from(ids)));
 }
 
-function mapDiagnostics(logs: DiagnosticLogRead[]): UnifiedAlert[] {
-  return logs.map((log) => ({
+function mapDiagnostics(logs: DiagnosticLogRead[] | null | undefined): UnifiedAlert[] {
+  return (logs ?? []).map((log) => ({
     kind: "diagnostic" as const,
     id: `diag:${log.id}`,
     title: log.bot_name || "Bot",
@@ -94,8 +94,8 @@ function mapDiagnostics(logs: DiagnosticLogRead[]): UnifiedAlert[] {
   }));
 }
 
-function mapNotifications(items: SystemNotificationRead[]): UnifiedAlert[] {
-  return items.map((item) => ({
+function mapNotifications(items: SystemNotificationRead[] | null | undefined): UnifiedAlert[] {
+  return (items ?? []).map((item) => ({
     kind: "notification" as const,
     id: `notif:${item.id}`,
     title: item.title,
@@ -138,8 +138,8 @@ export function HeaderAlertNotificationBell() {
           unread_critical: 0,
         })),
       ]);
-      setLogs(diagnostics.logs);
-      setNotifications(billingAlerts.notifications);
+      setLogs(diagnostics.logs ?? []);
+      setNotifications(billingAlerts.notifications ?? []);
     } finally {
       setLoading(false);
     }

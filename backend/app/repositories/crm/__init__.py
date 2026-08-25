@@ -17,7 +17,7 @@ from app.repositories.crm.custom_field_repository import (
     CustomFieldRepository,
     custom_field_repository,
 )
-from app.repositories.crm.deal_repository import DealRepository, deal_repository
+from app.repositories.crm.deal_repository import DealRepository, DealUpsertResult, compute_dedup_key, deal_repository
 from app.repositories.crm.note_repository import NoteRepository, note_repository
 from app.repositories.crm.pipeline_repository import PipelineRepository, pipeline_repository
 from app.repositories.crm.setting_repository import SettingRepository, setting_repository
@@ -34,6 +34,7 @@ __all__ = [
     "ContactRepository",
     "CustomFieldRepository",
     "DealRepository",
+    "DealUpsertResult",
     "NoteRepository",
     "PipelineRepository",
     "SettingRepository",
@@ -47,6 +48,7 @@ __all__ = [
     "contact_repository",
     "custom_field_repository",
     "deal_repository",
+    "compute_dedup_key",
     "get_active_api_key_by_hash",
     "note_repository",
     "pipeline_repository",

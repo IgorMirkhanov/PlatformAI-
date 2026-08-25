@@ -30,18 +30,61 @@ async def deliver_outbound(
     if not reply_text or not reply_text.strip():
         return
 
+    from app.services.channel_sender import ChannelSenderFactory
+
+    hub_type = str((payload or {}).get("hub_channel_type") or normalized.metadata.get("hub_channel_type") or "")
+    parts = ChannelSenderFactory.format_outbound(
+        reply_text,
+        channel=normalized.channel,
+        hub_type=hub_type or str(normalized.metadata.get("provider") or ""),
+    )
+    if not parts:
+        return
+
     channel = normalized.channel
     bot_id = normalized.bot_id
     user_id = normalized.channel_user_id
     payload = payload or {}
 
     logger.info(
-        "OutboundRouter.deliver | channel={channel} bot_id={bot_id} user_id={user_id} len={length}",
+        "OutboundRouter.deliver | channel={channel} bot_id={bot_id} user_id={user_id} len={length} parts={parts}",
         channel=channel.value,
         bot_id=bot_id,
         user_id=user_id[:32],
         length=len(reply_text),
+        parts=len(parts),
     )
+
+    for index, part in enumerate(parts):
+        part_buttons = buttons if index == 0 else None
+        part_media = media_attachments if index == 0 else None
+        await _deliver_one(
+            db,
+            normalized=normalized,
+            reply_text=part,
+            payload=payload,
+            media_attachments=part_media,
+            buttons=part_buttons,
+            client_id=client_id,
+            telegram_parse_mode="MarkdownV2" if channel == InboundChannel.TELEGRAM else None,
+        )
+
+
+async def _deliver_one(
+    db: AsyncSession,
+    *,
+    normalized: NormalizedInboundMessage,
+    reply_text: str,
+    payload: dict[str, Any],
+    media_attachments: list[MediaAttachment] | list[Any] | None,
+    buttons: list[Any] | None,
+    client_id: uuid.UUID | None,
+    telegram_parse_mode: str | None,
+) -> None:
+    channel = normalized.channel
+    bot_id = normalized.bot_id
+    user_id = normalized.channel_user_id
+    payload = payload or {}
 
     if channel == InboundChannel.TELEGRAM:
         await _deliver_telegram(
@@ -53,6 +96,7 @@ async def deliver_outbound(
             media_attachments=media_attachments,
             buttons=buttons,
             client_id=client_id,
+            parse_mode=telegram_parse_mode,
         )
         return
 
@@ -81,7 +125,19 @@ async def deliver_outbound(
         return
 
     if channel == InboundChannel.WEB:
+        hub_type = str(normalized.metadata.get("hub_channel_type") or "web_widget").lower()
+        if hub_type == "api":
+            await _deliver_api_callback(bot_id=bot_id, session_id=user_id, reply=reply_text, payload=payload)
+            return
+        if hub_type == "calls":
+            await _deliver_calls_reply(bot_id=bot_id, session_id=user_id, reply=reply_text)
+            return
         await _deliver_web_widget(bot_id=bot_id, session_id=user_id, reply=reply_text)
+        return
+
+    hub_type = str(normalized.metadata.get("hub_channel_type") or "").lower()
+    if hub_type == "instagram":
+        await _deliver_instagram(db, bot_id=bot_id, user_id=user_id, reply=reply_text, payload=payload)
         return
 
     logger.warning(
@@ -101,6 +157,7 @@ async def _deliver_telegram(
     media_attachments: list[Any] | None,
     buttons: list[Any] | None,
     client_id: uuid.UUID | None,
+    parse_mode: str | None = None,
 ) -> None:
     from app.models.core_models import Bot
     from app.services.telegram_service import telegram_service
@@ -122,6 +179,7 @@ async def _deliver_telegram(
         bot_id=bot_id,
         client_id=client_id,
         db=db,
+        parse_mode=parse_mode,
     )
     if media_attachments:
         from app.schemas.media_schemas import MediaAttachment as MA
@@ -188,28 +246,30 @@ async def _deliver_wazzup(
     payload: dict[str, Any],
     normalized: NormalizedInboundMessage | None = None,
 ) -> None:
-    from app.core.security import decrypt_credential
     from app.services.wazzup_service import wazzup_service
 
-    channel = await wazzup_service.get_channel(db, bot_id)
-    if channel is None:
-        return
-    api_key = decrypt_credential(channel.encrypted_token) if channel.encrypted_token else ""
-    if not api_key:
-        return
     body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
     meta = normalized.metadata if normalized is not None else {}
+    inbound_payload = payload.get("inbound_payload") if isinstance(payload.get("inbound_payload"), dict) else {}
     channel_id = str(
         meta.get("channel_id")
+        or inbound_payload.get("channel_id")
+        or payload.get("channel_id")
         or body.get("channelId")
         or body.get("channel_id")
-        or channel.reference_id
         or ""
-    )
+    ).strip()
+
+    channel = await wazzup_service.get_channel(db, bot_id, channel_id=channel_id or None)
+    if channel is None:
+        return
+    api_key = wazzup_service.resolve_api_key(channel)
+    if not api_key:
+        return
     await wazzup_service.send_text_message(
         api_key=api_key,
         chat_id=chat_id,
-        channel_id=channel_id,
+        channel_id=channel_id or str(channel.reference_id or ""),
         text=reply,
     )
 
@@ -227,6 +287,64 @@ async def _deliver_web_widget(*, bot_id: uuid.UUID, session_id: str, reply: str)
     key = f"widget:reply:{bot_id}:{session_id}"
     client.lpush(key, reply)
     client.expire(key, 3600)
+
+
+async def _deliver_api_callback(
+    *,
+    bot_id: uuid.UUID,
+    session_id: str,
+    reply: str,
+    payload: dict[str, Any],
+) -> None:
+    import httpx
+
+    callback_url = str(payload.get("callback_url") or payload.get("reply_url") or "").strip()
+    if not callback_url:
+        logger.warning("OutboundRouter.api_no_callback | bot_id={bot_id}", bot_id=bot_id)
+        return
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        await client.post(callback_url, json={"bot_id": str(bot_id), "user_id": session_id, "text": reply})
+
+
+async def _deliver_calls_reply(*, bot_id: uuid.UUID, session_id: str, reply: str) -> None:
+    from app.core.redis_client import get_redis_client
+
+    client = get_redis_client()
+    key = f"calls:reply:{bot_id}:{session_id}"
+    client.lpush(key, reply)
+    client.expire(key, 3600)
+
+
+async def _deliver_instagram(
+    db: AsyncSession,
+    *,
+    bot_id: uuid.UUID,
+    user_id: str,
+    reply: str,
+    payload: dict[str, Any],
+) -> None:
+    from app.core.security import decrypt_credential
+    from app.models.channels import BotChannel, HubChannelStatus, HubChannelType
+    from app.services.instagram_service import instagram_service
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(BotChannel).where(
+            BotChannel.bot_id == bot_id,
+            BotChannel.channel_type == HubChannelType.INSTAGRAM,
+            BotChannel.status == HubChannelStatus.CONNECTED,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row is None or not row.encrypted_token:
+        logger.warning("OutboundRouter.instagram_no_credentials | bot_id={bot_id}", bot_id=bot_id)
+        return
+    token = decrypt_credential(row.encrypted_token)
+    await instagram_service.send_text_message(
+        access_token=token,
+        recipient_id=user_id,
+        text=reply,
+    )
 
 
 async def resolve_client_outbound(
@@ -321,19 +439,35 @@ async def resolve_client_outbound(
             raw_payload={"operator_outbound": True},
         )
         if provider == "wazzup":
-            wazzup_row = next(
-                (row for row in connected if row.channel_type == HubChannelType.WAZZUP),
-                None,
-            )
-            if wazzup_row is None:
-                channel_result = await db.execute(
-                    select(BotChannel).where(
-                        BotChannel.bot_id == bot.id,
-                        BotChannel.channel_type == HubChannelType.WAZZUP,
-                        BotChannel.status == HubChannelStatus.CONNECTED,
-                    )
+            preferred_channel_id = str(
+                nested_payload.get("channel_id")
+                or latest_payload.get("channel_id")
+                or ""
+            ).strip()
+            wazzup_row = None
+            if preferred_channel_id:
+                wazzup_row = next(
+                    (
+                        row
+                        for row in connected
+                        if row.channel_type == HubChannelType.WAZZUP
+                        and str(row.reference_id or "") == preferred_channel_id
+                    ),
+                    None,
                 )
-                wazzup_row = channel_result.scalar_one_or_none()
+            if wazzup_row is None:
+                wazzup_row = next(
+                    (row for row in connected if row.channel_type == HubChannelType.WAZZUP),
+                    None,
+                )
+            if wazzup_row is None:
+                from app.services.wazzup_service import wazzup_service
+
+                wazzup_row = await wazzup_service.get_channel(
+                    db,
+                    bot.id,
+                    channel_id=preferred_channel_id or None,
+                )
             if wazzup_row is not None:
                 normalized.metadata["channel_id"] = str(wazzup_row.reference_id or "")
         return normalized

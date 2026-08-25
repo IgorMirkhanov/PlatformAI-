@@ -346,7 +346,7 @@ class ResilientLLMGateway:
             )
         )
         logger.warning(
-            "LLM.fallback_triggered | Primary failed: {error} -> Switching to {secondary}",
+            "[LLM Fallback] Primary model failed with {error}, switching to fallback model {secondary}",
             error=f"{type(error).__name__}: {error}",
             secondary=secondary,
         )

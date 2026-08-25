@@ -439,3 +439,12 @@ class WalletService:
 
 
 wallet_service = WalletService()
+
+
+async def check_wallet_before_generation(org_id, db=None):
+    """Spec §1.4 facade — token wallet, non-locking."""
+    from app.services.token_wallet_service import token_wallet_service
+
+    if db is None:
+        raise TypeError("check_wallet_before_generation requires an AsyncSession")
+    return await token_wallet_service.check_wallet_before_generation(db, org_id)

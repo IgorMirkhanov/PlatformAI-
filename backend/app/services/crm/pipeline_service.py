@@ -84,26 +84,33 @@ class PipelineService:
         if existing is not None:
             return self._to_read(existing)
 
-        pipeline = CrmPipeline(
-            organization_id=organization_id,
-            name=DEFAULT_PIPELINE_NAME,
-            position=0,
-            is_default=True,
-        )
-        await pipelines.add(pipeline)
-        for spec in DEFAULT_STAGES:
-            await stages.add(
-                CrmStage(
+        try:
+            async with db.begin_nested():
+                pipeline = CrmPipeline(
                     organization_id=organization_id,
-                    pipeline_id=pipeline.id,
-                    name=str(spec["name"]),
-                    position=int(spec["position"]),
-                    color=spec.get("color"),
-                    is_won=bool(spec["is_won"]),
-                    is_lost=bool(spec["is_lost"]),
+                    name=DEFAULT_PIPELINE_NAME,
+                    position=0,
+                    is_default=True,
                 )
-            )
-        await db.flush()
+                await pipelines.add(pipeline)
+                for spec in DEFAULT_STAGES:
+                    await stages.add(
+                        CrmStage(
+                            organization_id=organization_id,
+                            pipeline_id=pipeline.id,
+                            name=str(spec["name"]),
+                            position=int(spec["position"]),
+                            color=spec.get("color"),
+                            is_won=bool(spec["is_won"]),
+                            is_lost=bool(spec["is_lost"]),
+                        )
+                    )
+                await db.flush()
+        except IntegrityError:
+            existing = await pipelines.get_default()
+            if existing is not None:
+                return self._to_read(existing)
+            raise
         refreshed = await pipelines.get_with_stages(pipeline.id)
         assert refreshed is not None
         logger.info(

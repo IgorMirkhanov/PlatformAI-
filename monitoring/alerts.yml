@@ -1,0 +1,100 @@
+groups:
+  - name: mpai.api
+    interval: 30s
+    rules:
+      - alert: MpaiHigh5xxRate
+        expr: |
+          sum(rate(mpai_http_requests_total{code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(mpai_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: backend_api
+        annotations:
+          summary: "MP.AI API 5xx rate above 5%"
+          description: "HTTP 5xx share is {{ $value | humanizePercentage }} over 5m. Check correlation_id in JSON logs."
+
+      - alert: MpaiWalletBlocked
+        expr: increase(wallet_blocked_events_total[10m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: billing
+        annotations:
+          summary: "Organization token wallets blocking AI"
+          description: "{{ $value }} wallet blocked/insufficient events in 10m."
+
+      - alert: MpaiOauthRefreshFailures
+        expr: increase(oauth_refresh_total{result="error"}[15m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: crm
+        annotations:
+          summary: "CRM OAuth refresh failures"
+          description: "{{ $value }} OAuth refresh errors in 15m."
+
+      - alert: MpaiWebhookUnmatched
+        expr: increase(webhook_events_total{status="unmatched"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: inbound
+        annotations:
+          summary: "Unmatched inbound webhooks (routing canary)"
+          description: "{{ $value }} unmatched webhook events in 15m."
+
+      - alert: MpaiStripeWebhookFailures
+        expr: increase(mpai_webhook_failures_total{platform="stripe"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: critical
+          service: stripe
+        annotations:
+          summary: "Stripe webhook handler failures"
+          description: "{{ $value }} Stripe webhook failures in 15m. Replay events from Stripe Dashboard after fix."
+
+  - name: mpai.infra
+    interval: 30s
+    rules:
+      - alert: MpaiContainerRestarts
+        expr: changes(container_start_time_seconds{name=~".+"}[15m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: docker
+        annotations:
+          summary: "Container {{ $labels.name }} restarted repeatedly"
+          description: "{{ $labels.name }} start time changed {{ $value }} times in 15m."
+
+      - alert: MpaiContainerDiskHigh
+        expr: |
+          max by (device) (
+            container_fs_usage_bytes{id="/"}
+            /
+            clamp_min(container_fs_limit_bytes{id="/"}, 1)
+          ) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+          service: disk
+        annotations:
+          summary: "Container root filesystem above 80%"
+          description: "Usage is {{ $value | humanizePercentage }} on {{ $labels.device }}."
+
+      - alert: MpaiContainerMemoryHigh
+        expr: |
+          max by (name) (
+            container_memory_working_set_bytes{name=~".+"}
+            /
+            clamp_min(container_spec_memory_limit_bytes{name=~".+"}, 1)
+          ) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+          service: memory
+        annotations:
+          summary: "{{ $labels.name }} memory above 90% of limit"
+          description: "Working set is {{ $value | humanizePercentage }} of the cgroup limit."

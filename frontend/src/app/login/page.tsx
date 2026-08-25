@@ -8,6 +8,7 @@ import { Suspense } from "react";
 
 import { loginWithPassword } from "@/lib/auth/session";
 import { useBotStore } from "@/store/useBotStore";
+import { SiteFooter } from "@/components/legal/SiteFooter";
 
 function LoginForm() {
   const router = useRouter();
@@ -116,6 +117,7 @@ function LoginForm() {
           </Link>
         </div>
       </div>
+      <SiteFooter className="mt-8" />
     </div>
   );
 }

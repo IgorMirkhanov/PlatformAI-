@@ -68,7 +68,13 @@ export function HeaderWalletWidget() {
         </button>
       </div>
 
-      <BalanceTopUpModal open={depositOpen} onClose={() => setDepositOpen(false)} />
+      <BalanceTopUpModal
+        open={depositOpen}
+        onClose={() => {
+          setDepositOpen(false);
+          void loadBilling();
+        }}
+      />
     </>
   );
 }

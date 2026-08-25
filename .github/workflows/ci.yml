@@ -5,6 +5,7 @@ name: CI
 on:
   push:
     branches: [main, master, develop]
+    tags: ["v*"]
   pull_request:
     branches: [main, master, develop]
 
@@ -32,6 +33,20 @@ jobs:
           pip install -r requirements.txt ruff
       - name: Ruff
         run: ruff check app main.py || true
+      - name: Concurrency gates (wallet / CRM / OAuth)
+        env:
+          CI: "true"
+          CELERY_TASK_ALWAYS_EAGER: "true"
+          ENVIRONMENT: test
+          JWT_SECRET_KEY: ci-test-jwt-secret-key-32chars!!
+          ENCRYPTION_KEY: "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzISE="
+          CREDENTIALS_ENCRYPTION_KEY: "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzISE="
+        run: >
+          pytest -q --tb=short
+          tests/unit/test_wallet_repository.py
+          tests/stress/test_wallet_isolation.py
+          tests/stress/test_deal_idempotency.py
+          tests/integration/test_oauth_refresh_race.py
       - name: Pytest with coverage
         env:
           CELERY_TASK_ALWAYS_EAGER: "true"
@@ -100,8 +115,8 @@ jobs:
       - run: npm ci
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
-      - name: Run saas-v1 + platform-core e2e
-        run: npx playwright test e2e/saas-v1-flow.spec.ts e2e/platform-core.spec.ts --project=chromium
+      - name: Run wallet / BYOK / saas-v1 e2e
+        run: npx playwright test e2e/saas-v1-flow.spec.ts e2e/platform-core.spec.ts e2e/wallet-isolation.spec.ts e2e/byok-vault-validation.spec.ts --project=chromium
         env:
           CI: "true"
           NEXT_PUBLIC_API_URL: /api
@@ -127,7 +142,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       - name: Trivy filesystem
         uses: aquasecurity/trivy-action@0.28.0
         with:
@@ -136,14 +151,16 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           format: table
-        continue-on-error: true
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
       - name: Pip audit (backend)
         working-directory: backend
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           python -m pip install --upgrade pip pip-audit
-          pip-audit -r requirements.txt --strict || true
+          pip-audit -r requirements.txt --strict
       - name: npm audit (frontend)
         working-directory: frontend
+        continue-on-error: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         run: |
           npm ci --ignore-scripts
-          npm audit --audit-level=high || true
+          npm audit --audit-level=high

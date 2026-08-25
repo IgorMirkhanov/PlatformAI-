@@ -191,6 +191,25 @@ class AiKeysService:
             row.updated_at = datetime.now(timezone.utc)
 
         await db.flush()
+        try:
+            from app.models.tenant_credentials import PROVIDER_TO_LLM_KIND
+            from app.repositories.credentials_repository import CredentialsRepository
+
+            kind = PROVIDER_TO_LLM_KIND.get(provider_id)
+            if kind:
+                await CredentialsRepository(db).upsert(
+                    organization_id=organization_id,
+                    kind=kind,
+                    payload={"api_key": secret, "provider": provider_id},
+                    status="active" if is_active else "revoked",
+                )
+        except Exception as exc:
+            logger.warning(
+                "AiKeys.vault_sync_failed | org={org} provider={provider} error={error}",
+                org=organization_id,
+                provider=provider_id,
+                error=str(exc),
+            )
         logger.info(
             "AiKeys.upsert | org={org} provider={provider} active={active}",
             org=organization_id,
@@ -252,6 +271,32 @@ class AiKeysService:
                     provider=row.provider,
                     error=str(exc),
                 )
+        try:
+            from app.models.tenant_credentials import LLM_KIND_TO_PROVIDER, TenantCredential
+            from app.services.crypto_service import decrypt_payload
+
+            vault = await db.execute(
+                select(TenantCredential).where(
+                    TenantCredential.organization_id == organization_id,
+                    TenantCredential.status == "active",
+                    TenantCredential.kind.in_(tuple(LLM_KIND_TO_PROVIDER.keys())),
+                )
+            )
+            for cred in vault.scalars().all():
+                provider = LLM_KIND_TO_PROVIDER.get(cred.kind)
+                if not provider or provider in out:
+                    continue
+                payload = decrypt_payload(
+                    cred.encrypted_payload,
+                    cred.encryption_iv,
+                    cred.encryption_tag,
+                    key_version=int(cred.key_version),
+                )
+                secret = str(payload.get("api_key") or payload.get("token") or "")
+                if secret:
+                    out[provider] = secret
+        except Exception as exc:
+            logger.debug("AiKeys.vault_read_skip | error={error}", error=str(exc))
         return out
 
     async def resolve_provider_api_key(

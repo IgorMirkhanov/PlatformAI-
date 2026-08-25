@@ -14,8 +14,8 @@ export default function InstagramChannelPage() {
   const { botId, statuses, refreshStatuses } = useChannelHub();
   const status = statuses.instagram;
   const { showToast } = useToast();
-  const [pageId, setPageId] = useState("");
-  const [accessToken, setAccessToken] = useState("");
+  const [instanceId, setInstanceId] = useState("");
+  const [apiToken, setApiToken] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,8 +25,8 @@ export default function InstagramChannelPage() {
 
   const handleConnect = async () => {
     const validationError = validateHubInstagramForm({
-      page_id: pageId,
-      access_token: accessToken,
+      instance_id: instanceId,
+      api_token: apiToken,
     });
     if (validationError) {
       setError(validationError);
@@ -37,12 +37,13 @@ export default function InstagramChannelPage() {
     setError(null);
     try {
       const response = await connectHubChannel(botId, "instagram", {
-        page_id: pageId.trim(),
-        access_token: accessToken.trim(),
+        reference_id: instanceId.trim(),
+        api_key: apiToken.trim(),
+        access_token: apiToken.trim(),
+        token: apiToken.trim(),
       });
       showToast(response.message || "Instagram подключён.", "success");
-      setPageId("");
-      setAccessToken("");
+      setApiToken("");
       await refreshStatuses();
     } catch (err) {
       const msg = getApiErrorMessage(err, "Не удалось подключить Instagram.");
@@ -72,39 +73,38 @@ export default function InstagramChannelPage() {
   return (
     <ChannelSetupPanel
       title="Instagram"
-      subtitle="Direct Messages через Meta Graph API"
+      subtitle="Direct Messages через Green API"
       accent="#E4405F"
       status={status}
       error={error}
       instructions={
         <>
-          <p>1. Создайте Meta App и подключите Instagram Graph API.</p>
-          <p>2. Получите Page ID связанной Facebook Page.</p>
-          <p>3. Выпустите Page Access Token с правами instagram_manage_messages.</p>
-          <p>4. Укажите webhook URL из статуса подключения в Meta Developer Console.</p>
+          <p>1. Создайте инстанс Instagram в кабинете Green API.</p>
+          <p>2. Скопируйте Instance ID (idInstance) и API Token (apiTokenInstance).</p>
+          <p>3. Укажите webhook URL из статуса подключения в настройках инстанса.</p>
         </>
       }
     >
       <label className="block text-xs font-medium text-zinc-400">
-        Instagram / Page ID
+        Instance ID
         <input
-          value={pageId}
+          value={instanceId}
           disabled={isPending}
           onChange={(event) => {
-            setPageId(event.target.value);
+            setInstanceId(event.target.value);
             clearError();
           }}
           className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-[#E4405F]/50 focus:ring-2 focus:ring-[#E4405F]/20 disabled:opacity-50"
         />
       </label>
       <label className="block text-xs font-medium text-zinc-400">
-        Access Token
+        API Token
         <input
           type="password"
-          value={accessToken}
+          value={apiToken}
           disabled={isPending}
           onChange={(event) => {
-            setAccessToken(event.target.value);
+            setApiToken(event.target.value);
             clearError();
           }}
           className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-[#E4405F]/50 focus:ring-2 focus:ring-[#E4405F]/20 disabled:opacity-50"

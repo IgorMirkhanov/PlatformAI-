@@ -88,35 +88,24 @@ async def _run_crm_action_background_fallback(
 
 
 async def _get_bot(db: AsyncSession, bot_id: uuid.UUID) -> Bot:
-
-    result = await db.execute(select(Bot).where(Bot.id == bot_id))
-
+    result = await db.execute(
+        select(Bot)
+        .where(Bot.id == bot_id)
+        .options(selectinload(Bot.organization))
+    )
     bot = result.scalar_one_or_none()
-
     if bot is None:
-
         logger.warning("WebhookService.bot_not_found | bot_id={bot_id}", bot_id=bot_id)
-
         raise HTTPException(
-
             status_code=status.HTTP_404_NOT_FOUND,
-
             detail=f"Bot with id '{bot_id}' not found.",
-
         )
-
     if not bot.is_active:
-
         logger.warning("WebhookService.bot_inactive | bot_id={bot_id}", bot_id=bot_id)
-
         raise HTTPException(
-
             status_code=status.HTTP_409_CONFLICT,
-
             detail=f"Bot with id '{bot_id}' is inactive.",
-
         )
-
     return bot
 
 
@@ -124,113 +113,72 @@ async def _get_bot(db: AsyncSession, bot_id: uuid.UUID) -> Bot:
 
 
 async def _get_or_create_client(
-
     db: AsyncSession,
-
     bot_id: uuid.UUID,
-
     external_id: str,
-
     username: str,
-
     first_name: str,
-
 ) -> Client:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-    result = await db.execute(
-
-        select(Client)
-
-        .options(selectinload(Client.bot).selectinload(Bot.user))
-
-        .where(
-
-            Client.bot_id == bot_id,
-
-            Client.external_id == external_id,
-
-        )
-
+    display_name = first_name or username or ""
+    insert_stmt = pg_insert(Client).values(
+        id=uuid.uuid4(),
+        bot_id=bot_id,
+        external_id=external_id,
+        username=username or "",
+        first_name=display_name,
+        current_step_id="",
+        is_paused_by_operator=False,
     )
-
-    client = result.scalar_one_or_none()
-
-
-
-    if client is None:
-
-        client = Client(
-
-            bot_id=bot_id,
-
-            external_id=external_id,
-
-            username=username,
-
-            first_name=first_name or username,
-
-            current_step_id="",
-
-            is_paused_by_operator=False,
-
-        )
-
-        db.add(client)
-
+    stmt = insert_stmt.on_conflict_do_update(
+        constraint="uq_clients_bot_external_id",
+        set_={
+            "username": insert_stmt.excluded.username,
+            "first_name": insert_stmt.excluded.first_name,
+        },
+    ).returning(Client.id)
+    try:
+        inserted_id = (await db.execute(stmt)).scalar_one()
         await db.flush()
-
-        reload = await db.execute(
-
+    except Exception:
+        # Non-Postgres / missing constraint — fall back to select+insert.
+        result = await db.execute(
             select(Client)
-
             .options(selectinload(Client.bot).selectinload(Bot.user))
-
-            .where(Client.id == client.id)
-
+            .where(Client.bot_id == bot_id, Client.external_id == external_id)
         )
-
-        client = reload.scalar_one()
-
-        logger.info(
-
-            "WebhookService.client_created | client_id={client_id} external_id={external_id}",
-
-            client_id=client.id,
-
+        client = result.scalar_one_or_none()
+        if client is not None:
+            if username:
+                client.username = username
+            if first_name:
+                client.first_name = first_name
+            return client
+        client = Client(
+            bot_id=bot_id,
             external_id=external_id,
-
+            username=username or "",
+            first_name=display_name,
+            current_step_id="",
+            is_paused_by_operator=False,
         )
+        db.add(client)
+        await db.flush()
+        inserted_id = client.id
 
-        return client
-
-
-
-    if username:
-
-        client.username = username
-
-    if first_name:
-
-        client.first_name = first_name
-
-
-
-    logger.debug(
-
-        "WebhookService.client_found | client_id={client_id} step={step} paused={paused}",
-
-        client_id=client.id,
-
-        step=client.current_step_id,
-
-        paused=client.is_paused_by_operator,
-
+    reload = await db.execute(
+        select(Client)
+        .options(selectinload(Client.bot).selectinload(Bot.user))
+        .where(Client.id == inserted_id)
     )
-
+    client = reload.scalar_one()
+    logger.debug(
+        "WebhookService.client_upserted | client_id={client_id} external_id={external_id}",
+        client_id=client.id,
+        external_id=external_id,
+    )
     return client
-
-
-
 
 
 async def _get_latest_published_flow(db: AsyncSession, bot_id: uuid.UUID) -> BotFlow:
@@ -435,7 +383,11 @@ async def process_inbound_message(
 
 
 
-    if client.is_paused_by_operator:
+    if client.is_paused_by_operator or getattr(client, "conversation_status", "active") == "escalated":
+
+        if not client.is_paused_by_operator:
+            client.is_paused_by_operator = True
+            client.conversation_status = "escalated"
 
         return await _handle_operator_paused_inbound(
 
@@ -619,6 +571,26 @@ async def process_inbound_message(
     await db.flush()
 
     _enqueue_lead_capture(client.id, bot_id)
+
+    try:
+        bot_row = await db.get(Bot, bot_id)
+        if bot_row is not None:
+            from app.services.crm_orchestrator import crm_orchestrator
+
+            await crm_orchestrator.handle_new_message_for_crm(
+                db,
+                bot=bot_row,
+                client=client,
+                message_text=message_text,
+                channel_type=source,
+                external_chat_id=external_id,
+            )
+    except Exception as crm_exc:
+        logger.warning(
+            "WebhookService.crm_sidecar_failed | client_id={client_id} error={error}",
+            client_id=client.id,
+            error=str(crm_exc),
+        )
 
     await broadcast_chat_message(client, client_message)
 

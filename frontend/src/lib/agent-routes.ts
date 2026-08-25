@@ -13,13 +13,22 @@ export const AGENT_TABS: Array<{ id: AgentTabId; label: string; segment: string 
 
 export function getAgentTabPath(botId: string, tab: AgentTabId): string {
   if (tab === "channels") {
-    return `/dashboard/channels-agent/${botId}/telegram`;
+    return `/dashboard/channels?botId=${encodeURIComponent(botId)}`;
+  }
+  if (tab === "integrations") {
+    return `/dashboard/integrations?botId=${encodeURIComponent(botId)}`;
   }
   const segment = AGENT_TABS.find((item) => item.id === tab)?.segment ?? "settings";
   return `/bots/${botId}/${segment}`;
 }
 
 export function getActiveAgentTabFromPath(pathname: string): AgentTabId | null {
+  if (/\/dashboard\/channels(\?|$|\/)/.test(pathname)) {
+    return "channels";
+  }
+  if (/\/dashboard\/integrations(\?|$|\/)/.test(pathname)) {
+    return "integrations";
+  }
   if (/\/dashboard\/channels-agent\/[^/]+/.test(pathname)) {
     return "channels";
   }
@@ -29,14 +38,24 @@ export function getActiveAgentTabFromPath(pathname: string): AgentTabId | null {
   return AGENT_TABS.find((tab) => tab.segment === segment)?.id ?? null;
 }
 
-export function getAgentIdFromPath(pathname: string): string | null {
-  const hubMatch = pathname.match(/\/dashboard\/channels-agent\/([^/]+)/);
-  if (hubMatch) return hubMatch[1];
+export function getAgentIdFromPath(pathname: string, searchParams?: URLSearchParams | null): string | null {
+  if (searchParams?.get("botId")) {
+    return searchParams.get("botId");
+  }
+  const queryMatch = pathname.match(/[?&]botId=([^&]+)/);
+  if (queryMatch?.[1]) {
+    return decodeURIComponent(queryMatch[1]);
+  }
+  const channelsMatch = pathname.match(/\/dashboard\/channels(?:-agent)?\/([^/?#]+)/);
+  if (channelsMatch) return channelsMatch[1];
   const match = pathname.match(/\/bots\/([^/]+)/);
   return match?.[1] ?? null;
 }
 
 export function isAgentWorkspacePath(pathname: string): boolean {
+  if (/\/dashboard\/(channels|integrations)(\/|\?|$)/.test(pathname)) {
+    return true;
+  }
   if (/\/dashboard\/channels-agent\/[^/]+/.test(pathname)) {
     return true;
   }

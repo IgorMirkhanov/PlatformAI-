@@ -26,6 +26,50 @@ from app.tasks.webhook_tasks import process_inbound_message_task
 
 router = APIRouter(tags=["webhooks"])
 
+_BYOK_PROVIDERS = frozenset({"telegram", "wazzup", "greenapi", "widget", "web_widget"})
+
+
+@router.post(
+    "/webhooks/{provider}",
+    response_model=WebhookQueuedResponse,
+    status_code=status.HTTP_200_OK,
+    summary="BYOK inbound webhook — resolve tenant by payload, not URL",
+)
+async def provider_webhook_receiver(
+    provider: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> WebhookQueuedResponse | Response:
+    """POST /api/v1/webhooks/{telegram|wazzup|greenapi|widget} without organization_id."""
+    key = (provider or "").strip().lower()
+    if key not in _BYOK_PROVIDERS:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown webhook provider.")
+    if key == "wazzup":
+        from app.api.endpoints.wazzup_webhook import _handle_wazzup_payload
+
+        raw_body: Any = await request.json()
+        if not isinstance(raw_body, dict):
+            return Response(status_code=status.HTTP_200_OK)
+        return await _handle_wazzup_payload(
+            request=request,
+            db=db,
+            raw_body=raw_body,
+            path_bot_id=None,
+        )
+    from app.services.webhooks.router_service import ingest_provider_webhook
+
+    raw_bytes = await request.body()
+    overlay = None
+    if key == "telegram":
+        overlay = request.headers.get("x-telegram-bot-id")
+    return await ingest_provider_webhook(
+        provider=key,
+        request=request,
+        db=db,
+        raw_bytes=raw_bytes,
+        overlay_reference_id=overlay,
+    )
+
 # Path segment → Celery worker platform_type
 _CHANNEL_TYPE_ALIASES: dict[str, str] = {
     "telegram": "TELEGRAM",
@@ -914,77 +958,6 @@ async def widget_poll_replies(
 
 
 @router.post(
-    "/webhooks/wazzup/{bot_id}",
-    response_model=WebhookQueuedResponse,
-    status_code=status.HTTP_202_ACCEPTED,
-    summary="Receive Wazzup24 inbound message webhooks",
-)
-async def wazzup_webhook(
-    bot_id: uuid.UUID,
-    request: Request,
-) -> WebhookQueuedResponse | Response:
-    try:
-        from app.core.webhook_auth import require_internal_service_key
-
-        try:
-            require_internal_service_key(request)
-        except HTTPException:
-            return Response(status_code=status.HTTP_403_FORBIDDEN)
-
-        raw_body: Any = await request.json()
-        if not isinstance(raw_body, dict):
-            return Response(status_code=status.HTTP_200_OK)
-
-        from app.core.redis_client import claim_inbound_event
-
-        event_id = str(
-            raw_body.get("messageId")
-            or raw_body.get("message_id")
-            or raw_body.get("id")
-            or ""
-        ) or None
-        if event_id and not claim_inbound_event("wazzup", event_id):
-            return Response(status_code=status.HTTP_200_OK)
-
-        from app.services.inbound.normalizer import attach_normalized, normalize_wazzup_inbound
-        from app.services.wazzup_service import wazzup_service
-
-        inbound_items = wazzup_service.extract_inbound_messages(raw_body)
-        first = inbound_items[0] if inbound_items else None
-        base_payload: dict[str, Any] = {
-            "bot_id": str(bot_id),
-            "body": raw_body,
-            "external_id": first["external_id"] if first else None,
-            "username": first["username"] if first else None,
-            "first_name": first["first_name"] if first else None,
-            "message_text": first["message_text"] if first else None,
-        }
-        if first:
-            normalized = normalize_wazzup_inbound(
-                bot_id=bot_id,
-                inbound=first,
-                raw_body=raw_body,
-            )
-            payload = attach_normalized(base_payload, normalized)
-        else:
-            payload = base_payload
-
-        return _enqueue_inbound_message(
-            bot_id=str(bot_id),
-            platform_type="WAZZUP",
-            payload=payload,
-            normalized=payload.get("normalized"),
-        )
-    except Exception as exc:
-        logger.exception(
-            "WebhookEndpoint.wazzup_unhandled | bot_id={bot_id} error={error}",
-            bot_id=bot_id,
-            error=str(exc),
-        )
-        return Response(status_code=status.HTTP_200_OK)
-
-
-@router.post(
     "/webhooks/payments",
     summary="Unified payment gateway webhook (Stripe payment_intent / checkout)",
     include_in_schema=True,
@@ -1101,6 +1074,87 @@ async def payment_provider_webhook(
         provider_signature_data={"headers": headers},
     )
     return {"status": "ok", "processed": ok}
+
+
+@router.post(
+    "/webhooks/bitrix24/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Bitrix24 mass-market event handler (application_token verify → queue)",
+)
+async def bitrix24_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    from app.services.integration_hub.bitrix_webhook import ingest_bitrix24_webhook
+
+    return await ingest_bitrix24_webhook(connection_id=connection_id, request=request, db=db)
+
+
+@router.post(
+    "/webhooks/amocrm/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="amoCRM event handler (account match → queue)",
+)
+async def amocrm_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    from app.services.integration_hub.amocrm_webhook import ingest_amocrm_webhook
+
+    return await ingest_amocrm_webhook(connection_id=connection_id, request=request, db=db)
+
+
+@router.post(
+    "/webhooks/wazzup/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Wazzup MessagingAdapter webhook (message.received → queue)",
+)
+async def wazzup_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    try:
+        raw_body: Any = await request.json()
+    except Exception:
+        raw_body = {}
+    if not isinstance(raw_body, dict):
+        return Response(status_code=status.HTTP_200_OK)
+    if raw_body.get("test") is True:
+        return Response(status_code=status.HTTP_200_OK)
+    from app.models.integration_hub import IntegrationConnection
+    from app.services.integration_hub.wazzup_webhook import ingest_wazzup_hub_webhook
+
+    connection = await db.get(IntegrationConnection, connection_id)
+    if connection is not None and connection.provider == "wazzup":
+        return await ingest_wazzup_hub_webhook(
+            connection_id=connection_id, payload=raw_body, db=db
+        )
+    from app.api.endpoints.wazzup_webhook import _handle_wazzup_payload
+
+    return await _handle_wazzup_payload(
+        request=request,
+        db=db,
+        raw_body=raw_body,
+        path_bot_id=connection_id,
+    )
+
+
+@router.post(
+    "/webhooks/kaspi_pay/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Kaspi Pay invoice status webhook (verify → queue)",
+)
+async def kaspi_pay_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    from app.services.integration_hub.kaspi_webhook import ingest_kaspi_pay_webhook
+
+    return await ingest_kaspi_pay_webhook(connection_id=connection_id, request=request, db=db)
 
 
 @router.post(
@@ -1298,4 +1352,33 @@ async def universal_webhook_receiver(
             "bot_id": bot_id_str,
             "error": "receiver_exception",
         }
+
+
+wazzup_public_router = APIRouter(tags=["webhooks"])
+
+
+@wazzup_public_router.post(
+    "/webhooks/wazzup/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Wazzup public webhook alias (no /api/v1 prefix)",
+)
+async def wazzup_public_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    return await wazzup_connection_webhook(connection_id, request, db)
+
+
+@wazzup_public_router.post(
+    "/webhooks/kaspi_pay/{connection_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Kaspi Pay public webhook alias (no /api/v1 prefix)",
+)
+async def kaspi_pay_public_connection_webhook(
+    connection_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    return await kaspi_pay_connection_webhook(connection_id, request, db)
 

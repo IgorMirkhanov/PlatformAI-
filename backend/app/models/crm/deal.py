@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Numeric, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +32,15 @@ class CrmDeal(Base):
     """Sales opportunity living on a pipeline stage."""
 
     __tablename__ = "crm_deals"
+    __table_args__ = (
+        Index(
+            "uq_crm_deals_org_dedup",
+            "organization_id",
+            "dedup_key",
+            unique=True,
+            postgresql_where=text("dedup_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -106,6 +115,7 @@ class CrmDeal(Base):
         index=True,
     )
     source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     custom_fields: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,

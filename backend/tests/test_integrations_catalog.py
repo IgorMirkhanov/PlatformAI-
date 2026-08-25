@@ -17,10 +17,12 @@ from app.services.ocr_service import parse_kaspi_receipt_text
 def test_integration_catalog_has_screenshot_platforms() -> None:
     expected = {
         "amocrm",
+        "kommo",
         "bitrix24",
         "google_calendar",
         "kaspi_receipts",
         "kaspi_pay",
+        "custom_webhook",
         "jivo",
         "uon",
     }
@@ -48,6 +50,7 @@ def test_connect_methods_exist_for_new_channels() -> None:
     assert "WEB_WIDGET" in source
     assert "API" in source
     assert "CALLS" in source
+    assert "GREENAPI" in source
 
 
 def test_webhook_routes_cover_new_ingress() -> None:

@@ -87,6 +87,8 @@ ENABLE_MONITORING=1 ./deploy.sh
 
 Bind addresses default to localhost — tunnel via SSH for remote access.
 
+Alert rules live in `monitoring/alerts.yml` (5xx rate, Stripe webhook failures, disk/memory, container restarts). Grafana dashboards: Containers + API.
+
 ## 6. Rollback
 
 1. Restore DB:
@@ -123,7 +125,11 @@ Preview Mode keys, and may bake `127.0.0.1:8000` rewrites.
 `frontend/.gitignore`). After any accidental leak of Preview Mode keys, delete
 local `.next` and rebuild so Next regenerates them.
 
-## 8. Test checklist
+## 8. Secrets rotation
+
+See [SECRETS_ROTATION.md](./SECRETS_ROTATION.md). Snapshot env + `./deploy.sh backup` first. Do not rotate `CREDENTIALS_ENCRYPTION_KEY` / `ENCRYPTION_KEY` without a restore plan.
+
+## 9. Test checklist
 
 See section “Checklist” in the ops summary / PR description, or run:
 

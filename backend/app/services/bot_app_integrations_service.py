@@ -30,10 +30,12 @@ from app.models.integrations import (
 # Catalog platforms shown on the Integrations tab (screenshot parity).
 INTEGRATION_PLATFORMS: tuple[str, ...] = (
     "amocrm",
+    "kommo",
     "bitrix24",
     "google_calendar",
     "kaspi_receipts",
     "kaspi_pay",
+    "custom_webhook",
     "jivo",
     "uon",
 )
@@ -42,6 +44,7 @@ _SENSITIVE_FIELDS: dict[str, tuple[str, ...]] = {
     "google_calendar": ("refresh_token", "access_token", "client_secret"),
     "kaspi_receipts": ("api_key",),
     "kaspi_pay": ("merchant_token", "api_key", "secret_key"),
+    "custom_webhook": ("hmac_secret", "webhook_secret"),
     "jivo": ("token", "api_key", "webhook_secret"),
     "uon": ("api_key", "password"),
 }
@@ -99,6 +102,10 @@ class BotAppIntegrationsService:
 
         if platform == "amocrm":
             return await self._connect_amocrm(db, bot, payload)
+        if platform == "kommo":
+            payload = dict(payload)
+            payload.setdefault("base_domain", "company.kommo.com")
+            return await self._connect_amocrm(db, bot, payload, storage_platform="kommo")
         if platform == "bitrix24":
             return await self._connect_bitrix(db, bot, payload)
         if platform == "google_calendar":
@@ -107,6 +114,8 @@ class BotAppIntegrationsService:
             return await self._connect_kaspi_receipts(db, bot, payload)
         if platform == "kaspi_pay":
             return await self._connect_kaspi_pay(db, bot, payload)
+        if platform == "custom_webhook":
+            return await self._connect_custom_webhook(db, bot, payload)
         if platform == "jivo":
             return await self._connect_jivo(db, bot, payload)
         if platform == "uon":
@@ -116,12 +125,15 @@ class BotAppIntegrationsService:
     async def disconnect(self, db: AsyncSession, bot_id: uuid.UUID, platform: str) -> dict[str, Any]:
         platform = platform.strip().lower()
         bot = await self._require_bot(db, bot_id)
-        if platform in {"amocrm", "bitrix24"}:
-            credentials = dict(bot.credentials or {})
-            crm = dict(credentials.get("crm") or {})
-            crm.pop(platform, None)
-            credentials["crm"] = crm
-            bot.credentials = credentials
+        if platform in {"amocrm", "bitrix24", "kommo"}:
+            if platform == "kommo":
+                self._write_integration(bot, "kommo", {})
+            else:
+                credentials = dict(bot.credentials or {})
+                crm = dict(credentials.get("crm") or {})
+                crm.pop(platform, None)
+                credentials["crm"] = crm
+                bot.credentials = credentials
         else:
             self._write_integration(bot, platform, {})
         await db.flush()
@@ -193,28 +205,36 @@ class BotAppIntegrationsService:
         end_iso: str,
         description: str = "",
         attendee_email: str | None = None,
+        client_phone: str | None = None,
     ) -> dict[str, Any]:
+        from app.services.integrations.google_calendar_service import create_calendar_event as gcal_create
+
         config = _reveal_block("google_calendar", self._read_integration(bot, "google_calendar"))
         if not config.get("connected"):
             raise ValueError("Google Calendar is not connected.")
-        access_token = await self._ensure_google_access_token(bot, config)
-        calendar_id = str(config.get("calendar_id") or "primary")
-        body: dict[str, Any] = {
-            "summary": summary,
-            "description": description,
-            "start": {"dateTime": start_iso},
-            "end": {"dateTime": end_iso},
-        }
-        if attendee_email:
-            body["attendees"] = [{"email": attendee_email}]
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events",
-                headers={"Authorization": f"Bearer {access_token}"},
-                json=body,
-            )
-            response.raise_for_status()
-            return response.json()
+        return await gcal_create(
+            bot,
+            title=summary,
+            start_iso=start_iso,
+            end_iso=end_iso,
+            client_email=attendee_email,
+            client_phone=client_phone or description,
+            config=config,
+        )
+
+    async def check_calendar_availability(
+        self,
+        bot: Bot,
+        *,
+        start_iso: str,
+        end_iso: str,
+    ) -> dict[str, Any]:
+        from app.services.integrations.google_calendar_service import check_calendar_availability
+
+        config = _reveal_block("google_calendar", self._read_integration(bot, "google_calendar"))
+        if not config.get("connected"):
+            raise ValueError("Google Calendar is not connected.")
+        return await check_calendar_availability(bot, start_iso=start_iso, end_iso=end_iso, config=config)
 
     async def create_kaspi_invoice(
         self,
@@ -337,7 +357,12 @@ class BotAppIntegrationsService:
     # ------------------------------------------------------------------
 
     async def _connect_amocrm(
-        self, db: AsyncSession, bot: Bot, payload: dict[str, Any]
+        self,
+        db: AsyncSession,
+        bot: Bot,
+        payload: dict[str, Any],
+        *,
+        storage_platform: str = "amocrm",
     ) -> dict[str, Any]:
         from app.schemas.crm_schemas import AmoCRMConnectRequest
         from app.services.crm_integration_service import crm_integration_service
@@ -353,9 +378,21 @@ class BotAppIntegrationsService:
                 redirect_uri=payload.get("redirect_uri"),
             ),
         )
+        if storage_platform == "kommo":
+            self._write_integration(
+                bot,
+                "kommo",
+                {
+                    "connected": result.connected,
+                    "sync_enabled": result.sync_enabled,
+                    "base_domain": str(payload.get("base_domain") or ""),
+                    "connected_at": _now_iso(),
+                    "updated_at": _now_iso(),
+                },
+            )
         return {
             "bot_id": str(bot.id),
-            "platform": "amocrm",
+            "platform": storage_platform,
             "connected": result.connected,
             "sync_enabled": result.sync_enabled,
             "message": result.message,
@@ -378,6 +415,31 @@ class BotAppIntegrationsService:
             "connected": result.connected,
             "sync_enabled": result.sync_enabled,
             "message": result.message,
+        }
+
+    async def _connect_custom_webhook(
+        self, db: AsyncSession, bot: Bot, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        target_url = str(payload.get("webhook_target_url") or payload.get("webhook_url") or "").strip()
+        if not target_url.startswith("https://"):
+            raise ValueError("Укажите HTTPS URL для custom webhook.")
+        secret = str(payload.get("hmac_secret") or payload.get("webhook_secret") or generate_webhook_secret())
+        config = {
+            "connected": True,
+            "sync_enabled": True,
+            "webhook_target_url": target_url,
+            "hmac_secret": secret,
+            "connected_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        self._write_integration(bot, "custom_webhook", config)
+        await db.flush()
+        return {
+            "bot_id": str(bot.id),
+            "platform": "custom_webhook",
+            "connected": True,
+            "sync_enabled": True,
+            "message": "Custom webhook подключён.",
         }
 
     async def _connect_google_calendar(
@@ -589,14 +651,34 @@ class BotAppIntegrationsService:
 
     def _status_for(self, bot: Bot, platform: str) -> dict[str, Any]:
         labels = {
-            "amocrm": "AmoCRM",
+            "amocrm": "amoCRM",
+            "kommo": "Kommo",
             "bitrix24": "Битрикс 24",
             "google_calendar": "Google Calendar",
             "kaspi_receipts": "Проверка Kaspi-чеков",
             "kaspi_pay": "Kaspi Pay",
+            "custom_webhook": "Custom Integration",
             "jivo": "Jivo",
             "uon": "U-ON",
         }
+        if platform == "kommo":
+            cfg = _reveal_block("kommo", self._read_integration(bot, "kommo"))
+            if not cfg.get("connected"):
+                crm = (bot.credentials or {}).get("crm") if isinstance(bot.credentials, dict) else {}
+                amo_cfg = reveal_amocrm_config(crm.get("amocrm") if isinstance(crm, dict) else None) or {}
+                if amo_cfg.get("base_domain", "").endswith("kommo.com"):
+                    cfg = amo_cfg
+            connected = bool(cfg.get("connected"))
+            return {
+                "platform": platform,
+                "connected": connected,
+                "sync_enabled": bool(cfg.get("sync_enabled", True)) if connected else False,
+                "label": labels[platform],
+                "detail": cfg.get("base_domain"),
+                "availability": "available",
+                "webhook_url": None,
+                "meta": {"pipeline_id": cfg.get("pipeline_id"), "stage_id": cfg.get("stage_id")},
+            }
         if platform == "amocrm":
             crm = (bot.credentials or {}).get("crm") if isinstance(bot.credentials, dict) else {}
             cfg = reveal_amocrm_config(crm.get("amocrm") if isinstance(crm, dict) else None) or {}

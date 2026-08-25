@@ -132,8 +132,13 @@ def build_gateway_providers(
     """
     Ordered multi-vendor chain for ``ResilientLLMGateway``.
 
-    When ``org_api_keys`` is provided, tenant keys override platform defaults
-    for matching providers before falling back to ``settings.*_API_KEY``.
+    Key resolution per provider (highest priority first):
+      1. ``org_api_keys[provider_id]`` — decrypted ``OrganizationApiKey`` (tenant BYOK)
+      2. Provider constructor → ``settings.<PROVIDER>_API_KEY`` / ``OPENAI_API_KEY``
+
+    Missing a single vendor key does **not** break the chain: that adapter is
+    either omitted (when ``include_unconfigured=False``) or appended as a keyless
+    stub that the gateway will never promote ahead of a configured vendor.
     """
     import app.services.llm.providers  # noqa: F401
 
@@ -189,13 +194,23 @@ def build_gateway_providers(
             kwargs["model"] = fallback_model
         try:
             instance = LLMProviderFactory.create(provider_id, **kwargs)
-        except Exception:
+        except Exception as exc:
+            logger.debug(
+                "LLMFactory.provider_skipped | provider={provider} error={error}",
+                provider=provider_id,
+                error=str(exc),
+            )
             continue
         has_key = bool(getattr(instance, "api_key", None))
         if has_key:
             configured.append(instance)
         elif include_unconfigured:
             stubs.append(instance)
+        else:
+            logger.debug(
+                "LLMFactory.provider_unconfigured | provider={provider} — omitted",
+                provider=provider_id,
+            )
 
     if configured:
         return configured + stubs

@@ -106,19 +106,20 @@ export const useOrganizationStore = create<OrganizationState>()(
         set({ loading: true });
         try {
           const response = await fetchOrganizations();
+          const organizations = Array.isArray(response.organizations) ? response.organizations : [];
           const currentOrgId = response.active_company_id;
           writeOrgId(currentOrgId);
           set({
-            organizations: response.organizations,
+            organizations,
             currentOrgId,
             loading: false,
           });
           useBotStore.setState({
-            organizations: response.organizations,
+            organizations,
             activeCompanyId: currentOrgId,
             organizationsLoading: false,
           });
-          return response.organizations;
+          return organizations;
         } catch {
           set({ loading: false });
           return [];

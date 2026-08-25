@@ -142,6 +142,8 @@ def can_manage_settings(role: UserRole) -> bool:
 
 
 async def ensure_demo_user(db: AsyncSession) -> User:
+    if settings.is_production:
+        raise RuntimeError("ensure_demo_user must not be called in production.")
     result = await db.execute(select(User).limit(1))
     user = result.scalar_one_or_none()
     if user is not None:
@@ -354,8 +356,8 @@ async def get_current_user(
 
         return user
 
-    # Soft-launch identity shortcuts — never in production.
-    if settings.is_production or not bool(getattr(settings, "ALLOW_SOFT_LAUNCH_AUTH", True)):
+    # Soft-launch identity shortcuts — never in production; default OFF.
+    if settings.is_production or not bool(getattr(settings, "ALLOW_SOFT_LAUNCH_AUTH", False)):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication required.",

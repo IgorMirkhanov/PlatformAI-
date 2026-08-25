@@ -36,6 +36,14 @@ def _hash_embed_text(text: str, dimensions: int = EMBEDDING_DIMENSION) -> list[f
     return [value / norm for value in values]
 
 
+def embedding_api_keys_available() -> bool:
+    """True when at least one cloud embedding vendor key is configured."""
+    return bool(
+        getattr(settings, "OPENAI_API_KEY", None)
+        or getattr(settings, "OPENROUTER_API_KEY", None)
+    )
+
+
 async def _openai_embed_texts(texts: list[str]) -> list[list[float]]:
     from openai import AsyncOpenAI
 
@@ -84,27 +92,42 @@ async def _openrouter_embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Generate embeddings using the best available configured provider."""
+    """Generate embeddings using the best available configured provider.
+
+    Never raises for missing vendor keys — falls back to deterministic hash
+    vectors so RAG callers can degrade instead of aborting the dialogue.
+    """
     if not texts:
         return []
 
-    provider = settings.EMBEDDING_PROVIDER.lower()
+    provider = (settings.EMBEDDING_PROVIDER or "auto").lower()
+
+    if not embedding_api_keys_available() and provider in {"openai", "openrouter"}:
+        logger.warning(
+            "Embeddings.skip_cloud | provider={provider} reason=missing_api_key "
+            "— using hash fallback (RAG quality degraded, dialogue continues)",
+            provider=provider,
+        )
+        return await asyncio.to_thread(lambda: [_hash_embed_text(text) for text in texts])
 
     if provider in {"auto", "openai"} and settings.OPENAI_API_KEY:
         try:
             return await _openai_embed_texts(texts)
         except Exception as exc:
-            logger.warning("Embeddings.openai_failed | error={error}", error=str(exc))
-            if provider == "openai":
-                raise
+            logger.warning(
+                "Embeddings.openai_failed | error={error} — continuing fallback chain",
+                error=str(exc),
+            )
+            # Do not re-raise: missing/invalid key must not break chat.
 
     if provider in {"auto", "openrouter"} and settings.OPENROUTER_API_KEY:
         try:
             return await _openrouter_embed_texts(texts)
         except Exception as exc:
-            logger.warning("Embeddings.openrouter_failed | error={error}", error=str(exc))
-            if provider == "openrouter":
-                raise
+            logger.warning(
+                "Embeddings.openrouter_failed | error={error} — continuing fallback chain",
+                error=str(exc),
+            )
 
     try:
         return await _sentence_transformer_embed_texts(texts)

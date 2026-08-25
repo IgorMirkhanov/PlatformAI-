@@ -24,6 +24,7 @@ import {
 } from "@/components/landing/gateway-data";
 import { buildApiUrl } from "@/lib/api/baseUrl";
 import { getAccessToken } from "@/lib/auth/tokens";
+import { SiteFooter } from "@/components/legal/SiteFooter";
 import { cn } from "@/lib/utils";
 
 type ServiceHealth = "online" | "degraded" | "checking";
@@ -461,9 +462,7 @@ export function GatewayLandingPage() {
         </section>
       </main>
 
-      <footer className="border-t border-[#1f2430]/80 py-6 text-center text-xs text-zinc-600">
-        MP.AI Gateway · Production AI Platform · {new Date().getFullYear()}
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

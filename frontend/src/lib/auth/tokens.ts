@@ -161,7 +161,10 @@ export function decodeJwtPayload(token: string): Record<string, unknown> | null 
   try {
     const parts = token.split(".");
     if (parts.length < 2) return null;
-    const json = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
+    let b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = (4 - (b64.length % 4)) % 4;
+    b64 += "=".repeat(pad);
+    const json = atob(b64);
     return JSON.parse(json) as Record<string, unknown>;
   } catch {
     return null;

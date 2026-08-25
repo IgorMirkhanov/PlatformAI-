@@ -2,6 +2,7 @@ import "./globals.css";
 
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 
 import { AuthProvider } from "@/components/auth/AuthContext";
 import { AuthSessionBootstrap } from "@/components/auth/AuthSessionBootstrap";
@@ -29,6 +30,10 @@ export default function RootLayout({
       <body
         className={`${inter.variable} min-h-full bg-black font-sans text-zinc-100 antialiased`}
       >
+        <Script
+          src="https://widget.tiptop-pay.kz/bundles/cloudpayments.js"
+          strategy="lazyOnload"
+        />
         <AuthProvider>
           <AuthSessionBootstrap />
           <AppShell>{children}</AppShell>

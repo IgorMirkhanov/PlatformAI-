@@ -217,6 +217,14 @@ class ContactService:
             )
             raise ContactServiceError(exc.detail, status_code=402) from exc
 
+        from app.core.pg_locks import LOCK_NS_CRM_CAPTURE, pg_advisory_xact_lock_uuid
+
+        # Serialize first-contact capture per Client (parallel webhooks).
+        await pg_advisory_xact_lock_uuid(db, LOCK_NS_CRM_CAPTURE, client.id)
+        existing = await repo.get_by_linked_client_id(client.id)
+        if existing is not None:
+            return existing
+
         platform = bot.platform_type
         source = platform.value if hasattr(platform, "value") else str(platform)
 
@@ -228,7 +236,28 @@ class ContactService:
             source=source.lower() if source else None,
             custom_fields={},
         )
-        await repo.add(contact)
+        try:
+            async with db.begin_nested():
+                await repo.add(contact)
+                await db.flush()
+        except Exception as exc:
+            from sqlalchemy.exc import IntegrityError
+
+            if not isinstance(exc, IntegrityError):
+                raise
+            raced = await repo.get_by_linked_client_id(client.id)
+            if raced is not None:
+                logger.info(
+                    "CRM.contact_capture_race_resolved | client_id={client_id} contact_id={contact_id}",
+                    client_id=client.id,
+                    contact_id=raced.id,
+                )
+                return raced
+            raise ContactServiceError(
+                "Failed to create CRM contact after concurrent conflict.",
+                status_code=409,
+            ) from exc
+
         logger.info(
             "CRM.contact_captured | contact_id={contact_id} client_id={client_id} "
             "organization_id={organization_id} source={source}",

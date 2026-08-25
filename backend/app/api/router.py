@@ -16,6 +16,7 @@ from app.api.endpoints.chats import router as chats_router
 from app.api.endpoints.crm_integrations import router as crm_integrations_router
 from app.api.endpoints.bot_app_integrations import router as bot_app_integrations_router
 from app.api.endpoints.integrations.db_connections import router as db_connections_router
+from app.api.endpoints.integrations.google_oauth import router as google_oauth_router
 from app.api.endpoints.security.audit_logs import router as security_audit_logs_router
 from app.api.endpoints.dashboard import router as dashboard_router
 from app.api.endpoints.flow_execution import router as flow_execution_router
@@ -34,6 +35,14 @@ from app.api.endpoints.test_chat import router as test_chat_router
 from app.api.endpoints.system import router as system_router
 from app.api.endpoints.team import router as team_router
 from app.api.endpoints.webhooks import router as webhooks_router
+from app.api.endpoints.wazzup_webhook import router as wazzup_webhook_router
+from app.api.endpoints.wallet import router as wallet_router
+from app.api.endpoints.credentials import router as credentials_router
+from app.api.endpoints.integration_hub import (
+    oauth_router as integration_oauth_router,
+    router as integration_hub_router,
+)
+from app.api.endpoints.playground import router as playground_router
 from app.api.endpoints.whatsapp import router as whatsapp_router
 from app.api.routers.auth import router as auth_extensions_router
 from app.api.routers.bots import router as bots_list_router
@@ -70,6 +79,7 @@ api_v1_router.include_router(analytics_router)
 api_v1_router.include_router(admin_router)
 api_v1_router.include_router(team_router)
 api_v1_router.include_router(webhooks_router)
+api_v1_router.include_router(wazzup_webhook_router)
 api_v1_router.include_router(knowledge_base_router)
 api_v1_router.include_router(knowledge_router)
 api_v1_router.include_router(llm_models_router)
@@ -89,6 +99,8 @@ api_v1_router.include_router(flow_execution_router)
 api_v1_router.include_router(crm_integrations_router)
 api_v1_router.include_router(bot_app_integrations_router)
 api_v1_router.include_router(db_connections_router)
+api_v1_router.include_router(google_oauth_router)
+api_v1_router.include_router(integration_oauth_router)
 api_v1_router.include_router(security_audit_logs_router)
 api_v1_router.include_router(crm_pipelines_router)
 api_v1_router.include_router(crm_accounts_router)
@@ -113,4 +125,8 @@ api_v1_router.include_router(chats_router)
 api_v1_router.include_router(chat_router)
 api_v1_router.include_router(sandbox_router)
 api_v1_router.include_router(test_chat_router)
+api_v1_router.include_router(wallet_router)
+api_v1_router.include_router(credentials_router)
+api_v1_router.include_router(integration_hub_router)
+api_v1_router.include_router(playground_router)
 api_v1_router.include_router(operator_ws_router)

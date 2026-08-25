@@ -29,6 +29,7 @@ from app.services.billing.wallet_service import wallet_service
 from app.services.pricing_service import USD_TO_KZT
 from app.services.stripe_service import StripeNotConfigured, stripe_service
 from app.services.tiptop_service import TipTopNotConfigured, tiptop_service
+from app.services.billing.payment_method_service import payment_method_service
 
 WALLET_TX_DEPOSIT = "DEPOSIT"
 WALLET_TX_SUBSCRIPTION_GRANT = "SUBSCRIPTION_GRANT"
@@ -199,6 +200,24 @@ class PaymentBillingService:
                 logger.info(
                     "Payment.wallet_credit_idempotent | invoice={id}",
                     id=invoice.id,
+                )
+            try:
+                from app.services.token_wallet_service import token_wallet_service
+
+                tokens = int(invoice.tokens_allocated or 0)
+                if tokens > 0:
+                    await token_wallet_service.credit_topup(
+                        db,
+                        org_id=invoice.organization_id,
+                        amount_tokens=tokens,
+                        idempotency_key=ref,
+                        metadata={"invoice_id": str(invoice.id), "provider": provider_norm},
+                    )
+            except Exception as token_exc:
+                logger.warning(
+                    "Payment.token_credit_skipped | invoice={id} error={error}",
+                    id=invoice.id,
+                    error=str(token_exc),
                 )
 
             if invoice.item_type == "subscription":
@@ -439,6 +458,7 @@ class PaymentBillingService:
         success_url: str | None = None,
         cancel_url: str | None = None,
         tiptop_token: str | None = None,
+        widget_mode: bool = False,
     ) -> dict[str, Any]:
         """
         Production wallet top-up via Stripe (USD/KZT) or TipTop Pay (KZT).
@@ -548,10 +568,38 @@ class PaymentBillingService:
             raise TipTopNotConfigured("TIPTOP_PUBLIC_ID / TIPTOP_API_SECRET are not configured")
 
         description = f"MP.AI wallet top-up {kzt_amount} KZT"
+
+        if widget_mode:
+            await db.commit()
+            return {
+                "status": "widget",
+                "invoice_id": str(invoice.id),
+                "message": "TipTop widget session ready.",
+                "widget_params": {
+                    "public_id": tiptop_service._public_id(),
+                    "amount": float(kzt_amount),
+                    "currency": "KZT",
+                    "invoice_id": str(invoice.id),
+                    "description": description,
+                },
+            }
+
         if use_saved_card:
+            charge_token = (tiptop_token or "").strip()
+            if not charge_token:
+                saved_pm = await payment_method_service.get_default_token(
+                    db,
+                    org_id,
+                    provider=PaymentProvider.TIPTOP.value,
+                )
+                if saved_pm is None:
+                    raise ValueError(
+                        "No saved TipTop card on file. Pay via TipTop Pay once to save your card."
+                    )
+                charge_token = saved_pm.token
             charge = await tiptop_service.charge_saved_token(
                 amount_kzt=kzt_amount,
-                token=tiptop_token or "",
+                token=charge_token,
                 invoice_id=invoice.id,
                 organization_id=org_id,
                 user_email=user.email,
@@ -612,11 +660,12 @@ class PaymentBillingService:
             amount=amount_kzt,
             currency="KZT",
             provider=provider,
-            use_saved_card=bool(kwargs.get("use_saved_card", False)),
-            success_url=success_url,
-            cancel_url=cancel_url,
-            tiptop_token=kwargs.get("tiptop_token"),
-        )
+        use_saved_card=bool(kwargs.get("use_saved_card", False)),
+        success_url=success_url,
+        cancel_url=cancel_url,
+        tiptop_token=kwargs.get("tiptop_token"),
+        widget_mode=bool(kwargs.get("widget_mode", False)),
+    )
 
     async def _credit_subscription_ledger(
         self,
@@ -676,18 +725,29 @@ class PaymentBillingService:
         if payload is None:
             raise ValueError("Invalid TipTop webhook payload")
 
-        if not tiptop_service.is_completed_status(payload):
-            return {"status": "ignored", "provider": "tiptop"}
+        if not tiptop_service.is_pay_event(payload):
+            return {"status": "ignored", "provider": "tiptop", "reason": "not_a_pay_event"}
 
+        organization_id_raw = tiptop_service.extract_organization_id(payload)
+        amount_kzt = tiptop_service.extract_amount(payload)
+        invoice_raw = tiptop_service.extract_invoice_id(payload)
         external_id = tiptop_service.extract_external_payment_id(payload)
-        invoice_raw = payload.get("InvoiceId") or payload.get("invoice_id")
+
         if not external_id and invoice_raw:
             external_id = str(invoice_raw)
 
         if not external_id:
             raise ValueError("TipTop webhook missing payment identifier")
 
-        # Link order/transaction id on the pending invoice when needed.
+        logger.info(
+            "Payment.tiptop_webhook | org={org} amount={amt} invoice={inv} txn={txn}",
+            org=organization_id_raw,
+            amt=amount_kzt,
+            inv=invoice_raw,
+            txn=external_id,
+        )
+
+        invoice: PaymentInvoice | None = None
         if invoice_raw:
             try:
                 invoice_id = uuid.UUID(str(invoice_raw))
@@ -695,17 +755,74 @@ class PaymentBillingService:
                 invoice_id = None
             if invoice_id is not None:
                 invoice = await db.get(PaymentInvoice, invoice_id)
-                if invoice is not None and not invoice.external_id:
-                    invoice.external_id = external_id
-                    await db.flush()
+                if invoice is not None:
+                    if organization_id_raw:
+                        org_uuid = uuid.UUID(str(organization_id_raw))
+                        if invoice.organization_id != org_uuid:
+                            logger.warning(
+                                "Payment.tiptop_org_mismatch | invoice={inv} expected={exp} got={got}",
+                                inv=invoice.id,
+                                exp=invoice.organization_id,
+                                got=org_uuid,
+                            )
+                    if amount_kzt is not None and int(invoice.tokens_allocated) != int(amount_kzt):
+                        logger.info(
+                            "Payment.tiptop_amount_note | invoice={inv} expected={exp} webhook={wh}",
+                            inv=invoice.id,
+                            exp=invoice.tokens_allocated,
+                            wh=amount_kzt,
+                        )
+                    if not invoice.external_id:
+                        invoice.external_id = external_id
+                        await db.flush()
 
         processed = await self.process_successful_payment(
             db,
             external_payment_id=external_id,
             provider=PaymentProvider.TIPTOP.value,
         )
+
+        if not processed and invoice is not None:
+            processed = await self.process_successful_payment(
+                db,
+                external_payment_id=str(invoice.id),
+                provider=PaymentProvider.TIPTOP.value,
+            )
+
+        org_uuid: uuid.UUID | None = None
+        if organization_id_raw:
+            try:
+                org_uuid = uuid.UUID(str(organization_id_raw))
+            except ValueError:
+                org_uuid = None
+        if org_uuid is None and invoice is not None:
+            org_uuid = invoice.organization_id
+
+        card_token = tiptop_service.extract_card_token(payload)
+        if card_token and org_uuid is not None:
+            await payment_method_service.upsert_default(
+                db,
+                organization_id=org_uuid,
+                provider=PaymentProvider.TIPTOP.value,
+                token=card_token,
+                card_last_four=tiptop_service.extract_card_last_four(payload),
+                card_type=tiptop_service.extract_card_type(payload),
+            )
+            logger.info(
+                "Payment.tiptop_token_saved | org={org} last4={last4}",
+                org=org_uuid,
+                last4=tiptop_service.extract_card_last_four(payload),
+            )
+
         await db.commit()
-        return {"status": "ok", "provider": "tiptop", "processed": processed}
+        return {
+            "status": "ok",
+            "provider": "tiptop",
+            "processed": processed,
+            "organization_id": str(org_uuid) if org_uuid else organization_id_raw,
+            "amount": float(amount_kzt) if amount_kzt is not None else None,
+            "token_saved": bool(card_token and org_uuid),
+        }
 
     async def handle_payments_webhook(
         self,

@@ -23,7 +23,7 @@ export function OrgSwitcher({ className }: { className?: string }) {
   const { showToast } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const organizations = useOrganizationStore((s) => s.organizations);
+  const organizations = useOrganizationStore((s) => s.organizations) ?? [];
   const currentOrgId = useOrganizationStore((s) => s.currentOrgId);
   const planName = useOrganizationStore((s) => s.planName);
   const loading = useOrganizationStore((s) => s.loading);

@@ -867,16 +867,27 @@ async def similarity_search(
         top_k=top_k,
     )
 
+    timeout = float(getattr(settings, "RAG_SEARCH_TIMEOUT_SECONDS", 8.0))
     try:
-        query_embedding = await embed_text(query)
-        return await asyncio.to_thread(
-            _sync_query_chunks,
-            knowledge_base_id,
-            query_embedding,
-            top_k,
-            allowed_document_ids,
-            excluded_document_ids,
+        query_embedding = await asyncio.wait_for(embed_text(query), timeout=timeout)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _sync_query_chunks,
+                knowledge_base_id,
+                query_embedding,
+                top_k,
+                allowed_document_ids,
+                excluded_document_ids,
+            ),
+            timeout=timeout,
         )
+    except asyncio.TimeoutError:
+        logger.error(
+            "VectorDB.timeout | knowledge_base_id={kb_id} timeout={t}s",
+            kb_id=knowledge_base_id,
+            t=timeout,
+        )
+        return []
     except Exception as exc:
         logger.exception(
             "VectorDB.similarity_search_failed | knowledge_base_id={kb_id} error={error}",
@@ -899,18 +910,29 @@ async def similarity_search_detailed(
     if not query.strip():
         return []
 
+    timeout = float(getattr(settings, "RAG_SEARCH_TIMEOUT_SECONDS", 8.0))
     try:
-        query_embedding = await embed_text(query)
-        return await asyncio.to_thread(
-            _sync_query_chunks_detailed,
-            knowledge_base_id,
-            query_embedding,
-            top_k,
-            allowed_document_ids,
-            excluded_document_ids,
-            organization_id,
-            min_score,
+        query_embedding = await asyncio.wait_for(embed_text(query), timeout=timeout)
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _sync_query_chunks_detailed,
+                knowledge_base_id,
+                query_embedding,
+                top_k,
+                allowed_document_ids,
+                excluded_document_ids,
+                organization_id,
+                min_score,
+            ),
+            timeout=timeout,
         )
+    except asyncio.TimeoutError:
+        logger.error(
+            "VectorDB.timeout | knowledge_base_id={kb_id} timeout={t}s",
+            kb_id=knowledge_base_id,
+            t=timeout,
+        )
+        return []
     except Exception as exc:
         logger.exception(
             "VectorDB.similarity_search_detailed_failed | knowledge_base_id={kb_id} error={error}",

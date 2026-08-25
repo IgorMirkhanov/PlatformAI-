@@ -278,6 +278,23 @@ async def _capture_lead_async(client_id: uuid.UUID, bot_id: uuid.UUID) -> dict[s
                     "contact_id": str(contact.id),
                 }
 
+            # Deal idempotency under lock: parallel first-message tasks share one open deal.
+            from app.core.pg_locks import LOCK_NS_CRM_CAPTURE, pg_advisory_xact_lock_uuid
+            from app.repositories.crm.deal_repository import deal_repository
+
+            await pg_advisory_xact_lock_uuid(db, LOCK_NS_CRM_CAPTURE, contact.id)
+            deals = deal_repository(db, organization_id=organization_id)
+            existing_deal = await deals.get_latest_open_for_contact(contact.id)
+            if existing_deal is not None:
+                await db.commit()
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "open_deal_already_exists",
+                    "contact_id": str(contact.id),
+                    "deal_id": str(existing_deal.id),
+                }
+
             pipelines = pipeline_repository(db, organization_id=organization_id)
             pipeline = await pipelines.get_default()
             if pipeline is None:

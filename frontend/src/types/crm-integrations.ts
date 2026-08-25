@@ -3,9 +3,11 @@ import type { CRMPlatform } from "@/types/crm";
 /** Full Integrations-tab catalog (screenshot parity). */
 export type AppIntegrationPlatform =
   | CRMPlatform
+  | "kommo"
   | "google_calendar"
   | "kaspi_receipts"
   | "kaspi_pay"
+  | "custom_webhook"
   | "jivo"
   | "uon";
 
@@ -25,12 +27,23 @@ export interface CRMIntegrationDefinition {
 export const CRM_INTEGRATION_DEFINITIONS: CRMIntegrationDefinition[] = [
   {
     id: "amocrm",
-    title: "AmoCRM",
+    title: "amoCRM",
     description:
       "ИИ-агент создаёт и заполняет карточки клиентов, двигает этапы сделок.",
     brandColor: "#0061FF",
     brandGradient: "from-[#0061FF]/20 via-[#0061FF]/5 to-transparent",
     accentRing: "ring-[#0061FF]/30",
+    available: true,
+    availability: "available",
+  },
+  {
+    id: "kommo",
+    title: "Kommo",
+    description:
+      "ИИ-агент создаёт лиды и двигает сделки в Kommo (бывший amoCRM Global).",
+    brandColor: "#4CAF50",
+    brandGradient: "from-[#4CAF50]/20 via-[#4CAF50]/5 to-transparent",
+    accentRing: "ring-[#4CAF50]/30",
     available: true,
     availability: "available",
   },
@@ -78,6 +91,17 @@ export const CRM_INTEGRATION_DEFINITIONS: CRMIntegrationDefinition[] = [
     availability: "available",
   },
   {
+    id: "custom_webhook",
+    title: "Custom Integration",
+    description:
+      "Отправка событий агента на ваш URL с HMAC-подписью для кастомных сценариев.",
+    brandColor: "#A855F7",
+    brandGradient: "from-[#A855F7]/20 via-[#6366F1]/5 to-transparent",
+    accentRing: "ring-[#A855F7]/30",
+    available: true,
+    availability: "available",
+  },
+  {
     id: "jivo",
     title: "Jivo",
     description:
@@ -86,7 +110,7 @@ export const CRM_INTEGRATION_DEFINITIONS: CRMIntegrationDefinition[] = [
     brandGradient: "from-[#FFE566]/25 via-[#111]/5 to-transparent",
     accentRing: "ring-[#FFE566]/30",
     available: true,
-    availability: "available",
+    availability: "on_request",
   },
   {
     id: "uon",
@@ -97,7 +121,7 @@ export const CRM_INTEGRATION_DEFINITIONS: CRMIntegrationDefinition[] = [
     brandGradient: "from-[#00A0E3]/20 via-[#00A0E3]/5 to-transparent",
     accentRing: "ring-[#00A0E3]/30",
     available: true,
-    availability: "available",
+    availability: "on_request",
   },
 ];
 
@@ -138,5 +162,8 @@ export interface AppIntegrationConnectPayload {
   min_amount_kzt?: number;
   payment_base_url?: string;
   sync_enabled?: boolean;
+  webhook_target_url?: string;
+  webhook_secret?: string;
+  hmac_secret?: string;
 }
 

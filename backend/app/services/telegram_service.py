@@ -380,6 +380,7 @@ class TelegramService:
         bot_id: uuid.UUID | None = None,
         client_id: uuid.UUID | None = None,
         db: AsyncSession | None = None,
+        parse_mode: str | None = None,
     ) -> None:
         """POST https://api.telegram.org/bot<token>/sendMessage with chat_id + text."""
         url = f"{settings.TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
@@ -387,6 +388,8 @@ class TelegramService:
             "chat_id": chat_id,
             "text": text[:4096],
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
 
         if buttons:
             payload["reply_markup"] = {

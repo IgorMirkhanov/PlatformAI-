@@ -23,10 +23,13 @@ class LLMCompletion:
     output_tokens: int = 0
     total_tokens: int = 0
     used_fallback: bool = False
+    used_platform_fallback: bool = False
     primary_model: str | None = None
     fallback_model: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
     raw_message: Any = None
+    tools_executed: list[str] | None = None
+    booking_tools_succeeded: bool = False
 
 
 class TransientLLMError(Exception):

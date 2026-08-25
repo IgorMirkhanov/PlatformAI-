@@ -2,15 +2,34 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+from dataclasses import dataclass
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, or_, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
+from sqlalchemy.sql import literal_column
 
 from app.models.core_models import UserRole
 from app.models.crm.deal import CrmDeal, DealStatus
 from app.repositories.crm.base_crm_repository import BaseCrmRepository
+
+
+def compute_dedup_key(
+    organization_id: uuid.UUID,
+    channel_type: str,
+    external_chat_id: str,
+) -> str:
+    raw = f"{organization_id}|{(channel_type or '').strip().lower()}|{(external_chat_id or '').strip()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@dataclass(slots=True)
+class DealUpsertResult:
+    deal_id: uuid.UUID
+    was_inserted: bool
 
 
 class DealRepository(BaseCrmRepository[CrmDeal]):
@@ -177,6 +196,48 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
             .limit(1)
         )
         return await self.session.scalar(stmt)
+
+    async def upsert_idempotent(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        dedup_key: str,
+        title: str,
+        pipeline_id: uuid.UUID,
+        stage_id: uuid.UUID,
+        bot_id: uuid.UUID | None = None,
+        crm_integration_id: uuid.UUID | None = None,
+        source: str | None = None,
+        custom_fields: dict | None = None,
+    ) -> DealUpsertResult:
+        fields = dict(custom_fields or {})
+        if crm_integration_id is not None:
+            fields["crm_integration_id"] = str(crm_integration_id)
+        deal_id = uuid.uuid4()
+        stmt = (
+            pg_insert(CrmDeal)
+            .values(
+                id=deal_id,
+                organization_id=organization_id,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                bot_id=bot_id,
+                title=title[:255],
+                status=DealStatus.OPEN.value,
+                source=(source or "inbound")[:50],
+                dedup_key=dedup_key,
+                custom_fields=fields,
+            )
+            .on_conflict_do_update(
+                index_elements=["organization_id", "dedup_key"],
+                index_where=text("dedup_key IS NOT NULL"),
+                set_={"updated_at": func.now()},
+            )
+            .returning(CrmDeal.id, literal_column("(xmax = 0)").label("was_inserted"))
+        )
+        row = (await self.session.execute(stmt)).one()
+        await self.session.flush()
+        return DealUpsertResult(deal_id=row[0], was_inserted=bool(row.was_inserted))
 
 
 def deal_repository(

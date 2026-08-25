@@ -44,11 +44,29 @@ async def lifespan(app: FastAPI):
 
     validate_encryption_at_startup()
     init_otel(app)
+    missing_secrets = settings.validate_production_secrets()
+    if missing_secrets:
+        logger.error(
+            "Application.startup_missing_secrets | missing={missing}",
+            missing=",".join(missing_secrets),
+        )
+    audit = settings.integration_secrets_audit()
+    present = sorted(k for k, ok in audit.items() if ok)
+    absent = sorted(k for k, ok in audit.items() if not ok)
     logger.info(
         "Application.startup | env={env} tenant_base={tenant} cors={cors}",
         env=settings.ENVIRONMENT,
         tenant=settings.TENANT_BASE_DOMAIN,
         cors=settings.cors_allow_origins,
+    )
+    logger.info(
+        "Application.integration_audit | {report}",
+        report=settings.format_integration_secrets_audit(),
+    )
+    logger.info(
+        "Application.integration_audit_summary | connected={present} missing={absent}",
+        present=present,
+        absent=absent,
     )
     try:
         logger.info("[STARTUP] Запуск TelegramWebhookManager...")
@@ -158,11 +176,14 @@ async def request_validation_exception_handler(
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     if exc.status_code >= 400:
         _mark_request_error(request)
-    headers = dict(exc.headers) if exc.headers else None
+    cid = _correlation_id(request)
+    headers = dict(exc.headers) if exc.headers else {}
+    if cid:
+        headers.setdefault("X-Correlation-ID", cid)
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
-        headers=headers,
+        content={"detail": exc.detail, "correlation_id": cid},
+        headers=headers or None,
     )
 
 
@@ -286,6 +307,9 @@ app.add_middleware(
 )
 
 app.include_router(api_v1_router)
+from app.api.endpoints.webhooks import wazzup_public_router
+
+app.include_router(wazzup_public_router)
 mount_fastapi_users(app)
 
 from app.core.metrics import metrics_router

@@ -21,7 +21,8 @@
 
 - Access tokens are JWT; refresh tokens rotate via `POST /api/v1/auth/refresh`.
 - Multi-org: send `X-Tenant-ID: <organization uuid>` or use the workspace switcher.
-- Password reset: `POST /api/v1/auth/forgot-password` (email is stubbed to logs in v1).
+- Password reset: `POST /api/v1/auth/forgot-password` (email is stubbed to logs in v1 — see [limitations](/legal/limitations) in the product).
+- Legal: Privacy, Terms, Support, and Help are linked in the product footer.
 
 ## Next
 

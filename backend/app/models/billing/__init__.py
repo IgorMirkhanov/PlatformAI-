@@ -9,6 +9,8 @@ from app.models.billing.organization_subscription import (
     OrganizationSubscriptionStatus,
 )
 from app.models.billing.organization_wallet import OrganizationWallet
+from app.models.wallet import WalletTransaction, WalletTxType, WalletStatus
+from app.models.billing.payment_method import OrganizationPaymentMethod
 from app.models.billing.payment_invoice import (
     PaymentInvoice,
     PaymentInvoiceStatus,
@@ -16,17 +18,18 @@ from app.models.billing.payment_invoice import (
     PaymentProvider,
 )
 
-WalletTransaction = CreditTransaction
-
 __all__ = [
     "CreditTransaction",
     "OrganizationInvite",
     "OrganizationSubscription",
     "OrganizationSubscriptionStatus",
     "OrganizationWallet",
+    "OrganizationPaymentMethod",
     "PaymentInvoice",
     "PaymentInvoiceStatus",
     "PaymentItemType",
     "PaymentProvider",
     "WalletTransaction",
+    "WalletTxType",
+    "WalletStatus",
 ]

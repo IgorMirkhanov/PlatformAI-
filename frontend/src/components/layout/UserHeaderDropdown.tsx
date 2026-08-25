@@ -8,6 +8,7 @@ import {
   Building2,
   ChevronDown,
   CreditCard,
+  CircleHelp,
   Loader2,
   LogOut,
   Plus,
@@ -244,6 +245,14 @@ export function UserHeaderDropdown() {
                   <Settings className="h-4 w-4 text-violet-400" />
                   Настройки
                 </button>
+                <Link
+                  href="/dashboard/help"
+                  onClick={() => setOpen(false)}
+                  className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-zinc-300 transition hover:bg-zinc-900/80"
+                >
+                  <CircleHelp className="h-4 w-4 text-violet-400" />
+                  Справка
+                </Link>
                 <Link
                   href="/dashboard/settings/team"
                   onClick={() => setOpen(false)}

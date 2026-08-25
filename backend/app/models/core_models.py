@@ -363,6 +363,19 @@ class Bot(Base):
         default="gpt-4o-mini",
         server_default="gpt-4o-mini",
     )
+    fallback_model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    rag_collection_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ai_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    crm_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("integrations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    low_balance_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     llm_temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
     message_split: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     message_buffer_delay: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
@@ -567,6 +580,9 @@ class Client(Base):
     first_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     current_step_id: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     is_paused_by_operator: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    conversation_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
 
     bot: Mapped["Bot"] = relationship(back_populates="clients")
     messages: Mapped[list["ChatMessage"]] = relationship(
