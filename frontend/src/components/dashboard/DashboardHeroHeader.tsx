@@ -1,44 +1,31 @@
 "use client";
 
-import { Building2, Crown, Plus, Wallet } from "lucide-react";
+import { Bot, Building2, Plus, Wallet } from "lucide-react";
 
-import { formatBillingCurrency, getPlanProgressPercent } from "@/lib/billing-utils";
-import { cn } from "@/lib/utils";
-import { PLAN_BADGE_STYLES, type BillingCurrency, type SubscriptionPlanName } from "@/types/billing";
+import { formatBillingCurrency } from "@/lib/billing-utils";
+import type { BillingCurrency } from "@/types/billing";
 
 interface DashboardHeroHeaderProps {
   companyName: string;
   workspaceId: string;
   balance: number;
   currency: BillingCurrency;
-  plan: SubscriptionPlanName;
-  daysRemaining: number | null;
   agentsUsed: number;
-  agentsLimit: number;
+  subscribedAgents: number;
   onTopUpClick: () => void;
 }
-
-const PLAN_LABELS: Record<SubscriptionPlanName, string> = {
-  FREE: "FREE Plan",
-  PRO: "PRO Plan",
-  ENTERPRISE: "ENTERPRISE Plan",
-};
 
 export function DashboardHeroHeader({
   companyName,
   workspaceId,
   balance,
   currency,
-  plan,
-  daysRemaining,
   agentsUsed,
-  agentsLimit,
+  subscribedAgents,
   onTopUpClick,
 }: DashboardHeroHeaderProps) {
-  const planStyles = PLAN_BADGE_STYLES[plan];
-  const progress = getPlanProgressPercent(daysRemaining, plan);
-  const limitLabel =
-    agentsLimit >= 999 ? `${agentsUsed} ботов` : `Использовано ${agentsUsed} из ${agentsLimit} ботов`;
+  const progress =
+    agentsUsed <= 0 ? 0 : Math.min(100, Math.round((subscribedAgents / agentsUsed) * 100));
 
   return (
     <section className="grid gap-4 xl:grid-cols-[1.4fr_1fr_1fr]">
@@ -89,39 +76,27 @@ export function DashboardHeroHeader({
         </div>
       </article>
 
-      <article
-        className={cn(
-          "rounded-2xl border bg-[#121214] p-6",
-          planStyles.border,
-        )}
-      >
+      <article className="rounded-2xl border border-violet-500/20 bg-[#121214] p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
-              Подписка
+              Подписки агентов
             </p>
             <div className="mt-2 flex items-center gap-2">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
-                  planStyles.badge,
-                )}
-              >
-                <Crown className="h-3.5 w-3.5" />
-                {PLAN_LABELS[plan]}
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-500/10 px-2.5 py-1 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/25">
+                <Bot className="h-3.5 w-3.5" />
+                {subscribedAgents} из {agentsUsed}
               </span>
             </div>
-            <p className={cn("mt-3 text-sm font-medium", planStyles.accent)}>{limitLabel}</p>
+            <p className="mt-3 text-sm font-medium text-violet-200">
+              Без подписки агент настраивается, но не отвечает в чате
+            </p>
           </div>
         </div>
 
         <div className="mt-5">
           <div className="mb-2 flex items-center justify-between text-[11px] text-zinc-500">
-            <span>
-              {daysRemaining !== null
-                ? `Осталось ${daysRemaining} дн.`
-                : "Бессрочный период"}
-            </span>
+            <span>Активные подписки</span>
             <span>{progress}%</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">

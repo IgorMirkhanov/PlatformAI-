@@ -37,9 +37,35 @@ class AnthropicProvider(_UnconfiguredProvider):
 
 
 @LLMProviderFactory.register("gemini")
-class GeminiProvider(_UnconfiguredProvider):
+class GeminiProvider(OpenAIProvider):
+    """Google AI Studio Gemini via the OpenAI-compatible Chat Completions API."""
+
     provider_id = "gemini"
-    _label = "gemini"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str | None = None,
+        timeout_seconds: float | None = None,
+        client: Any | None = None,
+        base_url: str | None = None,
+        provider_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key
+            if api_key is not None
+            else getattr(settings, "GEMINI_API_KEY", None),
+            model=model
+            or getattr(settings, "GEMINI_CHAT_MODEL", None)
+            or "gemini-2.5-flash",
+            timeout_seconds=timeout_seconds,
+            client=client,
+            base_url=base_url
+            or getattr(settings, "GEMINI_BASE_URL", None)
+            or "https://generativelanguage.googleapis.com/v1beta/openai/",
+            provider_id=provider_id or "gemini",
+        )
 
 
 @LLMProviderFactory.register("ollama")

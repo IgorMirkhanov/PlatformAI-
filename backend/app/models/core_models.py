@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -388,6 +389,16 @@ class Bot(Base):
         nullable=True,
     )
     low_balance_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Per-bot SaaS: chat requires an active subscription; settings stay editable either way.
+    subscription_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    subscription_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    wallet_balance: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
     llm_temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.5, server_default="0.5")
     message_split: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     message_buffer_delay: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")

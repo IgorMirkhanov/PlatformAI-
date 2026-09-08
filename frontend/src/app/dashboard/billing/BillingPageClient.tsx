@@ -134,11 +134,9 @@ export default function BillingPageClient() {
             </p>
           </div>
           <div className="rounded-2xl border border-zinc-800 bg-black/40 px-4 py-3 text-right">
-            <p className="text-[10px] uppercase tracking-wide text-zinc-500">Plan</p>
-            <p className="mt-1 text-lg font-semibold text-zinc-100">
-              {billing?.plan_name ?? "FREE"}
-            </p>
-            <p className="mt-1 text-xs text-zinc-500">{billing?.status ?? "—"}</p>
+            <p className="text-[10px] uppercase tracking-wide text-zinc-500">Организация</p>
+            <p className="mt-1 text-lg font-semibold text-zinc-100">Кошелёк</p>
+            <p className="mt-1 text-xs text-zinc-500">Подписка оформляется на каждого агента</p>
           </div>
         </div>
       </section>

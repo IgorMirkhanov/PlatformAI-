@@ -97,10 +97,8 @@ export default function DashboardPage() {
 
   const currency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
   const balance = billing?.balance ?? stats?.subscription_balance ?? 0;
-  const plan = billing?.plan_name ?? stats?.subscription_plan ?? "FREE";
-  const daysRemaining = billing?.days_remaining ?? null;
   const agentsUsed = stats?.agents.length ?? 0;
-  const agentsLimit = billing?.active_agents_limit ?? Math.max(agentsUsed, 1);
+  const subscribedAgents = stats?.agents.filter((agent) => agent.subscription_active).length ?? 0;
   const companyName = currentUser?.company_name ?? "Рабочая группа MP.AI";
   const workspaceId = currentUser?.company_id ?? currentUser?.id ?? "workspace";
 
@@ -123,10 +121,8 @@ export default function DashboardPage() {
         workspaceId={workspaceId}
         balance={balance}
         currency={currency}
-        plan={plan}
-        daysRemaining={daysRemaining}
         agentsUsed={agentsUsed}
-        agentsLimit={agentsLimit}
+        subscribedAgents={subscribedAgents}
         onTopUpClick={() => setTopUpOpen(true)}
       />
 

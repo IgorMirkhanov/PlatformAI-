@@ -25,6 +25,11 @@ from app.models.core_models import (
 )
 from app.schemas.media_schemas import MediaAttachment
 from app.schemas.sandbox_schemas import LLMMetricsTrace, RAGChunkTrace
+from app.services.bot_billing_service import (
+    BotSubscriptionInactiveError,
+    BotWalletInsufficientError,
+    bot_billing_service,
+)
 from app.services.diagnostic_log_service import diagnostic_log_service
 from app.services.execution_trace import ExecutionTraceBuilder
 from app.services.knowledge_base_service import knowledge_base_service
@@ -145,6 +150,9 @@ class AIOrchestrator:
     )
     FUNDS_FALLBACK_MESSAGE = (
         "AI agent is temporarily unavailable. Transferring to an operator."
+    )
+    SUBSCRIPTION_FALLBACK_MESSAGE = (
+        "У этого агента нет активной подписки. Настройки доступны, ответы в мессенджерах отключены."
     )
     # Used when tools succeed but the model returns empty content (common with tool-only turns).
     TOOL_SUCCESS_CONFIRMATION_MESSAGE = (
@@ -343,6 +351,13 @@ class AIOrchestrator:
                 error=str(exc),
             )
             return OrchestratorResult(text=await self._low_balance_reply(db_session, bot_id))
+        except BotSubscriptionInactiveError as exc:
+            logger.warning(
+                "AIOrchestrator.subscription_inactive | client_id={client_id} bot_id={bot_id}",
+                client_id=client_id,
+                bot_id=bot_id,
+            )
+            return OrchestratorResult(text=str(exc) or self.SUBSCRIPTION_FALLBACK_MESSAGE)
         except TransientLLMError as exc:
             if propagate_transient:
                 raise
@@ -535,6 +550,19 @@ class AIOrchestrator:
                     dry_run=dry_run,
                 )
             return completion.text, metrics
+        except BotSubscriptionInactiveError as exc:
+            fallback = str(exc) or self.SUBSCRIPTION_FALLBACK_MESSAGE
+            fallback_metrics = LLMMetricsTrace(
+                model_name=resolved_model,
+                system_prompt=merged_prompt or "You are a helpful support assistant.",
+                user_query=incoming_message.strip(),
+                raw_response=fallback,
+                temperature=resolved_temperature,
+            )
+            if trace is not None:
+                trace.record_error("bot_subscription_inactive")
+                trace.record_llm_metrics(fallback_metrics)
+            return fallback, fallback_metrics
         except (
             InsufficientFundsError,
             WalletInsufficientFundsError,
@@ -634,13 +662,23 @@ class AIOrchestrator:
         *,
         node_id: str | None = None,
     ) -> None:
-        if getattr(settings, "is_free_llm_route", False):
-            return
-
         bot_result = await db_session.execute(select(Bot).where(Bot.id == bot_id))
         bot = bot_result.scalar_one_or_none()
         if bot is None:
             return
+
+        try:
+            bot_billing_service.ensure_subscription(bot)
+        except BotSubscriptionInactiveError as exc:
+            await diagnostic_log_service.log(
+                db_session,
+                bot_id=bot_id,
+                client_id=client_id,
+                error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
+                error_message=str(exc),
+                node_id=node_id,
+            )
+            raise
 
         org_id = getattr(bot, "organization_id", None)
         if org_id is not None:
@@ -657,55 +695,23 @@ class AIOrchestrator:
                 )
                 raise OrganizationSuspendedError(message)
 
-            from app.core.metrics import record_wallet_blocked
-            from app.services.token_wallet_service import token_wallet_service
-
-            token_check = await token_wallet_service.check_wallet_before_generation(
-                db_session, org_id
-            )
-            if not token_check.allowed:
-                record_wallet_blocked("precheck")
-                message = (bot.low_balance_message or "").strip() or (
-                    "Subscription balance depleted. Top up to resume AI responses."
-                )
-                await diagnostic_log_service.log(
-                    db_session,
-                    bot_id=bot_id,
-                    client_id=client_id,
-                    error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
-                    error_message=message,
-                    node_id=node_id,
-                )
-                raise InsufficientFundsError(message)
-
-        subscription_result = await db_session.execute(
-            select(Subscription)
-            .where(
-                Subscription.user_id == bot.user_id,
-                Subscription.status == SubscriptionStatus.ACTIVE,
-            )
-            .order_by(Subscription.created_at.desc())
-            .limit(1)
-        )
-        subscription = subscription_result.scalar_one_or_none()
-        if subscription is None:
-            # Token wallet already passed (or org has no wallet gate); do not block on missing KZT plan.
+        if getattr(settings, "is_free_llm_route", False):
             return
 
-        if float(subscription.balance) > 0:
-            return
-
-        if org_id is not None:
-            try:
-                from app.services.billing.wallet_service import wallet_service as credit_wallet
-
-                credit_balance = await credit_wallet.get_balance(db_session, org_id)
-                if int(credit_balance) > 0:
-                    return
-            except Exception:
-                pass
-        # Token pre-check already allowed this org; skip KZT hard-fail.
-        return
+        try:
+            await bot_billing_service.ensure_chat_allowed(
+                db_session, bot_id, required_credits=1
+            )
+        except BotWalletInsufficientError as exc:
+            await diagnostic_log_service.log(
+                db_session,
+                bot_id=bot_id,
+                client_id=client_id,
+                error_type=DiagnosticErrorType.INSUFFICIENT_FUNDS,
+                error_message=str(exc),
+                node_id=node_id,
+            )
+            raise InsufficientFundsError(str(exc)) from exc
 
     async def _record_llm_usage_and_debit(
         self,
@@ -805,6 +811,7 @@ class AIOrchestrator:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 reference_id=reference_id,
+                bot_id=bot_id,
             )
             await record_llm_usage_event(
                 db_session,
@@ -1428,6 +1435,8 @@ class AIOrchestrator:
             )
         except InsufficientCreditsForLLMError as exc:
             raise InsufficientFundsError(str(exc)) from exc
+        except BotSubscriptionInactiveError:
+            raise
 
         text = (response.content or "").strip()
         tools_executed: list[str] = []
@@ -1598,6 +1607,8 @@ class AIOrchestrator:
                         tools=openai_tools,
                     )
                 except InsufficientFundsError:
+                    raise
+                except BotSubscriptionInactiveError:
                     raise
                 except Exception as exc:
                     logger.error(

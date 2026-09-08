@@ -2,7 +2,6 @@
 
 import { Bot } from "lucide-react";
 
-import { formatPlanExpiryLabel, formatRenewalDate, getPlanProgressPercent } from "@/lib/billing-utils";
 import type { BillingStatusResponse } from "@/types/billing";
 
 interface BillingAgentsPanelProps {
@@ -11,16 +10,13 @@ interface BillingAgentsPanelProps {
 }
 
 export function BillingAgentsPanel({ billing, activeAgentsCount }: BillingAgentsPanelProps) {
-  const progress = getPlanProgressPercent(billing.days_remaining, billing.plan_name);
-  const renewalDate = formatRenewalDate(billing.expires_at);
-
   return (
     <section className="rounded-2xl border border-zinc-800/80 bg-zinc-950/60 p-6 backdrop-blur-xl">
       <div className="mb-5 flex items-center gap-2">
         <Bot className="h-4 w-4 text-violet-400" />
         <div>
-          <h3 className="text-sm font-semibold text-zinc-100">Агенты в подписке</h3>
-          <p className="text-xs text-zinc-500">Лимиты активных AI-агентов по текущему тарифу</p>
+          <h3 className="text-sm font-semibold text-zinc-100">Агенты</h3>
+          <p className="text-xs text-zinc-500">Подписка и баланс считаются отдельно на каждого бота</p>
         </div>
       </div>
 
@@ -38,22 +34,12 @@ export function BillingAgentsPanel({ billing, activeAgentsCount }: BillingAgents
           </div>
           <div className="text-right">
             <p className="text-[10px] uppercase tracking-wide text-zinc-500">Подписка</p>
-            <p className="mt-1 text-sm font-semibold text-violet-200">{billing.plan_name}</p>
+            <p className="mt-1 text-sm font-semibold text-violet-200">На каждого агента</p>
             <p className="mt-1 text-xs text-zinc-500">
-              {formatPlanExpiryLabel(billing.expires_at, billing.days_remaining)}
+              Без подписки бот настраивается, но не отвечает в чате
             </p>
           </div>
         </div>
-
-        <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-zinc-800/80">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-violet-600 to-indigo-500"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-        {renewalDate ? (
-          <p className="mt-3 text-xs text-zinc-500">Подписка будет продлена {renewalDate}</p>
-        ) : null}
       </div>
     </section>
   );

@@ -10,6 +10,8 @@ export interface AgentStatusSummary {
   flow_published: boolean;
   unique_dialogs: number;
   connected_channels: string[];
+  subscription_active?: boolean;
+  wallet_balance?: number;
 }
 
 export interface DailyChartPoint {

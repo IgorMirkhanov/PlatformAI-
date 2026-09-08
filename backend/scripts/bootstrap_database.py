@@ -15,6 +15,7 @@ import uuid
 
 from loguru import logger
 from sqlalchemy import func, inspect, select, text
+from sqlalchemy.orm import noload
 
 from app.core.database import Base, async_session_factory, engine
 from app.core.security import hash_password
@@ -134,12 +135,19 @@ async def seed_superadmin_if_empty() -> User | None:
                 "Bootstrap.superadmin_skip | reason=users_already_exist count={count}",
                 count=count,
             )
+            # noload: User.bots uses selectin and will fail if Alembic has not
+            # added new Bot columns yet.
+            _no_user_rels = (
+                noload(User.bots),
+                noload(User.subscriptions),
+                noload(User.billing_transactions),
+            )
             existing_admin = await session.scalar(
-                select(User).where(User.is_superadmin.is_(True)).limit(1)
+                select(User).options(*_no_user_rels).where(User.is_superadmin.is_(True)).limit(1)
             )
             if existing_admin is None:
                 first = await session.scalar(
-                    select(User).order_by(User.created_at.asc()).limit(1)
+                    select(User).options(*_no_user_rels).order_by(User.created_at.asc()).limit(1)
                 )
                 if first is not None:
                     first.is_superadmin = True

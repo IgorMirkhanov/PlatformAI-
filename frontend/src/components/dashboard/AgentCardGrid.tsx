@@ -111,6 +111,13 @@ function AgentCard({
             <div className="min-w-0">
               <h3 className="truncate text-base font-semibold text-zinc-100">{agent.bot_name}</h3>
               <p className="mt-0.5 text-xs text-zinc-500">{agent.platform_type}</p>
+              <p className="mt-1 text-[11px]">
+                {agent.subscription_active ? (
+                  <span className="text-emerald-400">Подписка активна · баланс {agent.wallet_balance ?? 0}</span>
+                ) : (
+                  <span className="text-amber-400">Нет подписки — чат отключён</span>
+                )}
+              </p>
             </div>
             <AgentCardActions
               botId={agent.bot_id}

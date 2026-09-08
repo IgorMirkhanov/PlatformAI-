@@ -48,7 +48,7 @@ async def test_bots_quota_blocks(monkeypatch):
         return SubscriptionPlanName.FREE
 
     monkeypatch.setattr(svc, "_plan", fake_plan)
-    db = _Db(count=1)
+    db = _Db(count=999)
     with pytest.raises(QuotaExceeded) as exc:
         await svc.assert_can_create_bot(db, uuid.uuid4())  # type: ignore[arg-type]
     assert exc.value.code == "bots_limit"

@@ -4,18 +4,15 @@ import Link from "next/link";
 import { Sparkles, Wallet } from "lucide-react";
 
 import { formatBillingCurrency } from "@/lib/billing-utils";
-import { cn } from "@/lib/utils";
 import { useBotStore } from "@/store/useBotStore";
-import { DEFAULT_BILLING_CURRENCY, PLAN_BADGE_STYLES, type SubscriptionPlanName } from "@/types/billing";
+import { DEFAULT_BILLING_CURRENCY } from "@/types/billing";
 
 export function BillingSidebarWidget() {
   const billing = useBotStore((state) => state.billing);
   const billingLoading = useBotStore((state) => state.billingLoading);
 
-  const plan = billing?.plan_name ?? "FREE";
   const balance = billing?.balance ?? 0;
   const currency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
-  const planStyles = PLAN_BADGE_STYLES[plan as SubscriptionPlanName];
 
   return (
     <Link
@@ -35,11 +32,11 @@ export function BillingSidebarWidget() {
       </div>
 
       <div className="relative mt-3">
-        <p className={cn("text-xs font-bold uppercase tracking-wider", planStyles.accent)}>{plan}</p>
+        <p className="text-xs font-bold uppercase tracking-wider text-violet-300">Организация</p>
         <p className="mt-1 text-2xl font-semibold tracking-tight text-white">
           {billingLoading ? "…" : formatBillingCurrency(balance, currency)}
         </p>
-        <p className="mt-2 text-[10px] text-zinc-500">Управление подпиской</p>
+        <p className="mt-2 text-[10px] text-zinc-500">Кошелёк организации</p>
       </div>
     </Link>
   );

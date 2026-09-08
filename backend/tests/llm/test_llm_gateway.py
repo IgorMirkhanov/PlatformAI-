@@ -241,6 +241,22 @@ async def test_gateway_drops_foreign_model_hint_on_fallback() -> None:
     assert "model" not in groq._complete.await_args.kwargs
 
 
+def test_gateway_groq_primary_beats_gpt4o_mini_openai_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Platform Groq must answer gpt-4o-mini bot defaults, not OpenAI/OpenRouter."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq", raising=False)
+    monkeypatch.setattr(settings, "FALLBACK_LLM_PROVIDER", "none", raising=False)
+
+    openai = FakeProvider("openai", api_key="sk-test", model="gpt-4o-mini")
+    groq = FakeProvider("groq", api_key="gsk-test", model="openai/gpt-oss-20b")
+    gateway = ResilientLLMGateway([openai, groq])
+
+    chain = gateway.effective_chain(model="gpt-4o-mini")
+    assert chain[0].provider_id == "groq"
+    assert chain[1].provider_id == "openai"
+
+
 @pytest.mark.asyncio
 async def test_gateway_circuit_breaker_skips_open_primary() -> None:
     """After N consecutive primary failures, later calls skip primary immediately."""

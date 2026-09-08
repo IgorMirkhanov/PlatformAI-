@@ -258,6 +258,34 @@ def test_calculate_cost_free_suffix_and_paid_on_free_route(monkeypatch: pytest.M
     assert calculate_cost(settings.resolved_chat_model, 1000, 1000) == 0
 
 
+def test_effective_chat_model_rewrites_openai_aliases_on_groq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "groq", raising=False)
+    monkeypatch.setattr(settings, "GROQ_CHAT_MODEL", "openai/gpt-oss-20b", raising=False)
+    monkeypatch.setattr(settings, "OPENAI_CHAT_MODEL", "gpt-4o-mini", raising=False)
+
+    assert settings.effective_chat_model("gpt-4o-mini") == "openai/gpt-oss-20b"
+    assert settings.effective_chat_model(None) == "openai/gpt-oss-20b"
+    assert settings.effective_chat_model("claude-4.5-haiku") == "claude-4.5-haiku"
+
+
+def test_effective_chat_model_rewrites_openai_aliases_on_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(settings, "GEMINI_CHAT_MODEL", "gemini-2.5-flash", raising=False)
+    monkeypatch.setattr(settings, "OPENAI_CHAT_MODEL", "gpt-4o-mini", raising=False)
+
+    assert settings.resolved_chat_model == "gemini-2.5-flash"
+    assert settings.effective_chat_model("gpt-4o-mini") == "gemini-2.5-flash"
+    assert settings.is_free_llm_route is True
+
+
 @pytest.mark.asyncio
 async def test_post_deduct_insufficient_maps_to_llm_error() -> None:
     """Race after preflight: deduct raises → standardized 402 error."""

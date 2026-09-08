@@ -149,6 +149,9 @@ export interface AdminBotItem {
   organization_name: string | null;
   owner_email: string | null;
   is_active: boolean;
+  subscription_active?: boolean;
+  subscription_expires_at?: string | null;
+  wallet_balance?: number;
   created_at: string;
 }
 

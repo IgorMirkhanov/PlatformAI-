@@ -1725,6 +1725,39 @@ export async function adjustAdminOrganizationBalance(
   );
 }
 
+export async function adjustAdminBotBalance(
+  botId: string,
+  payload: { amount_delta: number; reason: string },
+): Promise<{
+  bot_id: string;
+  bot_name: string;
+  previous_balance: number;
+  new_balance: number;
+  amount_delta: number;
+  message: string;
+}> {
+  return apiRequest(`/api/v1/admin/bots/${encodeURIComponent(botId)}/balance`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function setAdminBotSubscription(
+  botId: string,
+  payload: { active: boolean; reason: string; expires_at?: string | null },
+): Promise<{
+  bot_id: string;
+  bot_name: string;
+  subscription_active: boolean;
+  wallet_balance: number;
+  message: string;
+}> {
+  return apiRequest(`/api/v1/admin/bots/${encodeURIComponent(botId)}/subscription`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchAdminTransactions(limit = 200): Promise<AdminTransactionListResponse> {
   return apiRequest<AdminTransactionListResponse>(
     `/api/v1/admin/transactions?limit=${limit}`,

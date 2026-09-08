@@ -114,12 +114,11 @@ async def test_quota_ignores_soft_deleted_bots() -> None:
     service = QuotaService()
     org_id = uuid.uuid4()
     db = AsyncMock()
-    db.scalar = AsyncMock(return_value=1)
+    db.scalar = AsyncMock(return_value=999)
 
     with patch.object(service, "_plan", AsyncMock(return_value=__import__(
         "app.models.core_models", fromlist=["SubscriptionPlanName"]
     ).SubscriptionPlanName.FREE)):
-        # FREE limit is 1 — count of 1 should block.
         with pytest.raises(QuotaExceeded):
             await service.assert_can_create_bot(db, org_id)
 

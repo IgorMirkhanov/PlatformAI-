@@ -16,8 +16,6 @@ import { useOrganizationStore } from "@/lib/stores/use-organization-store";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/useToast";
 import { getApiErrorMessage } from "@/store/useBotStore";
-import { PLAN_BADGE_STYLES } from "@/types/billing";
-import { PLAN_DISPLAY_LABEL } from "@/types/organization";
 
 export function OrgSwitcher({ className }: { className?: string }) {
   const { showToast } = useToast();
@@ -25,7 +23,6 @@ export function OrgSwitcher({ className }: { className?: string }) {
 
   const organizations = useOrganizationStore((s) => s.organizations) ?? [];
   const currentOrgId = useOrganizationStore((s) => s.currentOrgId);
-  const planName = useOrganizationStore((s) => s.planName);
   const loading = useOrganizationStore((s) => s.loading);
   const switching = useOrganizationStore((s) => s.switching);
   const loadOrganizations = useOrganizationStore((s) => s.loadOrganizations);
@@ -68,8 +65,6 @@ export function OrgSwitcher({ className }: { className?: string }) {
   }, [organizations, query]);
 
   const showSearch = organizations.length > 3;
-  const plan = planName ?? "FREE";
-  const planStyles = PLAN_BADGE_STYLES[plan];
 
   const handleSwitch = async (orgId: string) => {
     if (switching || orgId === currentOrgId) {
@@ -118,14 +113,7 @@ export function OrgSwitcher({ className }: { className?: string }) {
             <p className="truncate text-sm font-medium text-zinc-100">
               {currentOrg?.name ?? "Select workspace"}
             </p>
-            <span
-              className={cn(
-                "mt-0.5 inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1",
-                planStyles.badge,
-              )}
-            >
-              {PLAN_DISPLAY_LABEL[plan]}
-            </span>
+            <p className="mt-0.5 text-[10px] uppercase tracking-wide text-zinc-500">Workspace</p>
           </div>
           {switching || loading ? (
             <Loader2 className="h-4 w-4 shrink-0 animate-spin text-violet-300" />

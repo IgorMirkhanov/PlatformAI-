@@ -214,6 +214,8 @@ class DashboardService:
                     flow_published=flow_published,
                     unique_dialogs=dialogs_by_bot.get(bot.id, 0),
                     connected_channels=connected_channels,
+                    subscription_active=bool(getattr(bot, "subscription_active", False)),
+                    wallet_balance=int(getattr(bot, "wallet_balance", 0) or 0),
                 )
             )
 

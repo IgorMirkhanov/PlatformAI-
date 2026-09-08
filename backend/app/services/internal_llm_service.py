@@ -38,9 +38,11 @@ def log_llm_credentials_status(*, source: str = "internal_llm") -> None:
     openai_key = getattr(settings, "OPENAI_API_KEY", None)
     openrouter_key = getattr(settings, "OPENROUTER_API_KEY", None)
     groq_key = getattr(settings, "GROQ_API_KEY", None)
+    gemini_key = getattr(settings, "GEMINI_API_KEY", None)
     logger.info(
         "LLM.credentials | source={source} provider={provider} "
         "OPENAI_API_KEY={openai} OPENROUTER_API_KEY={openrouter} GROQ_API_KEY={groq} "
+        "GEMINI_API_KEY={gemini} "
         "primary_model={primary} fallback_provider={fb_provider} fallback_model={fb_model} "
         "base_url={base}",
         source=source,
@@ -48,6 +50,7 @@ def log_llm_credentials_status(*, source: str = "internal_llm") -> None:
         openai=_mask_key(openai_key),
         openrouter=_mask_key(openrouter_key),
         groq=_mask_key(groq_key),
+        gemini=_mask_key(gemini_key),
         primary=getattr(settings, "resolved_chat_model", None) or settings.OPENAI_CHAT_MODEL,
         fb_provider=getattr(settings, "FALLBACK_LLM_PROVIDER", None) or "-",
         fb_model=getattr(settings, "FALLBACK_LLM_MODEL", None)
@@ -105,7 +108,9 @@ async def complete_via_gateway(
 
     log_llm_credentials_status(source=source)
     gateway = get_llm_gateway(include_unconfigured=True)
-    model = normalize_model_name(model_name or DEFAULT_INTERNAL_MODEL)
+    model = normalize_model_name(
+        settings.effective_chat_model(model_name or DEFAULT_INTERNAL_MODEL)
+    )
     ref = (reference_id or "").strip() or f"{source}-{bot_id or 'na'}-{uuid.uuid4()}"
 
     try:

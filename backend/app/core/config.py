@@ -98,7 +98,9 @@ class Settings:
     OLLAMA_REQUEST_TIMEOUT_SECONDS: float = float(
         os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "60")
     )
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "auto")  # auto | openai | groq | openrouter | ollama
+    LLM_PROVIDER: str = os.getenv(
+        "LLM_PROVIDER", "auto"
+    )  # auto | openai | groq | gemini | openrouter | ollama
 
     # Groq (OpenAI-compatible, free-tier models)
     GROQ_API_KEY: str | None = os.getenv("GROQ_API_KEY") or os.getenv(
@@ -171,6 +173,11 @@ class Settings:
         or os.getenv("PLATFORM_GEMINI_FALLBACK_KEY")
         or None
     )
+    GEMINI_BASE_URL: str = os.getenv(
+        "GEMINI_BASE_URL",
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    GEMINI_CHAT_MODEL: str = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
     DEEPSEEK_API_KEY: str | None = os.getenv("DEEPSEEK_API_KEY") or os.getenv(
         "PLATFORM_DEEPSEEK_FALLBACK_KEY"
     ) or None
@@ -407,6 +414,8 @@ class Settings:
         if raw.lower() in aliases:
             if provider == "groq":
                 return (self.GROQ_CHAT_MODEL or "openai/gpt-oss-20b").strip()
+            if provider == "gemini":
+                return (self.GEMINI_CHAT_MODEL or "gemini-2.5-flash").strip()
             return (self.OPENROUTER_FREE_MODEL or "meta-llama/llama-3.2-3b-instruct:free").strip()
         if provider == "groq":
             groq_model = (self.GROQ_CHAT_MODEL or "").strip()
@@ -416,7 +425,33 @@ class Settings:
                 or raw.lower().startswith("gpt-")
             ):
                 return groq_model
+        if provider == "gemini":
+            gemini_model = (self.GEMINI_CHAT_MODEL or "").strip()
+            if gemini_model and (
+                not raw
+                or raw.lower().startswith("openai/")
+                or raw.lower().startswith("gpt-")
+            ):
+                return gemini_model
         return raw or "gpt-4o-mini"
+
+    def effective_chat_model(self, model_name: str | None = None) -> str:
+        """Rewrite legacy OpenAI aliases onto the platform vendor model."""
+        raw = (model_name or "").strip()
+        provider = (self.LLM_PROVIDER or "").strip().lower()
+        if provider in {"groq", "gemini", "ollama"}:
+            lowered = raw.lower()
+            if (
+                not raw
+                or lowered.startswith("gpt-")
+                or lowered.startswith("o1")
+                or lowered.startswith("o3")
+                or lowered.startswith("o4")
+                or lowered.startswith("openai/")
+                or lowered in {"openrouter/free", "free", "openrouter-free"}
+            ):
+                return self.resolved_chat_model
+        return raw or self.resolved_chat_model
 
     @property
     def resolved_openai_base_url(self) -> str | None:
@@ -428,6 +463,11 @@ class Settings:
             return (self.OPENROUTER_BASE_URL or "https://openrouter.ai/api/v1").rstrip("/")
         if provider == "groq":
             return (self.GROQ_BASE_URL or "https://api.groq.com/openai/v1").rstrip("/")
+        if provider == "gemini":
+            return (
+                self.GEMINI_BASE_URL
+                or "https://generativelanguage.googleapis.com/v1beta/openai/"
+            ).rstrip("/")
         return None
 
     @property
@@ -436,7 +476,7 @@ class Settings:
         provider = (self.LLM_PROVIDER or "").strip().lower()
         model = self.resolved_chat_model.lower()
         alias = (self.OPENAI_CHAT_MODEL or "").strip().lower()
-        if provider in {"groq", "ollama"}:
+        if provider in {"groq", "ollama", "gemini"}:
             return True
         if model.endswith(":free") or alias in {"openrouter/free", "free", "openrouter-free"}:
             return True
@@ -615,6 +655,7 @@ class Settings:
             "OPENAI_API_KEY": _configured(self.OPENAI_API_KEY),
             "ANTHROPIC_API_KEY": _configured(self.ANTHROPIC_API_KEY),
             "GROQ_API_KEY": _configured(self.GROQ_API_KEY),
+            "GEMINI_API_KEY": _configured(self.GEMINI_API_KEY),
             "DEEPSEEK_API_KEY": _configured(self.DEEPSEEK_API_KEY),
             "OPENROUTER_API_KEY": _configured(self.OPENROUTER_API_KEY),
             # Channels (platform defaults; tenants encrypt their own in DB)

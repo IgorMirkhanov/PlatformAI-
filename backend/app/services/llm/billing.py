@@ -21,19 +21,22 @@ async def charge_llm_credits(
     completion_tokens: int,
     reference_id: str,
     wallet_service: Any | None = None,
+    bot_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """
-    Debit organization credit wallet for one LLM completion.
+    Debit the bot credit wallet when ``bot_id`` is set, otherwise the org wallet.
 
-    Idempotent when ``reference_id`` matches an existing ledger row.
+    Idempotent when ``reference_id`` matches an existing org ledger row.
     """
     from app.services.billing.wallet_service import (
         InsufficientFundsError,
         wallet_service as default_wallet_service,
     )
+    from app.services.bot_billing_service import (
+        BotWalletInsufficientError,
+        bot_billing_service,
+    )
     from app.services.llm.base import InsufficientCreditsForLLMError
-
-    wallet = wallet_service or default_wallet_service
 
     credits = calculate_cost(model_name, prompt_tokens, completion_tokens)
     billing_meta: dict[str, Any] = {
@@ -42,12 +45,36 @@ async def charge_llm_credits(
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "model_name": model_name,
+        "bot_id": str(bot_id) if bot_id else None,
     }
 
     if credits <= 0:
         billing_meta["idempotent_replay"] = False
         billing_meta["skipped"] = "zero_cost"
         return billing_meta
+
+    if bot_id is not None:
+        try:
+            result = await bot_billing_service.debit_credits(
+                db,
+                bot_id,
+                credits,
+                reference_id=reference_id,
+            )
+        except BotWalletInsufficientError as exc:
+            raise InsufficientCreditsForLLMError(
+                str(exc),
+                organization_id=organization_id,
+                balance=exc.balance,
+                required=exc.required,
+                cause=exc,
+            ) from exc
+        billing_meta["idempotent_replay"] = bool(result.get("idempotent_replay"))
+        billing_meta["balance_after"] = result.get("balance_after")
+        billing_meta["wallet"] = "bot"
+        return billing_meta
+
+    wallet = wallet_service or default_wallet_service
 
     try:
         result = await wallet.deduct_credits(
@@ -71,6 +98,7 @@ async def charge_llm_credits(
     billing_meta["transaction_id"] = (
         str(result.transaction_id) if result.transaction_id else None
     )
+    billing_meta["wallet"] = "organization"
     return billing_meta
 
 

@@ -50,6 +50,9 @@ export interface BotAgentProfile {
   show_messenger_visibility: boolean;
   show_datetime_visibility: boolean;
   avatar_url?: string | null;
+  subscription_active?: boolean;
+  subscription_expires_at?: string | null;
+  wallet_balance?: number;
 }
 
 export interface BotSettingsUpdate {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { AdminBotFinanceModal } from "@/components/admin/AdminBotFinanceModal";
 import { AdminDataTable, type AdminColumn } from "@/components/admin/AdminDataTable";
 import { useToast } from "@/hooks/useToast";
 import { fetchAdminBots } from "@/lib/api";
@@ -18,6 +19,7 @@ export default function AdminBotsPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [bots, setBots] = useState<AdminBotItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [financeBot, setFinanceBot] = useState<AdminBotItem | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,9 +62,27 @@ export default function AdminBotsPage() {
         cell: (row) => row.owner_email || "—",
       },
       {
-        id: "active",
-        header: "Active",
-        cell: (row) => (row.is_active ? "Yes" : "No"),
+        id: "subscription",
+        header: "Подписка",
+        cell: (row) => (row.subscription_active ? "Да" : "Нет"),
+      },
+      {
+        id: "wallet",
+        header: "Баланс бота",
+        cell: (row) => String(row.wallet_balance ?? 0),
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: (row) => (
+          <button
+            type="button"
+            onClick={() => setFinanceBot(row)}
+            className="rounded-lg border border-zinc-700 px-2.5 py-1 text-xs text-zinc-200 hover:border-amber-500/40"
+          >
+            Баланс / подписка
+          </button>
+        ),
       },
     ],
     [],
@@ -73,7 +93,9 @@ export default function AdminBotsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-50">Bots</h1>
-          <p className="mt-1 text-sm text-zinc-500">Global inventory of tenant bots.</p>
+          <p className="mt-1 text-sm text-zinc-500">
+            Подписка и баланс у каждого агента свои. Без подписки бот не отвечает в чате.
+          </p>
         </div>
         <label className="text-xs text-zinc-500">
           Status
@@ -107,6 +129,12 @@ export default function AdminBotsPage() {
         total={total}
         totalPages={totalPages}
         onPageChange={setPage}
+      />
+      <AdminBotFinanceModal
+        open={financeBot !== null}
+        bot={financeBot}
+        onClose={() => setFinanceBot(null)}
+        onSuccess={() => void load()}
       />
     </div>
   );

@@ -317,6 +317,9 @@ class BotRead(BotBase):
 
     id: uuid.UUID
     user_id: uuid.UUID
+    subscription_active: bool = False
+    subscription_expires_at: datetime | None = None
+    wallet_balance: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -913,6 +916,9 @@ class BotAgentProfileRead(BaseModel):
     show_messenger_visibility: bool = False
     show_datetime_visibility: bool = False
     avatar_url: str | None = None
+    subscription_active: bool = False
+    subscription_expires_at: datetime | None = None
+    wallet_balance: int = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -942,6 +948,9 @@ class BotAgentProfileRead(BaseModel):
                 "message_split",
                 "message_buffer_delay",
                 "custom_code_snippet",
+                "subscription_active",
+                "subscription_expires_at",
+                "wallet_balance",
             )
         }
         payload["avatar_url"] = (
@@ -1094,6 +1103,8 @@ class AgentStatusSummary(BaseModel):
     flow_published: bool
     unique_dialogs: int
     connected_channels: list[str] = Field(default_factory=list)
+    subscription_active: bool = False
+    wallet_balance: int = 0
 
 
 class DashboardDailyPoint(BaseModel):

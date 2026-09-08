@@ -79,6 +79,8 @@ class LLMProviderFactory:
         if key in {"", "auto"}:
             if getattr(settings, "GROQ_API_KEY", None) and "groq" in cls._registry:
                 return "groq"
+            if getattr(settings, "GEMINI_API_KEY", None) and "gemini" in cls._registry:
+                return "gemini"
             if (
                 getattr(settings, "OPENROUTER_API_KEY", None)
                 or (

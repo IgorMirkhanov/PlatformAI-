@@ -250,7 +250,7 @@ start_api() {
 }
 
 wait_for_postgres
-run_bootstrap
 run_migrations
+run_bootstrap
 run_seed
 start_api "$@"

@@ -1,23 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { Plus, Sparkles, UserCircle2 } from "lucide-react";
+import { Plus, UserCircle2 } from "lucide-react";
 
 import { formatBillingCurrency } from "@/lib/billing-utils";
 import { canAccessBilling } from "@/lib/permissions";
-import { cn } from "@/lib/utils";
 import { useBotStore } from "@/store/useBotStore";
-import { DEFAULT_BILLING_CURRENCY, PLAN_BADGE_STYLES, type SubscriptionPlanName } from "@/types/billing";
+import { DEFAULT_BILLING_CURRENCY } from "@/types/billing";
 
 export function UserAccountPanel() {
   const billing = useBotStore((state) => state.billing);
   const billingLoading = useBotStore((state) => state.billingLoading);
   const currentUser = useBotStore((state) => state.currentUser);
 
-  const plan = billing?.plan_name ?? "FREE";
   const balance = billing?.balance ?? 0;
   const currency = billing?.currency ?? DEFAULT_BILLING_CURRENCY;
-  const planStyles = PLAN_BADGE_STYLES[plan as SubscriptionPlanName];
   const showBilling = canAccessBilling(currentUser?.role);
 
   return (
@@ -31,15 +28,6 @@ export function UserAccountPanel() {
               {currentUser?.full_name || "MP.AI Production Console"}
             </p>
             <p className="text-[11px] text-zinc-500">{currentUser?.email || "admin@mp.ai"}</p>
-          <span
-            className={cn(
-              "mt-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1",
-              planStyles.badge,
-            )}
-          >
-            <Sparkles className="h-3 w-3" />
-            {plan}
-          </span>
         </div>
       </div>
 

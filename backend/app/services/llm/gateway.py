@@ -187,7 +187,15 @@ class ResilientLLMGateway:
 
     def _ordered_providers(self, *, model: str | None) -> list[BaseLLMProvider]:
         """Prefer the vendor that owns ``model``; keep remaining as fallback."""
-        if not model:
+        configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().lower()
+        platform_vendor = configured in {"groq", "gemini", "ollama"}
+        raw_model = (model or "").strip().lower()
+        openai_alias = raw_model.startswith(
+            ("gpt-", "o1", "o3", "o4", "openai/")
+        ) or raw_model in {"openrouter/free", "free", "openrouter-free"}
+        # Bot defaults like gpt-4o-mini must not pin OpenAI/OpenRouter when the
+        # platform is on Groq or Gemini — otherwise every chat still hits a paid vendor first.
+        if not model or (platform_vendor and openai_alias):
             return self._apply_configured_order(list(self.providers), after=0)
         preferred_id = resolve_provider_for_model(model)
         preferred: list[BaseLLMProvider] = []
@@ -409,6 +417,7 @@ class ResilientLLMGateway:
             completion_tokens=response.completion_tokens,
             reference_id=reference_id,
             wallet_service=self._wallet(),
+            bot_id=bot_id,
         )
 
         await record_llm_usage_event(
@@ -647,13 +656,37 @@ class ResilientLLMGateway:
         """
         ref = (reference_id or "").strip() or str(uuid.uuid4())
         model_hint = self._resolve_model_hint(**kwargs)
-        estimated = estimate_request_credits(model_hint, messages, max_tokens)
+        billed_model = settings.effective_chat_model(model_hint)
+        estimated = estimate_request_credits(billed_model, messages, max_tokens)
 
-        await self._ensure_credits_available(
-            db,
-            organization_id,
-            required=estimated,
-        )
+        if bot_id is not None:
+            from app.services.bot_billing_service import (
+                BotSubscriptionInactiveError,
+                BotWalletInsufficientError,
+                bot_billing_service,
+            )
+            from app.services.llm.base import InsufficientCreditsForLLMError
+
+            try:
+                await bot_billing_service.ensure_chat_allowed(
+                    db, bot_id, required_credits=estimated
+                )
+            except BotSubscriptionInactiveError:
+                raise
+            except BotWalletInsufficientError as exc:
+                raise InsufficientCreditsForLLMError(
+                    str(exc),
+                    organization_id=organization_id,
+                    balance=exc.balance,
+                    required=exc.required,
+                    cause=exc,
+                ) from exc
+        else:
+            await self._ensure_credits_available(
+                db,
+                organization_id,
+                required=estimated,
+            )
 
         use_org_providers = bool(kwargs.pop("use_org_providers", True))
         runner: ResilientLLMGateway = self

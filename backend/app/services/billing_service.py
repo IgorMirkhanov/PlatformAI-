@@ -54,8 +54,9 @@ PLAN_INITIAL_BALANCE: dict[SubscriptionPlanName, Decimal] = {
 }
 
 PLAN_AGENT_LIMITS: dict[SubscriptionPlanName, int] = {
-    SubscriptionPlanName.FREE: 1,
-    SubscriptionPlanName.PRO: 10,
+    # Bot count is not gated by org plan — each agent has its own subscription.
+    SubscriptionPlanName.FREE: 999,
+    SubscriptionPlanName.PRO: 999,
     SubscriptionPlanName.ENTERPRISE: 999,
 }
 
