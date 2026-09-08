@@ -187,6 +187,24 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     db.flush = AsyncMock()
     db.commit = AsyncMock()
 
+    class _EmptyResult:
+        def scalar_one_or_none(self) -> Any:
+            return None
+
+        def scalar_one(self) -> Any:
+            return None
+
+    db.execute = AsyncMock(return_value=_EmptyResult())
+
+    class _NestedSavepoint:
+        async def __aenter__(self) -> "_NestedSavepoint":
+            return self
+
+        async def __aexit__(self, *_exc: Any) -> bool:
+            return False
+
+    db.begin_nested = MagicMock(return_value=_NestedSavepoint())
+
     async def _db_get(model: Any, obj_id: uuid.UUID) -> Any:
         if model is Bot:
             return bot
