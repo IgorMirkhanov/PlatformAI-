@@ -73,6 +73,17 @@ class FlushSession:
     async def flush(self) -> None:
         return None
 
+    def begin_nested(self):
+        return _NestedSavepoint()
+
+
+class _NestedSavepoint:
+    async def __aenter__(self) -> "_NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
 
 class FakeContactRepo:
     def __init__(self, store: Store, organization_id: uuid.UUID) -> None:

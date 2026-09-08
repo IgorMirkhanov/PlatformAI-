@@ -28,6 +28,14 @@ from app.services.crm.account_service import AccountService, AccountServiceError
 from app.services.crm.contact_service import ContactService, ContactServiceError
 
 
+class _NestedSavepoint:
+    async def __aenter__(self) -> "_NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -171,6 +179,9 @@ class CaptureSession:
 
     async def flush(self) -> None:
         return None
+
+    def begin_nested(self):
+        return _NestedSavepoint()
 
     async def execute(self, _stmt: Any) -> Any:
         # Always return the single client registered for capture tests.

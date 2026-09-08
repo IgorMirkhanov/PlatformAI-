@@ -42,6 +42,16 @@ class Store:
         self.webhooks: dict[uuid.UUID, CrmWebhookSubscription] = {}
 
 
+class NestedSavepoint:
+    """Stand-in for ``AsyncSession.begin_nested()`` used by CRM/wallet services."""
+
+    async def __aenter__(self) -> "NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
+
 class FlushSession:
     async def flush(self) -> None:
         return None
@@ -51,6 +61,9 @@ class FlushSession:
 
     async def scalar(self, _stmt: Any) -> Any:
         return None
+
+    def begin_nested(self) -> NestedSavepoint:
+        return NestedSavepoint()
 
 
 class FakePipelineRepo:

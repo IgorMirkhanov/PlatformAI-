@@ -182,6 +182,17 @@ class FlushSession:
     async def rollback(self) -> None:
         return None
 
+    def begin_nested(self):
+        return _NestedSavepoint()
+
+
+class _NestedSavepoint:
+    async def __aenter__(self) -> "_NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
 
 def _bind_service(store: CrmStore) -> PipelineService:
     service = PipelineService()

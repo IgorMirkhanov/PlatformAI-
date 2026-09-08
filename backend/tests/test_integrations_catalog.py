@@ -20,6 +20,7 @@ def test_integration_catalog_has_screenshot_platforms() -> None:
         "kommo",
         "bitrix24",
         "google_calendar",
+        "google_sheets",
         "kaspi_receipts",
         "kaspi_pay",
         "custom_webhook",

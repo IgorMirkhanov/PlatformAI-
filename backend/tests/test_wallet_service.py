@@ -55,6 +55,17 @@ class WalletFakeSession:
     def add(self, obj: Any) -> None:
         self.added.append(obj)
 
+    def begin_nested(self) -> "_NestedSavepoint":
+        return _NestedSavepoint()
+
+
+class _NestedSavepoint:
+    async def __aenter__(self) -> "_NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
 
 @pytest.mark.asyncio
 async def test_credit_wallet_skips_duplicate_reference_without_mutating_balance() -> None:

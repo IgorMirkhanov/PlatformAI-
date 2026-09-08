@@ -30,6 +30,17 @@ class FlushSession:
     async def execute(self, _stmt: Any) -> Any:
         raise AssertionError("Unexpected SQL execute in unit test")
 
+    def begin_nested(self):
+        return _NestedSavepoint()
+
+
+class _NestedSavepoint:
+    async def __aenter__(self) -> "_NestedSavepoint":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> bool:
+        return False
+
 
 class Store:
     def __init__(self) -> None:

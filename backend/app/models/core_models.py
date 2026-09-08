@@ -365,14 +365,26 @@ class Bot(Base):
     )
     fallback_model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     rag_collection_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Cycle with Integration.bot_id: create these FKs after all tables exist
+    # (bootstrap_database.py walks sorted_tables; a hard cycle skips `users`).
     ai_integration_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("integrations.id", ondelete="SET NULL"),
+        ForeignKey(
+            "integrations.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_bots_ai_integration_id",
+        ),
         nullable=True,
     )
     crm_integration_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("integrations.id", ondelete="SET NULL"),
+        ForeignKey(
+            "integrations.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_bots_crm_integration_id",
+        ),
         nullable=True,
     )
     low_balance_message: Mapped[str | None] = mapped_column(Text, nullable=True)
