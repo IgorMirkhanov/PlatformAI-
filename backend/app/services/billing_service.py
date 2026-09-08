@@ -540,10 +540,12 @@ class BillingService:
         description: str,
         status: BillingTransactionStatus,
         reference_id: str | None = None,
+        organization_id: uuid.UUID | None = None,
     ) -> BillingTransaction:
         entry = BillingTransaction(
             user_id=user_id,
             subscription_id=subscription_id,
+            organization_id=organization_id,
             transaction_type=transaction_type,
             amount=amount,
             currency=DEFAULT_CURRENCY,

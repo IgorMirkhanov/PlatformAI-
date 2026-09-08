@@ -144,12 +144,10 @@ class Settings:
     WALLET_MIN_TOKENS_RESERVE: int = int(os.getenv("WALLET_MIN_TOKENS_RESERVE", "1"))
     WALLET_LAUNCH_GRACE_TOKENS: int = int(os.getenv("WALLET_LAUNCH_GRACE_TOKENS", "100000"))
     # Emails auto-promoted to is_superadmin on every seed / API start.
+    # Deployment-specific: set PLATFORM_SUPERADMIN_EMAILS in .env, never in source.
     PLATFORM_SUPERADMIN_EMAILS: list[str] = [
         email.strip().lower()
-        for email in os.getenv(
-            "PLATFORM_SUPERADMIN_EMAILS",
-            "igor.mirkhanov@mail.ru,8saaask8@gmail.com",
-        ).split(",")
+        for email in os.getenv("PLATFORM_SUPERADMIN_EMAILS", "").split(",")
         if email.strip()
     ]
     MEDIA_GENERATION_POLL_INTERVAL_SECONDS: float = float(

@@ -163,7 +163,7 @@ export function GatewayLandingPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <p className="truncate text-sm font-bold tracking-tight text-white sm:text-base">
-                  MP.AI <span className="text-zinc-500">//</span> Gateway
+                  MP.AI <span className="text-zinc-500">{"//"}</span> Gateway
                 </p>
                 <StatusDot />
               </div>

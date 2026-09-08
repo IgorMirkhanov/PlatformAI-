@@ -1,0 +1,9 @@
+{
+  "extends": "next/core-web-vitals",
+  "ignorePatterns": [".next/", "node_modules/", "playwright-report/", "test-results/"],
+  "rules": {
+    "@next/next/no-img-element": "warn",
+    "jsx-a11y/alt-text": "warn",
+    "react-hooks/exhaustive-deps": "warn"
+  }
+}

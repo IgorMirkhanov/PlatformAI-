@@ -72,10 +72,10 @@ SYSTEM_ORG_SLUG = "system-admin"
 # 10_000_000 units = 100 000.00 credits.
 SYSTEM_ORG_INITIAL_WALLET_BALANCE: int = 10_000_000
 
-# Accounts that always own the Admin Panel (override via PLATFORM_SUPERADMIN_EMAILS).
+# Accounts that always own the Admin Panel. Deployment-specific — set
+# PLATFORM_SUPERADMIN_EMAILS in .env; no owner is granted when it is empty.
 PLATFORM_SUPERADMIN_EMAILS: list[str] = list(
-    getattr(settings, "PLATFORM_SUPERADMIN_EMAILS", None)
-    or ["igor.mirkhanov@mail.ru", "8saaask8@gmail.com"]
+    getattr(settings, "PLATFORM_SUPERADMIN_EMAILS", None) or []
 )
 
 # Default LLM registry rows shown in /admin → «LLM модели и цены».
@@ -381,11 +381,15 @@ async def _seed_prompt_templates(session) -> None:
 
 async def _seed_platform_superadmins(session) -> None:
     """
-    Grant ``is_superadmin`` to the hard-coded platform owner accounts.
+    Grant ``is_superadmin`` to the accounts listed in PLATFORM_SUPERADMIN_EMAILS.
 
     Runs on every API start (idempotent). Accounts that have not registered
     yet are reported as skipped — the grant applies on the next start.
     """
+    if not PLATFORM_SUPERADMIN_EMAILS:
+        _log(SKIP, "PLATFORM_SUPERADMIN_EMAILS is empty — no Admin Panel owner granted")
+        return
+
     for email in PLATFORM_SUPERADMIN_EMAILS:
         normalized = email.strip().lower()
         if not normalized:

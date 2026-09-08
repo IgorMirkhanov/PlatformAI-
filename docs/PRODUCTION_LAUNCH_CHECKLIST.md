@@ -39,7 +39,7 @@ Engineering artifacts in this repo (2026-08-24): §2.7 env defaults, §2.8 corre
 | 2.3 | Bootstrap superadmin password rotated | Security | T-2d | [ ] |
 | 2.4 | TLS Let's Encrypt (not self-signed) on public domain | Ops | T-2d | [ ] |
 | 2.5 | Postgres / Redis not publicly reachable | Ops | T-2d | [ ] |
-| 2.6 | Trivy / pip-audit / npm audit / Gitleaks reviewed; CRITICAL fixed or waived | Security | T-2d | [ ] |
+| 2.6 | Trivy / pip-audit / npm audit / Gitleaks reviewed; CRITICAL fixed or waived | Security | T-2d | [ ] see [DEPENDENCY_ADVISORIES.md](ops/DEPENDENCY_ADVISORIES.md) |
 | 2.7 | `AI_GUARDRAILS_ENABLED=true`, `RATE_LIMIT_ENABLED=true`, `LOG_FORMAT=json` | Eng | T-1d | [x] in-repo (example + compose; confirm live `.env.production`) |
 | 2.8 | Correlation IDs present on 5xx / 402 responses | Eng | T-1d | [x] in-repo |
 
