@@ -89,7 +89,7 @@ export function IntegrationConfigModal({
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          {platform === "google_calendar" ? (
+          {platform === "google_calendar" || platform === "google_sheets" ? (
             <>
               <button
                 type="button"
@@ -122,11 +122,20 @@ export function IntegrationConfigModal({
                 onChange={(value) => onFormChange({ ...form, access_token: value })}
                 password
               />
-              <Field
-                label="Calendar ID"
-                value={form.calendar_id || "primary"}
-                onChange={(value) => onFormChange({ ...form, calendar_id: value })}
-              />
+              {platform === "google_calendar" ? (
+                <Field
+                  label="Calendar ID"
+                  value={form.calendar_id || "primary"}
+                  onChange={(value) => onFormChange({ ...form, calendar_id: value })}
+                />
+              ) : (
+                <Field
+                  label="Spreadsheet ID (опционально)"
+                  value={form.spreadsheet_id || ""}
+                  onChange={(value) => onFormChange({ ...form, spreadsheet_id: value })}
+                  placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                />
+              )}
             </>
           ) : null}
 

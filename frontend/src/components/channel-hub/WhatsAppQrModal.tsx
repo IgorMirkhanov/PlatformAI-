@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, QrCode, RefreshCw, X } from "lucide-react";
 
-import { getWhatsAppQrWsUrl, refreshWhatsAppQr } from "@/lib/api";
+import {
+  fetchWhatsAppSession,
+  getWhatsAppQrWsUrl,
+  refreshWhatsAppQr,
+  startWhatsAppSession,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { WhatsAppQrWsFrame } from "@/types/channel-hub";
 
@@ -27,6 +32,7 @@ const PHASE_LABEL: Record<ScanPhase, string> = {
 
 const HEARTBEAT_MS = 25_000;
 const QR_TTL_SECONDS = 30;
+const POLL_MS = 2_000;
 
 function normalizeEvent(frame: WhatsAppQrWsFrame): string {
   return String(frame.event || frame.legacy_event || "");
@@ -34,6 +40,7 @@ function normalizeEvent(frame: WhatsAppQrWsFrame): string {
 
 /**
  * Live QR pairing modal with 30s expiry countdown + Refresh QR.
+ * Primary path: authenticated WebSocket. Fallback: HTTP session poll for qr_base64.
  */
 export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQrModalProps) {
   const [qrBase64, setQrBase64] = useState<string | null>(null);
@@ -45,6 +52,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
   const socketRef = useRef<WebSocket | null>(null);
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onConnectedRef = useRef(onConnected);
   const connectedNotifiedRef = useRef(false);
   const intentionalCloseRef = useRef(false);
@@ -75,10 +83,30 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
     }, 1000);
   }, [clearCountdown]);
 
+  const applyQr = useCallback(
+    (next: string | null | undefined) => {
+      if (!next) return;
+      setQrBase64((prev) => (prev === next ? prev : next));
+      setPhase((p) => (p === "connected" || p === "scanning" ? p : "waiting"));
+      startCountdown();
+    },
+    [startCountdown],
+  );
+
+  const notifyConnected = useCallback((phone?: string | null, pushName?: string | null) => {
+    setPhase("connected");
+    clearCountdown();
+    if (!connectedNotifiedRef.current) {
+      connectedNotifiedRef.current = true;
+      onConnectedRef.current({ phone, pushName });
+    }
+  }, [clearCountdown]);
+
   const handleRefreshQr = useCallback(async () => {
     setRefreshing(true);
     setPhase("waiting");
     setMessage("Refreshing QR code…");
+    setQrBase64(null);
     try {
       await refreshWhatsAppQr(botId);
       startCountdown();
@@ -97,6 +125,10 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
       }
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       clearCountdown();
       if (socketRef.current) {
         socketRef.current.close();
@@ -110,22 +142,52 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
       return;
     }
 
-    if (socketRef.current) {
-      return;
-    }
-
     intentionalCloseRef.current = false;
     connectedNotifiedRef.current = false;
     setPhase("connecting");
     setMessage("Connecting to server…");
+
+    void startWhatsAppSession(botId).catch(() => {
+      /* WS / poll will surface errors */
+    });
+
+    const pollOnce = async () => {
+      try {
+        const live = await fetchWhatsAppSession(botId);
+        if (live.qr_base64) {
+          applyQr(live.qr_base64);
+          setMessage("Отсканируйте QR-код в WhatsApp → Связанные устройства.");
+        }
+        if (live.status === "connected") {
+          notifyConnected(live.phone, live.push_name);
+        }
+      } catch {
+        /* ignore transient poll errors */
+      }
+    };
+
+    void pollOnce();
+    pollRef.current = setInterval(() => {
+      void pollOnce();
+    }, POLL_MS);
+
+    if (socketRef.current) {
+      return () => {
+        intentionalCloseRef.current = true;
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      };
+    }
 
     const url = getWhatsAppQrWsUrl(botId);
     const socket = new WebSocket(url);
     socketRef.current = socket;
 
     socket.onopen = () => {
-      setPhase("waiting");
-      setMessage("Waiting for scan…");
+      setPhase((p) => (p === "connected" ? p : "waiting"));
+      setMessage((m) => m || "Waiting for scan…");
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
       }
@@ -145,8 +207,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
           return;
         }
         if (frame.qr_base64) {
-          setQrBase64((prev) => (prev === frame.qr_base64 ? prev : frame.qr_base64));
-          startCountdown();
+          applyQr(frame.qr_base64);
         }
         if (frame.message) {
           setMessage(frame.message);
@@ -157,15 +218,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
         } else if (ev === "scanning_detected") {
           setPhase("scanning");
         } else if (ev === "CONNECTED" || ev === "session_connected") {
-          setPhase("connected");
-          clearCountdown();
-          if (!connectedNotifiedRef.current) {
-            connectedNotifiedRef.current = true;
-            onConnectedRef.current({
-              phone: frame.reference_id,
-              pushName: frame.push_name,
-            });
-          }
+          notifyConnected(frame.reference_id, frame.push_name);
         } else if (
           ev === "AUTH_FAILURE" ||
           ev === "DISCONNECTED" ||
@@ -180,17 +233,22 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
     };
 
     socket.onerror = () => {
-      if (!intentionalCloseRef.current) {
-        setPhase("failed");
-        setMessage("WebSocket connection error.");
-      }
+      // Keep polling fallback — do not mark failed solely on WS errors.
+      setMessage((m) => m || "WebSocket unavailable — using HTTP fallback…");
     };
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       socketRef.current = null;
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
+      }
+      if (
+        !intentionalCloseRef.current &&
+        !connectedNotifiedRef.current &&
+        event.code === 1008
+      ) {
+        setMessage("WebSocket auth failed — using HTTP fallback for QR…");
       }
     };
 
@@ -201,12 +259,16 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
       }
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       if (socketRef.current) {
         socketRef.current.close();
         socketRef.current = null;
       }
     };
-  }, [botId, clearCountdown, open, startCountdown]);
+  }, [applyQr, botId, clearCountdown, notifyConnected, open]);
 
   if (!open) return null;
 

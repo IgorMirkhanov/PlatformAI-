@@ -137,6 +137,37 @@ See section “Checklist” in the ops summary / PR description, or run:
 ./deploy.sh verify
 curl -fk https://$MPAI_DOMAIN/healthz
 curl -fk https://$MPAI_DOMAIN/healthcheck
+curl -fk https://$MPAI_DOMAIN/api/v1/health/live
 docker compose -f docker-compose.prod.yml --env-file .env.production exec -T whatsapp_service wget -qO- http://127.0.0.1:3001/health
 ```
+
+**Do not** treat bare `GET /api/v1/health/ready` as a public readiness probe.
+In production that route returns **403** unless you send `X-Internal-Api-Key`
+(or the metrics scrape token). Prefer `/healthcheck` and `/api/v1/health/live`
+for external smoke tests.
+
+## 10. Windows / PowerShell (no Git Bash)
+
+On hosts without a working `bash` (common on Windows Desktop), use
+[`deploy.ps1`](../../deploy.ps1) instead of `./deploy.sh`:
+
+```powershell
+# From repo root, Docker Desktop running:
+.\deploy.ps1              # build → data plane → mark SQL applied → app tier → verify
+.\deploy.ps1 -VerifyOnly  # health probes only
+.\deploy.ps1 -SkipBuild   # recreate containers from existing images
+```
+
+Behaviour notes:
+
+- **SQL vs Alembic:** `deploy.sh` applies `backend/migrations/*.sql` into
+  `schema_migrations`. On an already-bootstrapped DB those SQL files fail
+  (`type "subscription_plan_name" already exists`). `deploy.ps1` **marks**
+  those files applied and relies on the API entrypoint
+  (`bootstrap_database.py` + `alembic upgrade head`) as the source of truth —
+  equivalent to `SKIP_SQL_MIGRATIONS=1` for bash deploys on an Alembic DB.
+- **Verify probes:** `/healthz`, `/healthcheck`, `/api/v1/health/live`,
+  WhatsApp `/health`, Celery ping. A 403 on `/api/v1/health/ready` without
+  an internal key is **expected**.
+- Do **not** delete volume `mpai_whatsapp_sessions` on redeploy.
 

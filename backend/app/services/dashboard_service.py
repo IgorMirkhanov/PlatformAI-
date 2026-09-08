@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 
 from loguru import logger
 from sqlalchemy import func, select
@@ -17,7 +17,7 @@ from app.models.core_models import (
     Client,
     MessageSender,
 )
-from app.schemas.core_schemas import AgentStatusSummary, DashboardStatsResponse
+from app.schemas.core_schemas import AgentStatusSummary, DashboardDailyPoint, DashboardStatsResponse
 from app.schemas.diagnostic_schemas import DiagnosticLogListResponse
 from app.services.ai_orchestrator import USD_TO_KZT
 from app.services.billing_service import billing_service
@@ -34,6 +34,74 @@ CSV_HEADERS = [
 ]
 
 OMNICHANNEL_KEYS = ("telegram", "whatsapp", "instagram", "vkontakte", "web_widget")
+_WEEKDAY_LABELS_RU = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+
+
+def _empty_daily_series(*, days: int = 7) -> list[DashboardDailyPoint]:
+    today = datetime.now(UTC).date()
+    start = today - timedelta(days=days - 1)
+    points: list[DashboardDailyPoint] = []
+    cursor = start
+    while cursor <= today:
+        points.append(
+            DashboardDailyPoint(
+                date=cursor.isoformat(),
+                label=_WEEKDAY_LABELS_RU[cursor.weekday()],
+                messages=0,
+                dialogs=0,
+            )
+        )
+        cursor = date.fromordinal(cursor.toordinal() + 1)
+    return points
+
+
+async def _build_daily_series(
+    db: AsyncSession,
+    *,
+    bot_ids: list[uuid.UUID],
+    days: int = 7,
+) -> list[DashboardDailyPoint]:
+    """Real last-N-days message/dialog counts (UTC calendar days)."""
+    points = _empty_daily_series(days=days)
+    if not bot_ids:
+        return points
+
+    today = datetime.now(UTC).date()
+    start_day = today - timedelta(days=days - 1)
+    range_start = datetime.combine(start_day, time.min, tzinfo=UTC)
+
+    day_expr = func.date_trunc("day", ChatMessage.created_at)
+
+    messages_rows = await db.execute(
+        select(day_expr.label("day"), func.count(ChatMessage.id))
+        .join(Client, ChatMessage.client_id == Client.id)
+        .where(Client.bot_id.in_(bot_ids), ChatMessage.created_at >= range_start)
+        .group_by(day_expr)
+    )
+    messages_by_day: dict[str, int] = {}
+    for day_value, count in messages_rows.all():
+        if day_value is None:
+            continue
+        day_date = day_value.date() if hasattr(day_value, "date") else day_value
+        messages_by_day[day_date.isoformat()] = int(count or 0)
+
+    dialogs_rows = await db.execute(
+        select(day_expr.label("day"), func.count(func.distinct(Client.id)))
+        .join(Client, ChatMessage.client_id == Client.id)
+        .where(Client.bot_id.in_(bot_ids), ChatMessage.created_at >= range_start)
+        .group_by(day_expr)
+    )
+    dialogs_by_day: dict[str, int] = {}
+    for day_value, count in dialogs_rows.all():
+        if day_value is None:
+            continue
+        day_date = day_value.date() if hasattr(day_value, "date") else day_value
+        dialogs_by_day[day_date.isoformat()] = int(count or 0)
+
+    for point in points:
+        point.messages = messages_by_day.get(point.date, 0)
+        point.dialogs = dialogs_by_day.get(point.date, 0)
+    return points
 
 
 def _extract_connected_channels(credentials: dict[str, object]) -> list[str]:
@@ -94,6 +162,8 @@ class DashboardService:
                 subscription_balance=billing.balance,
                 subscription_plan=billing.plan_name,
                 agents=[],
+                period_label="last_7_days",
+                daily_series=_empty_daily_series(),
             )
 
         bot_ids = [bot.id for bot in bots]
@@ -149,6 +219,7 @@ class DashboardService:
 
         active_agents = sum(1 for bot in bots if bot.is_active)
         inactive_agents = len(bots) - active_agents
+        daily_series = await _build_daily_series(db, bot_ids=bot_ids, days=7)
 
         logger.info(
             "Dashboard.stats | user_id={user_id} dialogs={dialogs} messages={messages}",
@@ -166,6 +237,8 @@ class DashboardService:
             subscription_balance=billing.balance,
             subscription_plan=billing.plan_name,
             agents=agent_summaries,
+            period_label="last_7_days",
+            daily_series=daily_series,
         )
 
     async def list_diagnostic_logs(

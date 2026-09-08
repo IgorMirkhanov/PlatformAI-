@@ -1096,6 +1096,13 @@ class AgentStatusSummary(BaseModel):
     connected_channels: list[str] = Field(default_factory=list)
 
 
+class DashboardDailyPoint(BaseModel):
+    date: str
+    label: str
+    messages: int = 0
+    dialogs: int = 0
+
+
 class DashboardStatsResponse(BaseModel):
     total_unique_dialogs: int
     total_messages_dispatched: int
@@ -1106,6 +1113,7 @@ class DashboardStatsResponse(BaseModel):
     subscription_plan: SubscriptionPlanName
     agents: list[AgentStatusSummary]
     period_label: str = "all_time"
+    daily_series: list[DashboardDailyPoint] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

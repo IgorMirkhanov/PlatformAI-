@@ -98,6 +98,14 @@ export interface FunctionToolParameter {
   type: FunctionParamType;
   instruction: string;
   required: boolean;
+  enum_values?: string;
+}
+
+export interface FunctionResultField {
+  id: string;
+  name: string;
+  action: "text" | "system";
+  value: string;
 }
 
 export interface FunctionToolDefinition {
@@ -108,6 +116,11 @@ export interface FunctionToolDefinition {
   reaction_mode: "llm" | "fixed";
   reaction_text: string;
   integration: FunctionIntegrationKind;
+  result_integrations?: FunctionIntegrationKind[];
+  result_fields?: FunctionResultField[];
+  post_scenario?: "continue" | "end";
+  nested_function_id?: string | null;
+  disable_delayed_messages?: boolean;
   is_active: boolean;
 }
 
@@ -115,9 +128,12 @@ export type FunctionIntegrationKind =
   | "none"
   | "telegram"
   | "whatsapp"
+  | "google_sheets"
   | "custom_api"
+  | "file"
   | "python"
-  | "tags";
+  | "tags"
+  | "delayed";
 
 export interface AgentRagCollection {
   id: string;
@@ -143,10 +159,13 @@ export const FUNCTION_INTEGRATION_OPTIONS: Array<{
 }> = [
   { id: "none", label: "Не отправлять" },
   { id: "telegram", label: "Telegram отчёт" },
-  { id: "whatsapp", label: "WhatsApp группа" },
+  { id: "whatsapp", label: "WhatsApp-группа" },
+  { id: "google_sheets", label: "Google Sheets" },
   { id: "custom_api", label: "Custom API" },
-  { id: "python", label: "Python код" },
+  { id: "file", label: "Отправка файла" },
+  { id: "python", label: "Python" },
   { id: "tags", label: "Теги" },
+  { id: "delayed", label: "Отложенные" },
 ];
 
 
@@ -155,10 +174,12 @@ export type AgentTabId =
   | "prompting"
   | "messages"
   | "llm-models"
+  | "control"
   | "functions"
   | "knowledge-base"
   | "integrations"
-  | "channels";
+  | "channels"
+  | "scenario";
 
 export interface LLMModelOption {
   id: string;

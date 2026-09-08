@@ -24,8 +24,8 @@ export function MessagesChart({ data, onExport, exporting = false }: MessagesCha
     <div className="luxury-card h-full">
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-zinc-100">Отправки сообщений</h3>
-          <p className="text-xs text-zinc-500">Динамика диспетчеризации за последние 7 дней</p>
+          <h3 className="text-sm font-semibold text-[var(--canvas-fg)]">Сообщения и диалоги</h3>
+          <p className="text-xs text-[var(--canvas-muted)]">Динамика за последние 7 дней</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-4 text-[10px] uppercase tracking-wider text-zinc-500">

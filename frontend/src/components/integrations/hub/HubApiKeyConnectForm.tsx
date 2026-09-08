@@ -22,13 +22,24 @@ export function HubApiKeyConnectForm({
   onCancel,
 }: HubApiKeyConnectFormProps) {
   const isKaspi = provider === "kaspi_pay";
+  const isBitrix = provider === "bitrix24";
   const [apiKey, setApiKey] = useState("");
   const [merchantId, setMerchantId] = useState("");
   const [secretKey, setSecretKey] = useState("");
+  const [webhookUrl, setWebhookUrl] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleSubmit = async (): Promise<void> => {
     setLocalError(null);
+    if (isBitrix) {
+      const url = webhookUrl.trim();
+      if (!/^https?:\/\/.+/i.test(url) || !url.includes("/rest/")) {
+        setLocalError("Укажите Incoming Webhook URL Bitrix24 (…/rest/1/xxxxx/).");
+        return;
+      }
+      await onSubmit({ webhook_url: url.endsWith("/") ? url : `${url}/` });
+      return;
+    }
     if (isKaspi) {
       if (!merchantId.trim()) {
         setLocalError("Укажите Merchant ID.");
@@ -61,6 +72,23 @@ export function HubApiKeyConnectForm({
         void handleSubmit();
       }}
     >
+      {isBitrix ? (
+        <>
+          <p className="text-xs leading-relaxed text-zinc-500">
+            В Bitrix24: Разработчикам → Другое → Входящий вебхук. Права: CRM (сделки, контакты).
+          </p>
+          <label className="block text-xs font-medium text-zinc-400">
+            Incoming Webhook URL
+            <input
+              value={webhookUrl}
+              onChange={(event) => setWebhookUrl(event.target.value)}
+              autoComplete="off"
+              placeholder="https://your.bitrix24.ru/rest/1/xxxxxxxx/"
+              className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-violet-500/50"
+            />
+          </label>
+        </>
+      ) : null}
       {isKaspi ? (
         <label className="block text-xs font-medium text-zinc-400">
           Merchant ID
@@ -72,6 +100,7 @@ export function HubApiKeyConnectForm({
           />
         </label>
       ) : null}
+      {!isBitrix ? (
       <label className="block text-xs font-medium text-zinc-400">
         {isKaspi ? "Merchant token" : "API-ключ"}
         <input
@@ -82,6 +111,7 @@ export function HubApiKeyConnectForm({
           className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-violet-500/50"
         />
       </label>
+      ) : null}
       {isKaspi ? (
         <label className="block text-xs font-medium text-zinc-400">
           Webhook secret (HMAC, необязательно)
@@ -98,7 +128,9 @@ export function HubApiKeyConnectForm({
         <p className="text-xs text-rose-300">{localError || error}</p>
       ) : (
         <p className="text-[11px] text-zinc-500">
-          Ключ проверяется через testConnection() и сохраняется только после успешной проверки.
+          {isBitrix
+            ? "URL проверяется запросом profile.json и сохраняется только после успеха."
+            : "Ключ проверяется через testConnection() и сохраняется только после успешной проверки."}
         </p>
       )}
       <div className="flex gap-2">

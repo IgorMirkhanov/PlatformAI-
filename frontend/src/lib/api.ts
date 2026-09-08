@@ -952,9 +952,11 @@ export async function fetchAppIntegrationsStatus(botId: string) {
 
 export async function fetchGoogleCalendarAuthUrl(
   botId: string,
+  purpose: "google" | "google_calendar" | "google_sheets" = "google",
 ): Promise<{ auth_url: string; state: string }> {
+  const qs = purpose && purpose !== "google" ? `?purpose=${encodeURIComponent(purpose)}` : "";
   return apiRequest<{ auth_url: string; state: string }>(
-    `/api/v1/bots/${botId}/integrations/google/auth-url`,
+    `/api/v1/bots/${botId}/integrations/google/auth-url${qs}`,
   );
 }
 
@@ -1373,7 +1375,10 @@ export async function patchHubChannelEnabled(
 }
 
 export function getWhatsAppQrWsUrl(botId: string): string {
-  return `${getWsBaseUrl()}/api/v1/channels/${botId}/whatsapp/ws-qr`;
+  const base = `${getWsBaseUrl()}/api/v1/channels/${botId}/whatsapp/ws-qr`;
+  const token = getAccessToken();
+  if (!token) return base;
+  return `${base}?token=${encodeURIComponent(token)}`;
 }
 
 export async function fetchWhatsAppSession(

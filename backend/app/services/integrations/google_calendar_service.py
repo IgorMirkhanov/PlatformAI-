@@ -19,10 +19,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
+GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+# First-launch Google connect grants Calendar + Sheets in one consent.
+GOOGLE_COMBINED_SCOPES = f"{GOOGLE_CALENDAR_SCOPE} {GOOGLE_SHEETS_SCOPE}"
 
 
-def _encode_oauth_state(bot_id: uuid.UUID) -> str:
-    payload = {"bot_id": str(bot_id), "ts": datetime.now(timezone.utc).isoformat()}
+def _encode_oauth_state(bot_id: uuid.UUID, purpose: str = "google") -> str:
+    payload = {
+        "bot_id": str(bot_id),
+        "purpose": purpose,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
     return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
@@ -32,17 +39,32 @@ def decode_oauth_state(state: str) -> uuid.UUID:
     return uuid.UUID(str(data["bot_id"]))
 
 
-def build_google_auth_url(bot_id: uuid.UUID) -> tuple[str, str]:
+def decode_oauth_purpose(state: str) -> str:
+    padded = state + "=" * (-len(state) % 4)
+    data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    purpose = str(data.get("purpose") or "google").strip().lower()
+    if purpose in {"google_sheets", "sheets"}:
+        return "google_sheets"
+    if purpose in {"google_calendar", "calendar"}:
+        return "google_calendar"
+    return "google"
+
+
+def build_google_auth_url(
+    bot_id: uuid.UUID,
+    *,
+    purpose: str = "google",
+) -> tuple[str, str]:
     client_id = (settings.GOOGLE_CLIENT_ID or "").strip()
     if not client_id:
         raise ValueError("GOOGLE_CLIENT_ID is not configured.")
     redirect_uri = f"{resolve_webhook_base_url()}/api/v1/integrations/google/callback"
-    state = _encode_oauth_state(bot_id)
+    state = _encode_oauth_state(bot_id, purpose=purpose)
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": GOOGLE_CALENDAR_SCOPE,
+        "scope": GOOGLE_COMBINED_SCOPES,
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
@@ -163,6 +185,8 @@ async def persist_google_tokens(
     db: AsyncSession,
     bot_id: uuid.UUID,
     token_payload: dict[str, Any],
+    *,
+    purpose: str = "google",
 ) -> dict[str, Any]:
     from app.services.bot_app_integrations_service import bot_app_integrations_service
 
@@ -172,16 +196,27 @@ async def persist_google_tokens(
     expires_at = datetime.now(timezone.utc).timestamp() + expires_in
     expires_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
-    return await bot_app_integrations_service.connect(
+    base_payload = {
+        "refresh_token": refresh_token,
+        "access_token": access_token,
+        "expires_at": expires_iso,
+        "client_id": settings.GOOGLE_CLIENT_ID or "",
+        "client_secret": settings.GOOGLE_CLIENT_SECRET or "",
+    }
+
+    # Combined consent covers both Calendar and Sheets for first-launch setup.
+    cal_result = await bot_app_integrations_service.connect(
         db,
         bot_id,
         "google_calendar",
-        {
-            "refresh_token": refresh_token,
-            "access_token": access_token,
-            "expires_at": expires_iso,
-            "calendar_id": "primary",
-            "client_id": settings.GOOGLE_CLIENT_ID or "",
-            "client_secret": settings.GOOGLE_CLIENT_SECRET or "",
-        },
+        {**base_payload, "calendar_id": "primary"},
     )
+    sheets_result = await bot_app_integrations_service.connect(
+        db,
+        bot_id,
+        "google_sheets",
+        {**base_payload, "spreadsheet_id": ""},
+    )
+    if purpose == "google_sheets":
+        return sheets_result
+    return cal_result

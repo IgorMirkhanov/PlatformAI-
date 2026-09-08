@@ -138,6 +138,39 @@ async def execute_tool_call(
             client_phone=args.get("client_phone"),
         )
 
+    # Workspace custom functions (Function Calling constructor).
+    from app.services.bot_workspace_config import get_workspace
+
+    workspace = get_workspace(bot)
+    for fn in workspace.get("functions") or []:
+        if not isinstance(fn, dict):
+            continue
+        if str(fn.get("name") or "") != tool_name:
+            continue
+        if not bool(fn.get("is_active", True)):
+            return {"status": "error", "message": f"Function '{tool_name}' is disabled."}
+        result: dict[str, Any] = {
+            "status": "ok",
+            "function": tool_name,
+            "arguments": args,
+            "post_scenario": fn.get("post_scenario") or "continue",
+            "disable_delayed_messages": bool(fn.get("disable_delayed_messages", False)),
+            "nested_function_id": fn.get("nested_function_id"),
+            "result_integrations": list(fn.get("result_integrations") or []),
+            "result_fields": list(fn.get("result_fields") or []),
+        }
+        if str(fn.get("reaction_mode") or "llm") == "fixed":
+            result["fixed_reply"] = str(fn.get("reaction_text") or "").strip()
+            result["message"] = result["fixed_reply"] or f"Function '{tool_name}' executed."
+        else:
+            result["message"] = f"Function '{tool_name}' executed successfully."
+        logger.info(
+            "ToolExecutor.workspace_fn | bot_id={bot_id} name={name}",
+            bot_id=bot.id,
+            name=tool_name,
+        )
+        return result
+
     logger.warning("ToolExecutor.unknown_tool | name={name}", name=tool_name)
     return {"status": "error", "reason": "unknown_tool", "message": f"Unknown tool: {tool_name}"}
 

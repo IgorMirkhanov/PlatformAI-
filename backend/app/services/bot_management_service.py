@@ -1192,6 +1192,13 @@ class BotManagementService:
                         "reaction_mode": str(item.get("reaction_mode") or "llm"),
                         "reaction_text": str(item.get("reaction_text") or ""),
                         "integration": str(item.get("integration") or "none"),
+                        "result_integrations": list(item.get("result_integrations") or []),
+                        "result_fields": list(item.get("result_fields") or []),
+                        "post_scenario": str(item.get("post_scenario") or "continue"),
+                        "nested_function_id": item.get("nested_function_id") or None,
+                        "disable_delayed_messages": bool(
+                            item.get("disable_delayed_messages", False)
+                        ),
                         "is_active": bool(item.get("is_active", True)),
                     }
                 )

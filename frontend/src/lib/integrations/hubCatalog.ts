@@ -42,10 +42,10 @@ export const HUB_CARD_PROVIDERS: HubCardProvider[] = [
   {
     id: "bitrix24",
     ...fromCrm("bitrix24"),
-    auth: "oauth",
+    auth: "webhook",
     logo: "B24",
     permissions: ["Контакты", "Сделки", "Комментарии в таймлайне"],
-    oauthHint: "Портал (необязательно), например company.bitrix24.ru",
+    oauthHint: "Incoming webhook URL из Bitrix24 → Разработчикам → Другое",
   },
   {
     id: "amocrm",

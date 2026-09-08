@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Braces, Plus } from "lucide-react";
 
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/useToast";
@@ -24,6 +24,11 @@ function emptyFunction(): FunctionToolDefinition {
     reaction_mode: "llm",
     reaction_text: "",
     integration: "none",
+    result_integrations: [],
+    result_fields: [],
+    post_scenario: "continue",
+    nested_function_id: null,
+    disable_delayed_messages: false,
     is_active: true,
   };
 }
@@ -67,39 +72,31 @@ export function AgentFunctionsTab({ botId, profile }: AgentFunctionsTabProps) {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-zinc-50">Функции</h2>
-          <p className="mt-1 text-sm text-zinc-500">
-            Визуальный конструктор OpenAI Function Calling — без Python IDE.
-          </p>
-        </div>
-        <button
-          type="button"
-          disabled={profileSaving}
-          onClick={() => void handleCreate()}
-          className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          <Plus className="h-4 w-4" />
-          Создать функцию
-        </button>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-semibold tracking-tight text-[var(--canvas-fg)]">Функции</h2>
+        <p className="mt-1 text-sm text-[var(--canvas-muted)]">
+          Инструменты агента для Function Calling — без IDE.
+        </p>
       </div>
 
       {functions.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-zinc-800 bg-[#0d0d0f] px-6 py-12 text-center text-sm text-zinc-500">
-          Функций пока нет. Создайте первую — LLM получит её как tool.
+        <div className="rounded-2xl border border-dashed border-[var(--canvas-border)] bg-[var(--card)] px-6 py-14 text-center text-sm text-[var(--canvas-muted)]">
+          Функций пока нет. Нажмите «+», чтобы создать первую.
         </div>
       ) : (
         <div className="grid gap-3">
           {functions.map((item) => (
             <div
               key={item.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-[#0d0d0f] px-5 py-4"
+              className="flex items-center gap-4 rounded-2xl border border-[var(--canvas-border)] bg-[var(--card)] px-5 py-4 shadow-soft"
             >
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-500/10 ring-1 ring-violet-500/25">
+                <Braces className="h-5 w-5 text-violet-400" />
+              </div>
               <Link href={`/bots/${botId}/functions/${item.id}`} className="min-w-0 flex-1">
-                <p className="font-mono text-sm text-violet-200">{item.name}</p>
-                <p className="mt-1 truncate text-xs text-zinc-500">
+                <p className="font-mono text-sm font-medium text-[var(--canvas-fg)]">{item.name}</p>
+                <p className="mt-0.5 truncate text-xs text-[var(--canvas-muted)]">
                   {item.description || "Условие вызова не задано"}
                 </p>
               </Link>
@@ -112,6 +109,18 @@ export function AgentFunctionsTab({ botId, profile }: AgentFunctionsTabProps) {
           ))}
         </div>
       )}
+
+      <div className="flex justify-center pt-2">
+        <button
+          type="button"
+          disabled={profileSaving}
+          onClick={() => void handleCreate()}
+          aria-label="Добавить функцию"
+          className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-violet-600 text-white shadow-glow-purple transition hover:bg-violet-500 disabled:opacity-50"
+        >
+          <Plus className="h-6 w-6" strokeWidth={2.5} />
+        </button>
+      </div>
     </div>
   );
 }

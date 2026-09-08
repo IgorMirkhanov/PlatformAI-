@@ -118,6 +118,13 @@ class FlowExecutor:
         self.variables.setdefault("rag_context", "")
         self.variables.setdefault("rag_chunks", [])
 
+        # Agent-level prompt from «Промптинг» tab (bot.prompt_instructions).
+        bot_config = ctx.get("bot_config") if isinstance(ctx.get("bot_config"), dict) else {}
+        self.bot_config: dict[str, Any] = dict(bot_config or {})
+        agent_prompt = str(self.bot_config.get("prompt_instructions") or "").strip()
+        if agent_prompt:
+            self.variables["prompt_instructions"] = agent_prompt
+
         message = (incoming_message or "").strip()
         step = (current_step_id or "").strip() or None
 
@@ -538,16 +545,34 @@ class FlowExecutor:
 
         prompt_context = self._render_template(str(data.get("prompt_context") or ""))
         prompt_modifier = self._render_template(str(data.get("prompt_modifier") or ""))
-        temperature = float(data.get("temperature") if data.get("temperature") is not None else 0.7)
+        bot_cfg = getattr(self, "bot_config", None) or {}
+        global_prompt = str(
+            data.get("global_prompt_instructions")
+            or self.variables.get("prompt_instructions")
+            or bot_cfg.get("prompt_instructions")
+            or ""
+        ).strip()
+        temperature = float(
+            data.get("temperature")
+            if data.get("temperature") is not None
+            else bot_cfg.get("llm_temperature")
+            if bot_cfg.get("llm_temperature") is not None
+            else 0.7
+        )
         knowledge_base_id = str(data.get("knowledge_base_id") or (bot_id or "")).strip()
 
         node_payload = {
             **data,
             "prompt_context": prompt_context,
             "prompt_modifier": prompt_modifier,
+            "global_prompt_instructions": global_prompt,
             "temperature": temperature,
             "knowledge_base_id": knowledge_base_id or str(bot_id or ""),
-            "llm_model_name": data.get("llm_model_name") or "gpt-4o-mini",
+            "llm_model_name": (
+                data.get("llm_model_name")
+                or bot_cfg.get("llm_model_name")
+                or "gpt-4o-mini"
+            ),
         }
 
         text = ""
@@ -585,6 +610,7 @@ class FlowExecutor:
                     temperature,
                     db=db,
                     bot_id=bot_id,
+                    global_prompt=global_prompt,
                 )
         else:
             text = await self._openai_fallback(
@@ -594,6 +620,7 @@ class FlowExecutor:
                 temperature,
                 db=db,
                 bot_id=bot_id,
+                global_prompt=global_prompt,
             )
 
         self.variables["llm_output"] = text
@@ -618,9 +645,11 @@ class FlowExecutor:
         *,
         db: AsyncSession | None = None,
         bot_id: uuid.UUID | None = None,
+        global_prompt: str | None = None,
     ) -> str:
         """Gateway-backed gpt-4o-mini when org context exists; direct OpenAI otherwise."""
-        system = prompt_context or "You are a helpful assistant."
+        parts = [p.strip() for p in (global_prompt, prompt_context) if p and str(p).strip()]
+        system = "\n\n".join(parts) if parts else "You are a helpful assistant."
         if prompt_modifier:
             system = f"{system}\n\n{prompt_modifier}"
         messages = [

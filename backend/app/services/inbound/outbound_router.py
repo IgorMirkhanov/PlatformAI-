@@ -30,6 +30,18 @@ async def deliver_outbound(
     if not reply_text or not reply_text.strip():
         return
 
+    from app.services.llm.tool_reply_sanitize import is_tool_debug_text, sanitize_outbound_text
+
+    if is_tool_debug_text(reply_text):
+        logger.warning(
+            "Outbound.blocked_tool_debug_text | channel={channel} bot_id={bot_id}",
+            channel=normalized.channel,
+            bot_id=normalized.bot_id,
+        )
+        reply_text = sanitize_outbound_text(reply_text, tools_executed=["blocked"])
+        if not reply_text:
+            return
+
     from app.services.channel_sender import ChannelSenderFactory
 
     hub_type = str((payload or {}).get("hub_channel_type") or normalized.metadata.get("hub_channel_type") or "")

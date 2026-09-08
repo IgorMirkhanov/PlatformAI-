@@ -16,11 +16,17 @@ export default function RegisterPage() {
   const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [acceptTerms, setAcceptTerms] = useState(false);
+  const [acceptPd, setAcceptPd] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!acceptTerms || !acceptPd) {
+      setError("Нужно принять условия и согласие на обработку персональных данных.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -50,12 +56,14 @@ export default function RegisterPage() {
             placeholder="Full name"
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
+            autoComplete="name"
           />
           <input
             className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm"
             placeholder="Company"
             value={companyName}
             onChange={(e) => setCompanyName(e.target.value)}
+            autoComplete="organization"
           />
           <input
             type="email"
@@ -64,6 +72,7 @@ export default function RegisterPage() {
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
           />
           <input
             type="password"
@@ -73,22 +82,52 @@ export default function RegisterPage() {
             placeholder="Password (min 8)"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
           />
+          <label className="flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-zinc-400">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={acceptTerms}
+              onChange={(e) => setAcceptTerms(e.target.checked)}
+              required
+            />
+            <span>
+              Принимаю{" "}
+              <Link href="/terms" className="text-zinc-200 underline">
+                условия использования
+              </Link>
+              ,{" "}
+              <Link href="/privacy" className="text-zinc-200 underline">
+                политику конфиденциальности
+              </Link>{" "}
+              и{" "}
+              <Link href="/legal/cookies" className="text-zinc-200 underline">
+                политику cookie
+              </Link>
+              .
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 text-[11px] leading-4 text-zinc-400">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={acceptPd}
+              onChange={(e) => setAcceptPd(e.target.checked)}
+              required
+            />
+            <span>
+              Даю{" "}
+              <Link href="/legal/personal-data" className="text-zinc-200 underline">
+                согласие на обработку персональных данных
+              </Link>
+              .
+            </span>
+          </label>
           {error ? <p className="text-xs text-red-300">{error}</p> : null}
-          <p className="text-[11px] leading-4 text-zinc-500">
-            Регистрируясь, вы принимаете{" "}
-            <Link href="/terms" className="text-zinc-300 underline">
-              условия
-            </Link>{" "}
-            и{" "}
-            <Link href="/privacy" className="text-zinc-300 underline">
-              политику конфиденциальности
-            </Link>
-            .
-          </p>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !acceptTerms || !acceptPd}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent py-2.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

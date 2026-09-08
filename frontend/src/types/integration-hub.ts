@@ -21,7 +21,7 @@ export type HubConnectionStatus =
 /** UI states from architecture §7. */
 export type HubCardState = "not_connected" | "connecting" | "connected" | "expired" | "error";
 
-export type HubAuthKind = "oauth" | "api_key";
+export type HubAuthKind = "oauth" | "api_key" | "webhook";
 
 export const HUB_OAUTH_MESSAGE_TYPE = "mpai:hub-oauth";
 

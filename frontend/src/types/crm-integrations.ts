@@ -5,6 +5,7 @@ export type AppIntegrationPlatform =
   | CRMPlatform
   | "kommo"
   | "google_calendar"
+  | "google_sheets"
   | "kaspi_receipts"
   | "kaspi_pay"
   | "custom_webhook"
@@ -66,6 +67,17 @@ export const CRM_INTEGRATION_DEFINITIONS: CRMIntegrationDefinition[] = [
     brandColor: "#4285F4",
     brandGradient: "from-[#4285F4]/20 via-[#34A853]/5 to-transparent",
     accentRing: "ring-[#4285F4]/30",
+    available: true,
+    availability: "available",
+  },
+  {
+    id: "google_sheets",
+    title: "Google Sheets",
+    description:
+      "Агент читает и дописывает строки в таблицы: лиды, заявки, отчёты.",
+    brandColor: "#0F9D58",
+    brandGradient: "from-[#0F9D58]/20 via-[#34A853]/5 to-transparent",
+    accentRing: "ring-[#0F9D58]/30",
     available: true,
     availability: "available",
   },
@@ -151,6 +163,7 @@ export interface AppIntegrationConnectPayload {
   refresh_token?: string;
   access_token?: string;
   calendar_id?: string;
+  spreadsheet_id?: string;
   merchant_id?: string;
   merchant_token?: string;
   api_key?: string;

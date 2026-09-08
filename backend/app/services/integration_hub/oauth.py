@@ -208,6 +208,11 @@ async def start_authorize(
             raise OAuthFlowError("Agent not found in this workspace.")
     platform_app = await get_platform_oauth_app(db, key)
     if platform_app is None or not platform_app.client_id or not platform_app.client_secret:
+        if key == "bitrix24":
+            raise OAuthFlowError(
+                "Bitrix24 OAuth app is not configured (BITRIX_APP_ID). "
+                "Use Incoming Webhook URL on the Bitrix24 card instead."
+            )
         raise OAuthFlowError("Platform OAuth app is not configured for this provider.")
     # Canonical redirect must match the partner cabinet entry character-for-character.
     slug = "amocrm" if key == "kommo" else key

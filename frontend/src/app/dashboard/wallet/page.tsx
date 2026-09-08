@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { Coins, CreditCard, Activity } from "lucide-react";
 
 import { fetchTokenUsageByBot, fetchTokenWallet, type TokenWalletOverview, type TokenUsageByBot } from "@/lib/api";
 import { canAccessBilling } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
 import { useBotStore } from "@/store/useBotStore";
 
 export default function WalletPage() {
@@ -40,26 +42,38 @@ export default function WalletPage() {
 
   if (!currentUser) {
     return (
-      <div data-testid="wallet-loading" className="px-4 py-10 text-sm text-zinc-400">
+      <div data-testid="wallet-loading" className="px-4 py-10 text-sm text-[var(--canvas-muted)]">
         Загрузка…
       </div>
     );
   }
 
   if (!allowed) {
-    return <div className="px-4 py-10 text-sm text-zinc-400">Недостаточно прав для просмотра кошелька.</div>;
+    return (
+      <div className="px-4 py-10 text-sm text-[var(--canvas-muted)]">
+        Недостаточно прав для просмотра кошелька.
+      </div>
+    );
   }
 
   const blocked = wallet?.status === "blocked";
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-4 py-8">
+    <div className="mx-auto max-w-5xl space-y-6 px-4 py-8 lg:px-8">
       <div>
-        <h1 className="text-xl font-semibold text-white">Кошелёк организации</h1>
-        <p className="mt-1 text-sm text-zinc-500">Баланс токенов обновляется каждые 10 секунд.</p>
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--canvas-fg)]">
+          Кошелёк организации
+        </h1>
+        <p className="mt-1 text-sm text-[var(--canvas-muted)]">
+          Баланс токенов и списания по агентам. Обновление каждые 10 секунд.
+        </p>
       </div>
 
-      {error ? <p className="text-sm text-rose-400">{error}</p> : null}
+      {error ? (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+          {error}
+        </div>
+      ) : null}
 
       {blocked ? (
         <div
@@ -74,22 +88,47 @@ export default function WalletPage() {
       ) : null}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs uppercase tracking-wide text-zinc-500">Токены</p>
-          <p data-testid="wallet-balance" className="mt-2 text-2xl font-semibold tabular-nums text-white">
-            {wallet?.balance_tokens ?? "—"}
-          </p>
-        </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs uppercase tracking-wide text-zinc-500">Статус</p>
-          <p data-testid="wallet-status" className="mt-2 text-2xl font-semibold text-white">{wallet?.status ?? "—"}</p>
-        </div>
-        <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-          <p className="text-xs uppercase tracking-wide text-zinc-500">Кредиты</p>
-          <p className="mt-2 text-2xl font-semibold tabular-nums text-white">
-            {wallet?.credit_balance ?? "—"}
-          </p>
-        </div>
+        {[
+          {
+            label: "Токены",
+            value: wallet?.balance_tokens ?? "—",
+            icon: Coins,
+            testId: "wallet-balance",
+          },
+          {
+            label: "Статус",
+            value: wallet?.status ?? "—",
+            icon: Activity,
+            testId: "wallet-status",
+          },
+          {
+            label: "Кредиты",
+            value: wallet?.credit_balance ?? "—",
+            icon: CreditCard,
+            testId: undefined,
+          },
+        ].map((card) => {
+          const Icon = card.icon;
+          return (
+            <div
+              key={card.label}
+              className="flex items-center gap-4 rounded-2xl border border-[var(--canvas-border)] bg-[var(--card)] px-5 py-4 shadow-soft"
+            >
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-violet-500/10 ring-1 ring-violet-500/25">
+                <Icon className="h-5 w-5 text-violet-400" />
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-[var(--canvas-muted)]">{card.label}</p>
+                <p
+                  data-testid={card.testId}
+                  className="mt-1 text-2xl font-semibold tabular-nums text-[var(--canvas-fg)]"
+                >
+                  {card.value}
+                </p>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="flex gap-2">
@@ -98,50 +137,55 @@ export default function WalletPage() {
             key={value}
             type="button"
             onClick={() => setDays(value)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+            className={cn(
+              "rounded-xl border px-3 py-1.5 text-xs font-semibold transition",
               days === value
-                ? "border-violet-500/40 bg-violet-500/10 text-violet-200"
-                : "border-zinc-800 text-zinc-400"
-            }`}
+                ? "border-violet-500/40 bg-violet-500/10 text-violet-300"
+                : "border-[var(--canvas-border)] text-[var(--canvas-muted)] hover:text-[var(--canvas-fg)]",
+            )}
           >
             {value} дней
           </button>
         ))}
       </div>
 
-      <div className="rounded-xl border border-zinc-800">
-        <div className="border-b border-zinc-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+      <section className="moonai-panel !p-0 overflow-hidden">
+        <div className="border-b border-[var(--canvas-border)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--canvas-muted)]">
           Расход по ботам
         </div>
-        <ul className="divide-y divide-zinc-800 text-sm">
+        <ul className="divide-y divide-[var(--canvas-border)] text-sm">
           {(usage?.items ?? []).length === 0 ? (
-            <li className="px-4 py-3 text-zinc-500">Нет списаний за период.</li>
+            <li className="px-5 py-4 text-[var(--canvas-muted)]">Нет списаний за период.</li>
           ) : (
             usage?.items.map((row) => (
-              <li key={row.bot_id ?? "none"} className="flex justify-between px-4 py-3">
-                <span className="text-zinc-300">{row.bot_id ?? "без бота"}</span>
-                <span className="tabular-nums text-zinc-100">{row.amount_tokens}</span>
+              <li key={row.bot_id ?? "none"} className="flex justify-between px-5 py-3">
+                <span className="text-[var(--canvas-fg)]">{row.bot_id ?? "без бота"}</span>
+                <span className="tabular-nums text-[var(--canvas-fg)]">{row.amount_tokens}</span>
               </li>
             ))
           )}
         </ul>
-      </div>
+      </section>
 
-      <div className="rounded-xl border border-zinc-800">
-        <div className="border-b border-zinc-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+      <section className="moonai-panel !p-0 overflow-hidden">
+        <div className="border-b border-[var(--canvas-border)] px-5 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--canvas-muted)]">
           Последние операции
         </div>
-        <ul className="divide-y divide-zinc-800 text-sm">
-          {(wallet?.transactions ?? []).map((tx) => (
-            <li key={tx.id} className="flex justify-between px-4 py-3">
-              <span className="text-zinc-400">
-                {tx.tx_type} {tx.model_used ? `· ${tx.model_used}` : ""}
-              </span>
-              <span className="tabular-nums text-zinc-100">{tx.amount_tokens}</span>
-            </li>
-          ))}
+        <ul className="divide-y divide-[var(--canvas-border)] text-sm">
+          {(wallet?.transactions ?? []).length === 0 ? (
+            <li className="px-5 py-4 text-[var(--canvas-muted)]">Операций пока нет.</li>
+          ) : (
+            (wallet?.transactions ?? []).map((tx) => (
+              <li key={tx.id} className="flex justify-between px-5 py-3">
+                <span className="text-[var(--canvas-muted)]">
+                  {tx.tx_type} {tx.model_used ? `· ${tx.model_used}` : ""}
+                </span>
+                <span className="tabular-nums text-[var(--canvas-fg)]">{tx.amount_tokens}</span>
+              </li>
+            ))
+          )}
         </ul>
-      </div>
+      </section>
     </div>
   );
 }

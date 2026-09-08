@@ -111,7 +111,13 @@ export function UserHeaderDropdown() {
           onClick={() => setOpen((value) => !value)}
           className="flex items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-950/70 px-3 py-2 text-left transition hover:border-zinc-700 hover:bg-zinc-900/80"
         >
-          <div className="hidden min-w-0 sm:block">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-xs font-semibold text-violet-200 ring-1 ring-violet-500/30">
+            {(activeOrg?.name ?? currentUser?.company_name ?? "MP")
+              .trim()
+              .slice(0, 2)
+              .toUpperCase()}
+          </div>
+          <div className="hidden min-w-0 sm:block md:hidden">
             <p className="truncate text-sm font-medium text-zinc-100">
               {activeOrg?.name ?? currentUser?.company_name ?? "MP.AI Workspace"}
             </p>

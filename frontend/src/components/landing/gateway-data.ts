@@ -23,9 +23,9 @@ export interface MicroserviceStatus {
 }
 
 export const SYSTEM_METRICS: SystemMetric[] = [
-  { label: "Uptime", value: "99.9%", hint: "SLA production cluster" },
-  { label: "LLM Gateway", value: "< 120ms", hint: "median routing latency" },
   { label: "Каналы", value: "6+", hint: "WhatsApp, Telegram, Web, CRM…" },
+  { label: "Стек", value: "Prod-ready", hint: "Compose, health-checks, rolling deploy" },
+  { label: "Биллинг", value: "Wallet", hint: "Квоты и кредиты workspace" },
 ];
 
 export const MICROSERVICES: MicroserviceStatus[] = [

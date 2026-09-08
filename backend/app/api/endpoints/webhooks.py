@@ -268,12 +268,25 @@ async def telegram_webhook(
             length=len(parsed.message_text) if parsed else 0,
         )
 
-        from app.core.redis_client import claim_inbound_event
+        from app.core.redis_client import claim_telegram_inbound
 
         update_id = None
-        if isinstance(raw_body, dict) and raw_body.get("update_id") is not None:
-            update_id = str(raw_body.get("update_id"))
-        if update_id and not claim_inbound_event("telegram", update_id):
+        message_id = None
+        if isinstance(raw_body, dict):
+            if raw_body.get("update_id") is not None:
+                update_id = str(raw_body.get("update_id"))
+            for key in ("message", "edited_message", "business_message", "edited_business_message"):
+                block = raw_body.get(key)
+                if isinstance(block, dict) and block.get("message_id") is not None:
+                    message_id = str(block.get("message_id"))
+                    break
+        if not claim_telegram_inbound(
+            update_id=update_id,
+            bot_id=str(bot.id),
+            chat_id=parsed.chat_id if parsed else None,
+            message_id=message_id,
+            message_text=parsed.message_text if parsed else None,
+        ):
             return Response(status_code=status.HTTP_200_OK)
 
         from app.services.inbound.normalizer import attach_normalized, normalize_telegram

@@ -88,6 +88,29 @@ class Bitrix24HubAdapter:
         data = await self._exchange_code(platform_app=platform_app, code=code, http=http, redirect_uri=payload.get("redirect_uri"))
         return self._bundle_from_oauth(data)
 
+    async def test_connection(
+        self,
+        *,
+        secrets: TokenBundle,
+        http: httpx.AsyncClient,
+        connection_id: UUID,
+    ) -> bool:
+        """Validate webhook or OAuth credentials with a lightweight profile call."""
+        del connection_id
+        if (secrets.extra or {}).get("auth_mode") == "webhook" or secrets.webhook_url:
+            endpoint = self._rest_endpoint(secrets)
+            response = await http.get(f"{endpoint}profile.json", timeout=15.0)
+            return response.status_code < 400
+        if not secrets.access_token:
+            return False
+        endpoint = self._rest_endpoint(secrets)
+        response = await http.get(
+            f"{endpoint}profile.json",
+            params={"auth": secrets.access_token},
+            timeout=15.0,
+        )
+        return response.status_code < 400
+
     async def refresh(
         self,
         *,

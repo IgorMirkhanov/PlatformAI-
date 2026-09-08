@@ -88,6 +88,7 @@ export interface WhatsAppSessionStatus {
   push_name: string | null;
   connected_at: string | null;
   has_qr: boolean;
+  qr_base64?: string | null;
   hub_connected: boolean;
   hub_reference_id: string | null;
 }

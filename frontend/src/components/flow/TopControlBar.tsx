@@ -225,7 +225,7 @@ export function TopControlBar({
       )}
     >
       <div>
-        <h1 className="text-base font-semibold text-zinc-100">Flow Builder</h1>
+        <h1 className="text-base font-semibold text-zinc-100">Конструктор сценария</h1>
         <p className="text-xs text-zinc-500">
           {nodes.length} node{nodes.length !== 1 ? "s" : ""} · {edges.length}{" "}
           connection{edges.length !== 1 ? "s" : ""}

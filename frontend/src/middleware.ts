@@ -12,6 +12,11 @@ const PUBLIC_ROUTES = [
   "/reset-password",
   "/accept-invite",
   "/integrations/hub/oauth-result",
+  "/privacy",
+  "/terms",
+  "/support",
+  "/help",
+  "/legal",
 ] as const;
 
 function isPublicPath(pathname: string): boolean {

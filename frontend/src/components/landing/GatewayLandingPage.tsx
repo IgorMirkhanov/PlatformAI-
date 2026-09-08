@@ -208,18 +208,18 @@ export function GatewayLandingPage() {
             <div>
               <p className="inline-flex items-center gap-2 rounded-full border border-purple-500/25 bg-purple-500/10 px-3 py-1 text-xs font-medium text-purple-200">
                 <Sparkles className="h-3.5 w-3.5" />
-                MOONAI · Web3 · AI Infrastructure
+                MP.AI · AI agent platform
               </p>
               <h1 className="mt-5 text-balance text-3xl font-bold tracking-tight text-white sm:text-4xl lg:text-5xl">
-                Интеллектуальная экосистема{" "}
+                Платформа ИИ-агентов{" "}
                 <span className="bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">
-                  нового поколения
+                  для мессенджеров и CRM
                 </span>
               </h1>
               <p className="mt-5 max-w-2xl text-base leading-relaxed text-zinc-400 sm:text-lg">
-                MP.AI объединяет LLM-шлюзы, визуальный Flow Builder, омниканальные коннекторы и
-                встроенную CRM в единой production-платформе для команд, которые строят
-                AI-автоматизацию без компромиссов по безопасности и масштабу.
+                MP.AI объединяет LLM-шлюзы, визуальный конструктор сценариев, омниканальные
+                коннекторы и CRM в одной production-консоли для команд, которые автоматизируют
+                поддержку и продажи.
               </p>
 
               <div className="mt-8 grid gap-3 sm:grid-cols-3">
@@ -424,11 +424,11 @@ export function GatewayLandingPage() {
                 Ready to deploy
               </p>
               <h2 className="mt-3 text-2xl font-bold text-white sm:text-3xl">
-                Запустите своего AI-агента за один вечер
+                Запустите AI-агента в своём workspace
               </h2>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-zinc-400 sm:text-base">
-                Создайте workspace, подключите канал, соберите сценарий в Flow Builder и ведите
-                сделки в Native CRM — всё в одной платформе MP.AI.
+                Создайте организацию, подключите канал, соберите сценарий в конструкторе и ведите
+                диалоги в одной платформе MP.AI. Сроки внедрения зависят от сложности интеграций.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 {isAuthenticated ? (

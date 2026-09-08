@@ -12,16 +12,18 @@ const config: Config = {
     extend: {
       colors: {
         canvas: {
-          DEFAULT: "#09090b",
-          raised: "#121214",
-          overlay: "#18181b",
-          border: "#27272a",
+          DEFAULT: "var(--canvas)",
+          raised: "var(--canvas-raised)",
+          overlay: "var(--canvas-overlay)",
+          border: "var(--canvas-border)",
+          muted: "var(--canvas-muted)",
+          fg: "var(--canvas-fg)",
         },
         surface: {
-          DEFAULT: "#09090b",
-          raised: "#121214",
-          overlay: "#18181b",
-          border: "#27272a",
+          DEFAULT: "var(--canvas)",
+          raised: "var(--canvas-raised)",
+          overlay: "var(--canvas-overlay)",
+          border: "var(--canvas-border)",
         },
         accent: {
           DEFAULT: "#6366f1",
@@ -38,6 +40,7 @@ const config: Config = {
         glow: "0 0 32px rgba(99, 102, 241, 0.18)",
         "glow-purple": "0 0 40px rgba(124, 58, 237, 0.22)",
         node: "0 8px 32px rgba(0, 0, 0, 0.55)",
+        soft: "var(--shadow-soft)",
       },
       backgroundImage: {
         "luxury-gradient":

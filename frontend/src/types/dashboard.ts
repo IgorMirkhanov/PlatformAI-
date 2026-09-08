@@ -12,6 +12,20 @@ export interface AgentStatusSummary {
   connected_channels: string[];
 }
 
+export interface DailyChartPoint {
+  label: string;
+  messages: number;
+  dialogs: number;
+  date?: string;
+}
+
+export interface DashboardDailyPoint {
+  date: string;
+  label: string;
+  messages: number;
+  dialogs: number;
+}
+
 export interface DashboardStatsResponse {
   total_unique_dialogs: number;
   total_messages_dispatched: number;
@@ -22,12 +36,7 @@ export interface DashboardStatsResponse {
   subscription_plan: SubscriptionPlanName;
   agents: AgentStatusSummary[];
   period_label: string;
-}
-
-export interface DailyChartPoint {
-  label: string;
-  messages: number;
-  dialogs: number;
+  daily_series?: DashboardDailyPoint[];
 }
 
 export type DiagnosticErrorType =

@@ -15,6 +15,7 @@ from app.core.rbac import Permission
 from app.models.core_models import Bot
 from app.services.integrations.google_calendar_service import (
     build_google_auth_url,
+    decode_oauth_purpose,
     decode_oauth_state,
     exchange_google_code,
     persist_google_tokens,
@@ -23,13 +24,14 @@ from app.services.integrations.google_calendar_service import (
 router = APIRouter(tags=["integrations-google"])
 
 
-@router.get("/bots/{bot_id}/integrations/google/auth-url", summary="Start Google Calendar OAuth2 flow")
+@router.get("/bots/{bot_id}/integrations/google/auth-url", summary="Start Google OAuth2 flow")
 async def google_calendar_auth_url(
     bot_id: uuid.UUID,
+    purpose: str = Query(default="google"),
     _bot: Bot = Depends(require_bot_access(Permission.BOT_INTEGRATIONS)),
 ) -> dict[str, str]:
     try:
-        auth_url, state = build_google_auth_url(bot_id)
+        auth_url, state = build_google_auth_url(bot_id, purpose=purpose)
         return {"auth_url": auth_url, "state": state}
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -53,8 +55,9 @@ async def google_calendar_callback(
 
     try:
         bot_id = decode_oauth_state(state)
+        purpose = decode_oauth_purpose(state)
         token_payload = await exchange_google_code(code)
-        await persist_google_tokens(db, bot_id, token_payload)
+        await persist_google_tokens(db, bot_id, token_payload, purpose=purpose)
         await db.commit()
     except Exception as exc:
         await db.rollback()

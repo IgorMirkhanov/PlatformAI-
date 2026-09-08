@@ -229,8 +229,16 @@ class AIOrchestrator:
                 client_id=client_id,
                 node_id=node_id,
             )
+            global_prompt = await self._resolve_global_prompt(
+                db_session,
+                current_node_data,
+                bot_id=bot_id,
+            )
             system_prompt = self._apply_platform_prompt_routing(
-                str(current_node_data.get("prompt_context", "")),
+                self._merge_prompts(
+                    str(current_node_data.get("prompt_context", "") or ""),
+                    global_prompt,
+                ),
                 channel=channel,
             )
             messages = self._build_llm_messages(
@@ -239,6 +247,14 @@ class AIOrchestrator:
                 history=history,
                 incoming_message=incoming_message,
             )
+            if history:
+                # Reinforce continuity — models sometimes re-greet mid-dialog.
+                messages[0]["content"] = (
+                    f"{messages[0]['content']}\n\n"
+                    "CONTINUITY: This is an ongoing conversation. "
+                    "Do not restart with a greeting or company intro. "
+                    "Answer the latest user message using prior turns."
+                )
             node_model = (
                 current_node_data.get("llm_model_name")
                 or current_node_data.get("model_name")
@@ -277,16 +293,32 @@ class AIOrchestrator:
                     dry_run=dry_run,
                 )
             response_text = (completion.text or "").strip()
-            if not response_text and (
-                completion.booking_tools_succeeded
-                or any(name in self.BOOKING_TOOL_NAMES for name in completion.tools_executed)
+            from app.services.llm.tool_reply_sanitize import (
+                is_tool_debug_text,
+                sanitize_outbound_text,
+            )
+
+            if is_tool_debug_text(response_text) or (
+                not response_text
+                and (
+                    completion.booking_tools_succeeded
+                    or bool(completion.tools_executed)
+                    or any(name in self.BOOKING_TOOL_NAMES for name in completion.tools_executed)
+                )
             ):
-                response_text = self.TOOL_SUCCESS_CONFIRMATION_MESSAGE
+                response_text = sanitize_outbound_text(
+                    response_text,
+                    tools_executed=completion.tools_executed,
+                    booking_ok=completion.booking_tools_succeeded
+                    or any(name in self.BOOKING_TOOL_NAMES for name in completion.tools_executed),
+                    fallback=self.TOOL_SUCCESS_CONFIRMATION_MESSAGE,
+                )
                 logger.info(
                     "AIOrchestrator.tool_success_fallback | client_id={client_id} tools={tools}",
                     client_id=client_id,
                     tools=completion.tools_executed,
                 )
+            response_text = sanitize_outbound_text(response_text) or response_text
             attachments = self._collect_media_attachments(
                 rag_hits=rag_hits,
                 llm_text=response_text,
@@ -410,8 +442,15 @@ class AIOrchestrator:
         resolved_model = model_name or self.DEFAULT_FAST_MODEL
         resolved_temperature = 0.4 if temperature is None else float(temperature)
         node_prompt = str(current_node_data.get("prompt_context", "") or "").strip()
+        resolved_global = global_prompt
+        if not (resolved_global and str(resolved_global).strip()):
+            resolved_global = await self._resolve_global_prompt(
+                db_session,
+                current_node_data,
+                bot_id=bot_id,
+            )
         merged_prompt = self._apply_platform_prompt_routing(
-            self._merge_prompts(node_prompt, global_prompt),
+            self._merge_prompts(node_prompt, resolved_global),
             channel=channel,
         )
 
@@ -874,6 +913,28 @@ class AIOrchestrator:
             return "You are a helpful support assistant."
         return "\n\n".join(parts)
 
+    async def _resolve_global_prompt(
+        self,
+        db_session: AsyncSession,
+        current_node_data: dict[str, Any],
+        *,
+        bot_id: uuid.UUID | None,
+    ) -> str | None:
+        """Agent «Промптинг» instructions, then node-carried global prompt."""
+        from_node = str(
+            current_node_data.get("global_prompt_instructions")
+            or current_node_data.get("prompt_instructions")
+            or ""
+        ).strip()
+        if from_node:
+            return from_node
+        if bot_id is None:
+            return None
+        bot = await db_session.get(Bot, bot_id)
+        if bot is None:
+            return None
+        return str(getattr(bot, "prompt_instructions", "") or "").strip() or None
+
     @staticmethod
     def normalize_channel(channel: str | None, *, source: str | None = None) -> str:
         raw = (channel or source or "").strip().lower().replace(" ", "_")
@@ -1293,8 +1354,16 @@ class AIOrchestrator:
         from app.services.llm_orchestrator import llm_orchestrator
 
         history = await self._fetch_chat_history(db, client_id)
+        global_prompt = await self._resolve_global_prompt(
+            db,
+            current_node_data,
+            bot_id=bot_id,
+        )
         system_prompt = self._apply_platform_prompt_routing(
-            str(current_node_data.get("prompt_context", "")),
+            self._merge_prompts(
+                str(current_node_data.get("prompt_context", "") or ""),
+                global_prompt,
+            ),
             channel=channel,
         )
         messages = self._build_llm_messages(
@@ -1577,12 +1646,39 @@ class AIOrchestrator:
                             api_key=fb_key,
                             base_url=fb_base,
                         )
+                        if fb_result.tool_calls and bot_id is not None:
+                            fb_result = await llm_orchestrator._resolve_tool_calls(
+                                fb_result,
+                                messages=messages,
+                                model=fb_model,
+                                temperature=resolved_temperature,
+                                tools=openai_tools,
+                                bot_id=bot_id,
+                                client_id=client_id,
+                                db=db,
+                            )
+                        from app.services.llm.tool_reply_sanitize import sanitize_outbound_text
+
                         completion = LLMCompletionResult(
-                            text=(fb_result.text or "").strip(),
+                            text=sanitize_outbound_text(
+                                fb_result.text,
+                                tools_executed=list(
+                                    getattr(fb_result, "tools_executed", None) or []
+                                ),
+                                booking_ok=bool(
+                                    getattr(fb_result, "booking_tools_succeeded", False)
+                                ),
+                            ),
                             input_tokens=fb_result.input_tokens,
                             output_tokens=fb_result.output_tokens,
                             total_tokens=fb_result.total_tokens,
                             model_name=fb_result.model or fb_model,
+                            tools_executed=list(
+                                getattr(fb_result, "tools_executed", None) or []
+                            ),
+                            booking_tools_succeeded=bool(
+                                getattr(fb_result, "booking_tools_succeeded", False)
+                            ),
                         )
                         logger.info(
                             "[LLM Fallback] Fallback model succeeded | primary={primary} fallback={fallback}",

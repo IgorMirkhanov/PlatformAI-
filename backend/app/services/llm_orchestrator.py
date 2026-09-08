@@ -250,11 +250,23 @@ class LLMOrchestrator:
                 }
             )
 
+        import json as _json
+
+        from app.services.llm.tool_reply_sanitize import (
+            is_tool_debug_text,
+            sanitize_outbound_text,
+        )
+
+        # OpenAI-compatible APIs expect content=null on tool-only assistant turns.
+        assistant_content = (result.text or "").strip() or None
+        if assistant_content and is_tool_debug_text(assistant_content):
+            assistant_content = None
+
         follow_up = list(messages)
         follow_up.append(
             {
                 "role": "assistant",
-                "content": result.text or None,
+                "content": assistant_content,
                 "tool_calls": [
                     {
                         "id": tc.get("id"),
@@ -280,7 +292,6 @@ class LLMOrchestrator:
                 channel=channel,
                 channel_user_id=channel_user_id,
             )
-            import json as _json
 
             if tool_name:
                 tools_executed.append(tool_name)
@@ -296,26 +307,64 @@ class LLMOrchestrator:
             )
 
         # Second completion — model reads tool output and replies to the user.
+        # Do not pass tools again: force a natural-language answer for the client.
         final = await self._client.chat_completion(
             messages=follow_up,
             model=model,
             temperature=temperature,
-            tools=tools,
+            tools=None,
         )
         final.tool_calls = None
         final.tools_executed = tools_executed
         final.booking_tools_succeeded = booking_ok
 
-        # Models often return tool-only first turns and empty final content.
-        if not (final.text or "").strip() and booking_ok:
-            final.text = (
-                "Отлично! Записал вас на консультацию и зафиксировал заявку. "
-                "Наш менеджер свяжется с вами."
+        final.text = sanitize_outbound_text(
+            final.text,
+            tools_executed=tools_executed,
+            booking_ok=booking_ok,
+        )
+        if is_tool_debug_text(final.text) or not (final.text or "").strip():
+            # Last resort: one more completion without tools asking for a plain reply.
+            nudge = list(follow_up)
+            nudge.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Сформируй короткий естественный ответ клиенту на русском "
+                        "по результатам выполненных инструментов. Не вызывай tools."
+                    ),
+                }
             )
+            try:
+                retry = await self._client.chat_completion(
+                    messages=nudge,
+                    model=model,
+                    temperature=temperature,
+                    tools=None,
+                )
+                final.text = sanitize_outbound_text(
+                    retry.text,
+                    tools_executed=tools_executed,
+                    booking_ok=booking_ok,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "LLMOrchestrator.tool_reply_retry_failed | bot_id={bot_id} error={error}",
+                    bot_id=bot_id,
+                    error=str(exc),
+                )
+                final.text = sanitize_outbound_text(
+                    None,
+                    tools_executed=tools_executed,
+                    booking_ok=booking_ok,
+                )
+
+        if final.text:
             logger.info(
-                "LLMOrchestrator.tool_success_fallback | bot_id={bot_id} tools={tools}",
+                "LLMOrchestrator.tool_react_ok | bot_id={bot_id} tools={tools} reply_len={n}",
                 bot_id=bot_id,
                 tools=tools_executed,
+                n=len(final.text),
             )
         return final
 

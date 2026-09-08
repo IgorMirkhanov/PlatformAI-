@@ -1,34 +1,60 @@
-import type { DashboardStatsResponse, DailyChartPoint } from "@/types/dashboard";
+import type {
+  DashboardDailyPoint,
+  DashboardStatsResponse,
+  DailyChartPoint,
+} from "@/types/dashboard";
 
 const DAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 export const FALLBACK_DASHBOARD_STATS: DashboardStatsResponse = {
-  total_unique_dialogs: 142,
-  total_messages_dispatched: 3180,
-  api_token_expenditure: 48.75,
-  active_agents: 4,
-  inactive_agents: 1,
-  subscription_balance: 128.5,
-  subscription_plan: "PRO",
+  total_unique_dialogs: 0,
+  total_messages_dispatched: 0,
+  api_token_expenditure: 0,
+  active_agents: 0,
+  inactive_agents: 0,
+  subscription_balance: 0,
+  subscription_plan: "FREE",
   agents: [],
-  period_label: "fallback",
+  period_label: "last_7_days",
+  daily_series: [],
 };
 
-export function buildDailyChartSeries(stats: DashboardStatsResponse): DailyChartPoint[] {
-  const totalMessages = stats.total_messages_dispatched;
-  const totalDialogs = stats.total_unique_dialogs;
-  const weights = [0.72, 0.88, 0.95, 1.08, 1.15, 0.82, 0.9];
+/** Empty last-7-days skeleton (calendar order, UTC-aligned labels). */
+export function emptyDailyChartSeries(days = 7): DailyChartPoint[] {
+  const points: DailyChartPoint[] = [];
+  const today = new Date();
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    d.setUTCDate(d.getUTCDate() - offset);
+    points.push({
+      date: d.toISOString().slice(0, 10),
+      label: DAY_LABELS[(d.getUTCDay() + 6) % 7] ?? "Пн",
+      messages: 0,
+      dialogs: 0,
+    });
+  }
+  return points;
+}
 
-  return DAY_LABELS.map((label, index) => {
-    const weight = weights[index] ?? 1;
-    const messages = Math.max(0, Math.round((totalMessages / 7) * weight));
-    const dialogs = Math.max(0, Math.round((totalDialogs / 7) * weight * 0.65));
-    return { label, messages, dialogs };
-  });
+/**
+ * Prefer real `daily_series` from the API. Never invent weekday weights from
+ * lifetime totals — that caused the "messages on every day" chart bug.
+ */
+export function buildDailyChartSeries(stats: DashboardStatsResponse): DailyChartPoint[] {
+  const series = stats.daily_series;
+  if (Array.isArray(series) && series.length > 0) {
+    return series.map((point: DashboardDailyPoint) => ({
+      date: point.date,
+      label: point.label,
+      messages: Math.max(0, Number(point.messages) || 0),
+      dialogs: Math.max(0, Number(point.dialogs) || 0),
+    }));
+  }
+  return emptyDailyChartSeries();
 }
 
 export function buildFallbackChartSeries(): DailyChartPoint[] {
-  return buildDailyChartSeries(FALLBACK_DASHBOARD_STATS);
+  return emptyDailyChartSeries();
 }
 
 export function countActiveLeads(stats: DashboardStatsResponse): number {

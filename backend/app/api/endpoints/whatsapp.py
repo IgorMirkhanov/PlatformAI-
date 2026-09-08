@@ -33,6 +33,7 @@ class WhatsAppSessionStatusResponse(BaseModel):
     push_name: str | None = None
     connected_at: str | None = None
     has_qr: bool = False
+    qr_base64: str | None = None
     hub_connected: bool = False
     hub_reference_id: str | None = None
 
@@ -67,13 +68,15 @@ async def get_whatsapp_session(
         (c for c in hub.channels if c.channel_type == HubChannelType.WHATSAPP_QR),
         None,
     )
+    qr_b64 = live.get("qr_base64")
     return WhatsAppSessionStatusResponse(
         bot_id=str(bot_id),
         status=str(live.get("status") or "disconnected"),
         phone=live.get("phone") or (qr_hub.reference_id if qr_hub else None),
         push_name=live.get("push_name"),
         connected_at=live.get("connected_at"),
-        has_qr=bool(live.get("has_qr")),
+        has_qr=bool(live.get("has_qr") or qr_b64),
+        qr_base64=str(qr_b64) if qr_b64 else None,
         hub_connected=bool(qr_hub.connected) if qr_hub else False,
         hub_reference_id=qr_hub.reference_id if qr_hub else None,
     )

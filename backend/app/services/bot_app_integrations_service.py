@@ -33,6 +33,7 @@ INTEGRATION_PLATFORMS: tuple[str, ...] = (
     "kommo",
     "bitrix24",
     "google_calendar",
+    "google_sheets",
     "kaspi_receipts",
     "kaspi_pay",
     "custom_webhook",
@@ -42,6 +43,7 @@ INTEGRATION_PLATFORMS: tuple[str, ...] = (
 
 _SENSITIVE_FIELDS: dict[str, tuple[str, ...]] = {
     "google_calendar": ("refresh_token", "access_token", "client_secret"),
+    "google_sheets": ("refresh_token", "access_token", "client_secret"),
     "kaspi_receipts": ("api_key",),
     "kaspi_pay": ("merchant_token", "api_key", "secret_key"),
     "custom_webhook": ("hmac_secret", "webhook_secret"),
@@ -110,6 +112,8 @@ class BotAppIntegrationsService:
             return await self._connect_bitrix(db, bot, payload)
         if platform == "google_calendar":
             return await self._connect_google_calendar(db, bot, payload)
+        if platform == "google_sheets":
+            return await self._connect_google_sheets(db, bot, payload)
         if platform == "kaspi_receipts":
             return await self._connect_kaspi_receipts(db, bot, payload)
         if platform == "kaspi_pay":
@@ -488,6 +492,53 @@ class BotAppIntegrationsService:
             "message": "Google Calendar подключён.",
         }
 
+    async def _connect_google_sheets(
+        self, db: AsyncSession, bot: Bot, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        refresh_token = str(payload.get("refresh_token") or "").strip()
+        access_token = str(payload.get("access_token") or "").strip()
+        client_id = str(payload.get("client_id") or getattr(settings, "GOOGLE_CLIENT_ID", "") or "").strip()
+        client_secret = str(
+            payload.get("client_secret") or getattr(settings, "GOOGLE_CLIENT_SECRET", "") or ""
+        ).strip()
+        spreadsheet_id = str(payload.get("spreadsheet_id") or "").strip()
+
+        if not refresh_token and not access_token:
+            raise ValueError("Укажите OAuth refresh_token или access_token Google Sheets.")
+
+        if access_token and spreadsheet_id:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                probe = await client.get(
+                    f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={"fields": "spreadsheetId,properties.title"},
+                )
+                if probe.status_code >= 400:
+                    raise ValueError("Google Sheets access_token отклонён API или spreadsheet недоступен.")
+
+        config = {
+            "connected": True,
+            "sync_enabled": True,
+            "refresh_token": refresh_token,
+            "access_token": access_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "spreadsheet_id": spreadsheet_id,
+            "connected_at": _now_iso(),
+            "updated_at": _now_iso(),
+        }
+        if payload.get("expires_at"):
+            config["expires_at"] = payload.get("expires_at")
+        self._write_integration(bot, "google_sheets", config)
+        await db.flush()
+        return {
+            "bot_id": str(bot.id),
+            "platform": "google_sheets",
+            "connected": True,
+            "sync_enabled": True,
+            "message": "Google Sheets подключён.",
+        }
+
     async def _connect_kaspi_receipts(
         self, db: AsyncSession, bot: Bot, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -655,6 +706,7 @@ class BotAppIntegrationsService:
             "kommo": "Kommo",
             "bitrix24": "Битрикс 24",
             "google_calendar": "Google Calendar",
+            "google_sheets": "Google Sheets",
             "kaspi_receipts": "Проверка Kaspi-чеков",
             "kaspi_pay": "Kaspi Pay",
             "custom_webhook": "Custom Integration",
@@ -716,6 +768,7 @@ class BotAppIntegrationsService:
             "sync_enabled": bool(cfg.get("sync_enabled", True)) if connected else False,
             "label": labels.get(platform, platform),
             "detail": cfg.get("calendar_id")
+            or cfg.get("spreadsheet_id")
             or cfg.get("merchant_id")
             or cfg.get("provider_id")
             or None,

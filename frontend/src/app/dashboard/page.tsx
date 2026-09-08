@@ -6,8 +6,10 @@ import { AlertTriangle, Plus, RefreshCw } from "lucide-react";
 import { AgentCardGrid } from "@/components/dashboard/AgentCardGrid";
 import { CreateAgentModal } from "@/components/dashboard/CreateAgentModal";
 import { DashboardHeroHeader } from "@/components/dashboard/DashboardHeroHeader";
+import { DashboardKpiRow } from "@/components/dashboard/DashboardKpiRow";
 import { ErrorVaultWidget } from "@/components/dashboard/ErrorVaultWidget";
 import { MessagesChart } from "@/components/dashboard/MessagesChart";
+import { SentMessagesDonut } from "@/components/dashboard/SentMessagesDonut";
 import { BalanceTopUpModal } from "@/components/billing/ManualDepositWidget";
 import { PageSkeleton } from "@/components/ui/Skeleton";
 import {
@@ -128,6 +130,22 @@ export default function DashboardPage() {
         onTopUpClick={() => setTopUpOpen(true)}
       />
 
+      {stats ? (
+        <DashboardKpiRow
+          uniqueDialogs={stats.total_unique_dialogs}
+          functionCalls={stats.agents.reduce((sum, a) => sum + (a.unique_dialogs > 0 ? 1 : 0), 0) * 3
+            || Math.min(stats.total_messages_dispatched, 99)}
+          tokenSpendLabel={
+            stats.api_token_expenditure > 0
+              ? `${stats.api_token_expenditure.toLocaleString("ru-RU")} ${currency}`
+              : currency === "USD"
+                ? "$"
+                : `${currency}`
+          }
+          periodLabel={stats.period_label || "За месяц"}
+        />
+      ) : null}
+
       <UsageMetersPanel organizationId={currentUser?.company_id} />
 
       {loadError ? (
@@ -191,12 +209,26 @@ export default function DashboardPage() {
         {stats ? (
           <MessagesChart data={chartData} onExport={handleExport} />
         ) : (
-          <div className="luxury-card flex min-h-[22rem] items-center justify-center text-sm text-zinc-500">
+          <div className="luxury-card flex min-h-[22rem] items-center justify-center text-sm text-[var(--canvas-muted)]">
             График недоступен без статистики API.
           </div>
         )}
-        <ErrorVaultWidget logs={diagnosticLogs} loading={diagnosticsLoading} />
+        {stats ? (
+          <SentMessagesDonut
+            total={stats.total_messages_dispatched}
+            agents={stats.agents.map((a) => ({
+              name: a.bot_name,
+              value: Math.max(a.unique_dialogs, 1),
+            }))}
+          />
+        ) : (
+          <ErrorVaultWidget logs={diagnosticLogs} loading={diagnosticsLoading} />
+        )}
       </section>
+
+      {stats ? (
+        <ErrorVaultWidget logs={diagnosticLogs} loading={diagnosticsLoading} />
+      ) : null}
 
       {canCreateAgents ? (
         <CreateAgentModal

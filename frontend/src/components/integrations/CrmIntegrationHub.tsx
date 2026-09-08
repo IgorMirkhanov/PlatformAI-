@@ -41,6 +41,7 @@ const LOGO: Record<string, string> = {
   kommo: "Km",
   bitrix24: "B24",
   google_calendar: "G",
+  google_sheets: "GS",
   kaspi_receipts: "K",
   kaspi_pay: "KP",
   custom_webhook: "API",
@@ -150,12 +151,12 @@ export function CrmIntegrationHub({ botId, profile }: CrmIntegrationHubProps) {
     }
   };
 
-  const handleGoogleOAuth = async (): Promise<void> => {
+  const handleGoogleOAuth = async (purpose: "google" | "google_sheets" = "google"): Promise<void> => {
     try {
-      const { auth_url } = await fetchGoogleCalendarAuthUrl(botId);
+      const { auth_url } = await fetchGoogleCalendarAuthUrl(botId, purpose);
       window.location.href = auth_url;
     } catch (error) {
-      showToast(getApiErrorMessage(error, "Не удалось запустить OAuth Google Calendar."), "error");
+      showToast(getApiErrorMessage(error, "Не удалось запустить OAuth Google."), "error");
     }
   };
 
@@ -366,7 +367,11 @@ export function CrmIntegrationHub({ botId, profile }: CrmIntegrationHubProps) {
           onClose={() => setActiveDefinition(null)}
           onConnect={() => void handleGenericConnect()}
           onDisconnect={() => void handleDisconnect(activeDefinition.id)}
-          onGoogleOAuth={() => void handleGoogleOAuth()}
+          onGoogleOAuth={() =>
+            void handleGoogleOAuth(
+              activePlatform === "google_sheets" ? "google_sheets" : "google",
+            )
+          }
         />
       ) : null}
 

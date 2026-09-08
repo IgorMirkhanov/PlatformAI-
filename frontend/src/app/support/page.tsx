@@ -1,5 +1,5 @@
 import { LegalDocument } from "@/components/legal/LegalDocument";
-import { supportEmail } from "@/components/legal/SiteFooter";
+import { supportEmail } from "@/lib/support-email";
 
 export default function SupportPage() {
   const email = supportEmail();

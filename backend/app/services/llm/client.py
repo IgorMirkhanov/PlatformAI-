@@ -138,9 +138,8 @@ class OpenAIChatClient:
                 )
         if not content and not tool_calls:
             raise RuntimeError(f"OpenAI model '{model}' returned an empty completion")
-        if not content and tool_calls:
-            names = [t["name"] for t in tool_calls if t.get("name")]
-            content = f"Called tools: {', '.join(names) or 'function'}"
+        # Tool-only turns must keep empty content — never synthesize "Called tools: …"
+        # (that string used to leak into Telegram/Wazzup when ReAct resolution was skipped).
 
         usage = response.usage
         input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)

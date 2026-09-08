@@ -142,7 +142,7 @@ export function AgentsGrid({ agents, onRefresh }: AgentsGridProps) {
                 href={`/flow-builder?botId=${agent.bot_id}`}
                 className="inline-flex rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs font-medium text-indigo-300 hover:bg-indigo-500/20"
               >
-                Flow Builder
+                Сценарий
               </Link>
             </div>
           </li>

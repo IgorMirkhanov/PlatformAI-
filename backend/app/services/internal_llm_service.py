@@ -159,7 +159,7 @@ async def complete_via_gateway(
             )
             return LLMResponse(
                 content=(fb.text or "").strip(),
-                tool_calls=None,
+                tool_calls=list(fb.tool_calls) if fb.tool_calls else None,
                 prompt_tokens=fb.input_tokens,
                 completion_tokens=fb.output_tokens,
                 model_name=fb.model or model,

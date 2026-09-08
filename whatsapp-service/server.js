@@ -606,6 +606,8 @@ app.get("/api/sessions/:botId/status", (req, res) => {
     push_name: session?.pushName || null,
     connected_at: session?.connectedAt || null,
     has_qr: Boolean(session?.qrBase64),
+    // HTTP fallback when browser WS proxy fails — UI can poll for the PNG.
+    qr_base64: session?.qrBase64 || null,
   });
 });
 

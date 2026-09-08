@@ -12,6 +12,7 @@ WA_MSG_DEDUP_PREFIX: Final[str] = "wa:msg_dedup:"
 WA_MSG_DEDUP_TTL_SECONDS: Final[int] = 24 * 60 * 60  # 24 hours
 INBOUND_DEDUP_PREFIX: Final[str] = "inbound:dedup:"
 INBOUND_DEDUP_TTL_SECONDS: Final[int] = 24 * 60 * 60
+TELEGRAM_MSG_DEDUP_TTL_SECONDS: Final[int] = 24 * 60 * 60
 FLOW_VERSION_PREFIX: Final[str] = "flow:published:ver:"
 IMPERSONATION_REVOKE_PREFIX: Final[str] = "impersonation:revoked:"
 IMPERSONATION_REVOKE_TTL_SECONDS: Final[int] = 60 * 60  # matches impersonation JWT TTL
@@ -27,6 +28,39 @@ def get_redis_client() -> Any:
         socket_timeout=0.6,
         decode_responses=True,
     )
+
+
+def claim_telegram_inbound(
+    *,
+    update_id: str | int | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
+    message_id: str | int | None = None,
+    message_text: str | None = None,
+) -> bool:
+    """
+    Claim a Telegram inbound once across poller / webhook / worker races.
+
+    Uses stable ``chat_id:message_id`` first (same user message can arrive under
+    different ``update_id`` via message + business_message), then ``update_id``.
+    """
+    del message_text  # kept for call-site compatibility; not used for fingerprinting
+
+    # 1) Stable Telegram message id (best — survives dual delivery envelopes).
+    if bot_id and chat_id and message_id is not None and str(message_id).strip():
+        if not claim_inbound_event(
+            "telegram_msg",
+            f"{bot_id}:{chat_id}:{message_id}",
+            ttl_seconds=TELEGRAM_MSG_DEDUP_TTL_SECONDS,
+        ):
+            return False
+
+    # 2) Update id (Telegram delivery envelope).
+    if update_id is not None and str(update_id).strip():
+        if not claim_inbound_event("telegram", str(update_id)):
+            return False
+
+    return True
 
 
 async def get_async_redis() -> Any:

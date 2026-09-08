@@ -137,7 +137,7 @@ export function HubProviderCard({
     }
   };
 
-  /** Expired → full OAuth / API-key flow again (never silent token refresh). */
+  /** Expired → full OAuth / API-key / webhook flow again (never silent token refresh). */
   const startConnect = () => {
     setFormError(null);
     setOauthUiError(false);
@@ -322,7 +322,9 @@ export function HubProviderCard({
           <p className="text-xs text-zinc-400">
             {definition.auth === "oauth"
               ? "Чтобы сменить аккаунт, переподключите OAuth."
-              : "Можно заменить ключ — он снова пройдёт testConnection()."}
+              : definition.auth === "webhook"
+                ? "Можно заменить Incoming Webhook URL — он снова пройдёт проверку."
+                : "Можно заменить ключ — он снова пройдёт testConnection()."}
           </p>
           {definition.auth === "oauth" ? (
             <Button size="sm" className="mt-3" onClick={startConnect} disabled={busy}>

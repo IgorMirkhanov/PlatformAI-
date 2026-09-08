@@ -2,13 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Light (default before .dark) */
 :root {
+  color-scheme: light;
+  --canvas: #f8fafc;
+  --canvas-raised: #ffffff;
+  --canvas-overlay: #f1f5f9;
+  --canvas-border: #e2e8f0;
+  --canvas-muted: #64748b;
+  --canvas-fg: #0f172a;
+  --canvas-fg-muted: #475569;
+  --accent: #6366f1;
+  --accent-glow: rgba(99, 102, 241, 0.25);
+  --card: #ffffff;
+  --sidebar: #ffffff;
+  --shadow-soft: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.dark {
   color-scheme: dark;
-  --canvas: #09090b;
-  --canvas-raised: #121214;
-  --canvas-border: #27272a;
+  --canvas: #0b0d11;
+  --canvas-raised: #12151e;
+  --canvas-overlay: #181c28;
+  --canvas-border: #272a36;
+  --canvas-muted: #71717a;
+  --canvas-fg: #f4f4f5;
+  --canvas-fg-muted: #a1a1aa;
   --accent: #6366f1;
   --accent-glow: rgba(124, 58, 237, 0.35);
+  --card: #181c28;
+  --sidebar: #0d0f14;
+  --shadow-soft: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+@layer utilities {
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 110;
+  }
+  .skip-link:focus {
+    left: 1rem;
+    top: 1rem;
+    border-radius: 0.5rem;
+    background: #059669;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #fff;
+  }
 }
 
 @layer base {
@@ -18,13 +61,13 @@
 
   html {
     height: 100%;
-    background-color: #000000 !important;
+    background-color: var(--canvas);
   }
 
   body {
     min-height: 100%;
-    background-color: #000000 !important;
-    color: #f4f4f5 !important;
+    background-color: var(--canvas);
+    color: var(--canvas-fg);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -50,38 +93,52 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: #94a3b8;
   border-radius: 9999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  background-clip: content-box;
+}
+
 ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+  background-clip: content-box;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
   background: #52525b;
   background-clip: content-box;
 }
 
 .react-flow__background {
-  background-color: #09090b !important;
+  background-color: var(--canvas) !important;
 }
 
 .react-flow__minimap {
-  background-color: #121214 !important;
+  background-color: var(--canvas-raised) !important;
 }
 
 .react-flow__controls {
-  @apply overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 shadow-node;
+  @apply overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-node dark:border-zinc-800 dark:bg-zinc-900;
 }
 
 .react-flow__controls-button {
-  @apply border-zinc-800 bg-zinc-900 text-zinc-300 fill-zinc-300;
+  @apply border-zinc-200 bg-white text-zinc-600 fill-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:fill-zinc-300;
 }
 
 .react-flow__controls-button:hover {
-  @apply bg-zinc-800;
+  @apply bg-zinc-100 dark:bg-zinc-800;
 }
 
 .react-flow__edge-path {
+  stroke: #94a3b8;
+}
+
+.dark .react-flow__edge-path {
   stroke: #52525b;
 }
 
@@ -96,7 +153,7 @@
 }
 
 .react-flow__handle {
-  @apply h-3 w-3 border-2 border-zinc-900 bg-zinc-500;
+  @apply h-3 w-3 border-2 border-white bg-zinc-400 dark:border-zinc-900 dark:bg-zinc-500;
 }
 
 .react-flow__handle:hover {
@@ -109,27 +166,41 @@
 
 @layer components {
   .luxury-card {
-    @apply rounded-xl border border-zinc-800/80 bg-[#121214] p-6;
+    @apply rounded-xl border p-6;
+    border-color: var(--canvas-border);
+    background-color: var(--card);
+    box-shadow: var(--shadow-soft);
   }
 
   .glass-panel {
-    @apply rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-6 backdrop-blur;
+    @apply rounded-xl border p-6 backdrop-blur;
+    border-color: var(--canvas-border);
+    background-color: color-mix(in srgb, var(--canvas-raised) 80%, transparent);
   }
 
   .glass-card {
-    @apply rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-6 backdrop-blur;
+    @apply rounded-xl border p-6 backdrop-blur;
+    border-color: var(--canvas-border);
+    background-color: color-mix(in srgb, var(--canvas-raised) 80%, transparent);
   }
 
   .agent-tab-bar {
-    @apply sticky top-0 z-30 rounded-xl border border-zinc-800 bg-[#121214] p-1 backdrop-blur-md;
+    @apply sticky top-0 z-30 rounded-xl border p-1 backdrop-blur-md;
+    border-color: var(--canvas-border);
+    background-color: var(--canvas-raised);
   }
 
   .agent-tab-link {
-    @apply relative whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium text-zinc-500 transition hover:bg-zinc-800/50 hover:text-zinc-200;
+    @apply relative whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-medium transition;
+    color: var(--canvas-muted);
+  }
+
+  .agent-tab-link:hover {
+    @apply bg-zinc-100 text-zinc-900 dark:bg-zinc-800/50 dark:text-zinc-200;
   }
 
   .agent-tab-link-active {
-    @apply bg-zinc-900 text-indigo-300 ring-1 ring-indigo-500/30;
+    @apply bg-indigo-50 text-indigo-700 ring-1 ring-indigo-500/30 dark:bg-zinc-900 dark:text-indigo-300;
   }
 
   .agent-tab-link-active::after {
@@ -138,27 +209,34 @@
   }
 
   .moonai-sidebar {
-    @apply bg-[#070708];
+    background-color: var(--sidebar);
   }
 
   .moonai-account-panel {
-    @apply rounded-2xl border border-violet-500/15 bg-gradient-to-br from-violet-950/20 via-[#0c0c0e] to-black p-4;
+    @apply rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-50 via-white to-slate-50 p-4 dark:from-violet-950/20 dark:via-[#0c0c0e] dark:to-black dark:border-violet-500/15;
   }
 
   .moonai-agent-chip {
-    @apply rounded-xl border border-violet-500/20 bg-violet-500/5 px-3 py-3;
+    @apply rounded-xl border border-violet-500/25 bg-violet-500/5 px-3 py-3;
   }
 
   .moonai-panel {
-    @apply rounded-2xl border border-zinc-800/80 bg-[#0a0a0c]/90 p-6 backdrop-blur;
+    @apply rounded-2xl border p-6 backdrop-blur;
+    border-color: var(--canvas-border);
+    background-color: var(--card);
+    box-shadow: var(--shadow-soft);
   }
 
   .moonai-modal {
-    @apply rounded-2xl border border-zinc-800/80 bg-[#0b0b0d]/95 p-6 shadow-glow-purple backdrop-blur-xl;
+    @apply rounded-2xl border p-6 shadow-glow-purple backdrop-blur-xl;
+    border-color: var(--canvas-border);
+    background-color: var(--card);
   }
 
   .moonai-save-bar {
-    @apply rounded-2xl border border-zinc-800/80 bg-black/80 backdrop-blur-md;
+    @apply rounded-2xl border backdrop-blur-md;
+    border-color: var(--canvas-border);
+    background-color: color-mix(in srgb, var(--canvas-raised) 90%, transparent);
   }
 }
 

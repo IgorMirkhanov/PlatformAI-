@@ -145,10 +145,15 @@ async def test_hub_connection(
     from app.services.integration_hub.types import TokenBundle
 
     key = (body.provider or "").strip().lower()
-    if key in {"amocrm", "kommo", "bitrix24"}:
+    if key in {"amocrm", "kommo"}:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail="OAuth-провайдер подключается через кнопку «Подключить», не через API-ключ.",
+        )
+    if key == "bitrix24" and not str((body.payload or {}).get("webhook_url") or "").strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Для Bitrix24 укажите Incoming Webhook URL или настройте BITRIX_APP_ID для OAuth.",
         )
     try:
         adapter = get_hub_adapter(key)

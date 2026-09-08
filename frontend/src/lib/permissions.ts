@@ -93,10 +93,12 @@ const AGENT_TAB_PERMISSIONS: Record<AgentTabId, Permission> = {
   prompting: "bot:prompting",
   messages: "bot:messages",
   "llm-models": "bot:llm",
+  control: "bot:settings",
   functions: "bot:functions",
   "knowledge-base": "bot:knowledge",
   integrations: "bot:integrations",
   channels: "bot:channels",
+  scenario: "flow:write",
 };
 
 export function hasPermission(role: UserRole | null | undefined, permission: Permission): boolean {
