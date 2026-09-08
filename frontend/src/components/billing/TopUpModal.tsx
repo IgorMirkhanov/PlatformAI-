@@ -84,7 +84,7 @@ function AmountStep({
   amount: string;
   amountKzt: number;
   amountNumber: number;
-  inputRef: React.RefObject<HTMLInputElement>;
+  inputRef: React.RefObject<HTMLInputElement | null>;
   onSelect: (value: number) => void;
   onChange: (value: string) => void;
 }) {

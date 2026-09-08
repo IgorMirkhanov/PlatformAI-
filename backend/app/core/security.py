@@ -24,6 +24,7 @@ from app.core.crypto import (
     encrypt_sensitive,
     encrypt_token,
     looks_encrypted,
+    resolve_retired_key_materials,
 )
 
 
@@ -84,8 +85,18 @@ def decrypt_credential(stored: str) -> str:
         try:
             from cryptography.fernet import Fernet
 
-            fernet = Fernet(key.encode("utf-8") if isinstance(key, str) else key)
-            return fernet.decrypt(value.removeprefix("enc:").encode("ascii")).decode("utf-8")
+            payload = value.removeprefix("enc:").encode("ascii")
+            last_error: Exception | None = None
+            # Active key first, then retired rotation keys.
+            for candidate in [key, *resolve_retired_key_materials()]:
+                material = (
+                    candidate.encode("utf-8") if isinstance(candidate, str) else candidate
+                )
+                try:
+                    return Fernet(material).decrypt(payload).decode("utf-8")
+                except Exception as exc:
+                    last_error = exc
+            raise last_error or RuntimeError("Fernet decryption failed.")
         except Exception as exc:
             logger.warning(
                 "Security.decrypt_fernet_fallback | error={error}",

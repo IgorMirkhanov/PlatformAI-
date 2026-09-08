@@ -9,6 +9,13 @@ Storage format:
 Key resolution (first non-empty wins):
   CREDENTIALS_ENCRYPTION_KEY → ENCRYPTION_KEY
 
+Rotation:
+  ``CREDENTIALS_ENCRYPTION_KEYS_OLD`` holds a comma-separated list of previously
+  active keys. They are used for **decryption only** — writes always use the
+  active key — so rotating a key does not orphan rows that were sealed under the
+  previous one. Run ``scripts/reencrypt_credentials.py`` to migrate those rows
+  onto the active key, then drop the retired entry from the list.
+
 Legacy formats remain readable via ``decrypt_sensitive`` / ``app.core.security``.
 """
 
@@ -18,6 +25,7 @@ import base64
 import hashlib
 import os
 import secrets
+from functools import lru_cache
 from typing import Final
 
 from loguru import logger
@@ -58,9 +66,76 @@ def resolve_encryption_key_material() -> str | None:
     return None
 
 
+def _collect_kms_key_materials() -> list[str]:
+    """Plaintext KEK materials from ``KMS_KEYS`` (JSON version map)."""
+    blob = (os.getenv("KMS_KEYS") or "").strip()
+    if not blob:
+        return []
+    try:
+        import json
+
+        parsed = json.loads(blob)
+    except Exception:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    materials: list[str] = []
+    for value in parsed.values():
+        material = str(value).strip()
+        if material:
+            materials.append(material)
+    return materials
+
+
+def resolve_retired_key_materials() -> list[str]:
+    """
+    Previously active keys, kept readable so a rotation does not orphan rows.
+
+    Sources, in order:
+
+    * ``CREDENTIALS_ENCRYPTION_KEYS_OLD`` (comma-separated)
+    * other values in ``KMS_KEYS`` (the versioned vault map)
+
+    Channel tokens use this list; the vault uses ``KMS_KEYS`` directly. A
+    rotation that updated the vault map but forgot ``CREDENTIALS_ENCRYPTION_KEYS_OLD``
+    used to leave Telegram/WhatsApp tokens unreadable even though the old KEK
+    was still configured. The active key is never included; entries are
+    deduplicated in declaration order.
+    """
+    active = resolve_encryption_key_material()
+    retired: list[str] = []
+
+    def _add(material: str) -> None:
+        value = material.strip()
+        if value and value != active and value not in retired:
+            retired.append(value)
+
+    raw = (os.getenv("CREDENTIALS_ENCRYPTION_KEYS_OLD") or "").strip()
+    if raw:
+        for candidate in raw.split(","):
+            _add(candidate)
+
+    for material in _collect_kms_key_materials():
+        _add(material)
+
+    return retired
+
+
+def key_fingerprint(raw_secret: str | None) -> str:
+    """Short, non-reversible digest of key material — safe to log."""
+    if not raw_secret:
+        return "unset"
+    return hashlib.sha256(raw_secret.strip().encode("utf-8")).hexdigest()[:8]
+
+
+@lru_cache(maxsize=16)
 def derive_aes256_key(raw_secret: str) -> bytes:
-    """Normalize env secret material into a strict 32-byte AES key."""
-    candidate = raw_secret.strip()
+    """Normalize env secret material into a strict 32-byte AES key.
+
+    Cached so that per-call encryptors do not re-derive keys — and, with retired
+    rotation keys in play, do not re-log the non-32-byte warning on every call.
+    """
+    candidate = raw_secret.strip().strip("\r")
     if not candidate:
         raise EncryptionConfigurationError("CREDENTIALS_ENCRYPTION_KEY / ENCRYPTION_KEY is empty.")
 
@@ -100,7 +175,13 @@ def derive_aes256_key(raw_secret: str) -> bytes:
 class FieldEncryptor:
     """High-level AES-256-GCM encryptor with a unique IV/nonce per encryption run."""
 
-    def __init__(self, key_material: str | None = None, *, require_key: bool = False) -> None:
+    def __init__(
+        self,
+        key_material: str | None = None,
+        *,
+        require_key: bool = False,
+        retired_key_materials: list[str] | None = None,
+    ) -> None:
         self._key_material = (
             key_material if key_material is not None else resolve_encryption_key_material()
         )
@@ -111,6 +192,14 @@ class FieldEncryptor:
             raise EncryptionConfigurationError(
                 "CREDENTIALS_ENCRYPTION_KEY (or ENCRYPTION_KEY) is required for token encryption."
             )
+
+        retired = (
+            retired_key_materials
+            if retired_key_materials is not None
+            else resolve_retired_key_materials()
+        )
+        # Decryption-only keys, tried in order after the active key.
+        self._retired_keys: list[bytes] = [derive_aes256_key(m) for m in retired if m.strip()]
 
     @property
     def is_configured(self) -> bool:
@@ -162,17 +251,33 @@ class FieldEncryptor:
             packed = base64.urlsafe_b64decode(packed_b64 + ("=" * (-len(packed_b64) % 4)))
             if len(packed) <= _NONCE_SIZE:
                 raise ValueError("AES-GCM payload too short.")
-            nonce, ciphertext = packed[:_NONCE_SIZE], packed[_NONCE_SIZE:]
-            aesgcm = AESGCM(self._key)
-            return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
-        except EncryptionConfigurationError:
-            raise
         except Exception as exc:
-            logger.error(
-                "Crypto.aesgcm_decrypt_failed | error={error}",
-                error=str(exc),
-            )
+            logger.error("Crypto.aesgcm_decode_failed | error={error}", error=str(exc))
             raise ValueError("Failed to decrypt AES-GCM credential payload.") from exc
+
+        nonce, ciphertext = packed[:_NONCE_SIZE], packed[_NONCE_SIZE:]
+        last_error: Exception | None = None
+        # Active key first, then retired keys so a rotation stays readable.
+        for index, key in enumerate([self._key, *self._retired_keys]):
+            try:
+                plaintext = AESGCM(key).decrypt(nonce, ciphertext, None).decode("utf-8")
+            except Exception as exc:  # noqa: PERF203 - per-key trial is the point
+                last_error = exc
+                continue
+            if index > 0:
+                logger.warning(
+                    "Crypto.aesgcm_decrypted_with_retired_key | retired_key_index={index} "
+                    "hint=run scripts/reencrypt_credentials.py to migrate onto the active key",
+                    index=index,
+                )
+            return plaintext
+
+        logger.error(
+            "Crypto.aesgcm_decrypt_failed | keys_tried={tried} error={error}",
+            tried=1 + len(self._retired_keys),
+            error=str(last_error),
+        )
+        raise ValueError("Failed to decrypt AES-GCM credential payload.") from last_error
 
 
 _encryptor: FieldEncryptor | None = None
@@ -189,6 +294,7 @@ def reset_field_encryptor() -> None:
     """Test helper — clear cached encryptor so env changes are picked up."""
     global _encryptor
     _encryptor = None
+    derive_aes256_key.cache_clear()
 
 
 def encrypt_token(plain_text: str) -> str:
@@ -299,10 +405,25 @@ def validate_encryption_at_startup() -> None:
             recovered = decrypt_token(token)
             if recovered != "mpai-encryption-self-test" or len(key) != _KEY_SIZE:
                 raise EncryptionConfigurationError("Encryption key self-test failed.")
+            retired = resolve_retired_key_materials()
+            # Truncated digest, never the key: makes an unintended key swap (a stray
+            # shell export overriding env_file, a wrong .env) visible in the logs
+            # instead of surfacing later as undecryptable rows.
             logger.info(
-                "Crypto.startup_ok | algorithm=AES-256-GCM production={production}",
+                "Crypto.startup_ok | algorithm=AES-256-GCM production={production} "
+                "retired_keys={retired} key_fingerprint={fingerprint} environment={env}",
                 production=production,
+                retired=len(retired),
+                fingerprint=key_fingerprint(material),
+                env=_environment_name(),
             )
+            if retired:
+                logger.warning(
+                    "Crypto.rotation_pending | {count} retired key(s) still needed for reads — "
+                    "run scripts/reencrypt_credentials.py, then clear "
+                    "CREDENTIALS_ENCRYPTION_KEYS_OLD",
+                    count=len(retired),
+                )
         except EncryptionConfigurationError:
             raise
         except Exception as exc:

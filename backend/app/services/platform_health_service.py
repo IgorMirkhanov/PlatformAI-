@@ -63,9 +63,13 @@ class PlatformHealthService:
         port = int(getattr(settings, "CHROMA_SERVER_PORT", 8000))
         url = f"http://{host}:{port}/api/v1/heartbeat"
         started = time.perf_counter()
+        headers: dict[str, str] = {}
+        token = (getattr(settings, "CHROMA_AUTH_TOKEN", None) or "").strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
                 response.raise_for_status()
             latency_ms = round((time.perf_counter() - started) * 1000, 2)
             return DependencyHealth(

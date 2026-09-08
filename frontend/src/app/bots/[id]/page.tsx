@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 
 interface BotIndexPageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export default function BotIndexPage({ params }: BotIndexPageProps) {
-  redirect(`/bots/${params.id}/settings`);
+export default async function BotIndexPage({ params }: BotIndexPageProps) {
+  const { id } = await params;
+  redirect(`/bots/${id}/settings`);
 }

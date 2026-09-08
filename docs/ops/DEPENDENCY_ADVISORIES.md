@@ -1,45 +1,35 @@
 # Open dependency advisories — accepted risk register
 
 Tracks advisories that `npm audit` / `pip-audit` report on the current pinned
-versions and that we consciously chose **not** to fix before launch. Anything not
-listed here must be fixed, not waived.
+versions and that we consciously chose **not** to fix. Anything not listed here
+must be fixed, not waived.
 
 Last reviewed: **2026-09-08**. Re-review on every release tag and at least monthly.
 
-## next 14.2.35 — 7 high advisories · deferred
+## chromadb 0.5.23 — CVE-2026-45830 / -45831 / -45833 · no upstream fix
 
-`npm audit` reports SSRF via Server Actions, SSRF via attacker-controlled rewrite
-destinations, a Server Actions DoS, cache-confusion of response bodies, and
-disclosure of internal Server Function endpoints.
+Pinned as `chromadb>=0.5.23,<0.6.0` in `backend/requirements.txt`, Docker image
+`chromadb/chroma:0.5.23`. The same cluster is still open in PyPI `chromadb==1.5.9`
+(latest as of this review): there is **no patched release** to bump to.
+Jumping the client/server to 1.x would also break the 0.5 HTTP/collection API
+this repo uses, without closing the CVE.
 
-Why deferred: the only published resolution is `next@16.3.4`, a two-major jump.
-`npm audit fix` cannot reach it. App Router and Server Actions surfaces need a
-full re-test pass, so this is scheduled work rather than a pre-launch patch.
+Mitigations in this repo:
 
-Exposure today is narrower than the advisory titles suggest:
+- Chroma is bound to the internal Docker network only (`expose`, not `ports`).
+- Production compose requires `CHROMA_AUTH_TOKEN` /
+  `CHROMA_AUTHN_PROVIDER=chromadb.auth.token_authn.TokenAuthenticationServerProvider`.
+  The FastAPI client sends the same token. Unauthenticated IDOR/RCE from the
+  advisory assumes an open listener.
+- Application RAG already isolates tenants by collection name (`org_{id}` /
+  `bot_{id}`).
 
-- Rewrite destinations in `frontend/next.config.js` are built from
-  `API_INTERNAL_URL` (our own env), never from request input.
-- The app uses no Server Actions — mutations go through the FastAPI backend.
-
-Mitigation until the bump lands: nginx fronts the app and does not forward
-arbitrary rewrite targets; keep `API_INTERNAL_URL` pointed at the internal
-service name only.
-
-Owner: frontend. Target: first post-launch maintenance window.
-
-## chromadb 0.5.23 — CVE-2026-45830 / -45831 / -45833 · no fix available
-
-Pinned as `chromadb>=0.5.23,<0.6.0` in `backend/requirements.txt`. No patched
-release exists upstream within that range, so there is no action to take today.
-
-Exposure: ChromaDB runs on the internal Docker network only
-(`docker-compose.prod.yml` does not publish its port) and is reachable solely by
-the backend and Celery workers.
-
-Owner: backend. Action: re-audit monthly; bump as soon as upstream ships a fix.
+Owner: backend. Action: re-audit monthly; bump the pin the day upstream ships a
+fix that still speaks the 0.5 HTTP API, or schedule a dedicated 1.x migration.
 
 ## Closed in this pass
 
-- `@playwright/test` — bumped to `^1.55.1`, clearing the browser-download
-  certificate-validation advisory. Dev/CI-only dependency, never shipped.
+- `next@14.2.35` — upgraded to `next@16.3.4` (React 19.2). Clears the seven
+  high Server Actions / rewrite advisories. Middleware stays as `middleware.ts`
+  (deprecated in 16, still supported).
+- `@playwright/test` — `^1.55.1`, browser-download cert-validation advisory.

@@ -166,6 +166,12 @@ export function HubChannelGrid({ botId, profile }: HubChannelGridProps) {
                       >
                         {connected ? "Подключен" : "Не подключен"}
                       </span>
+                      {status?.meta_data?.credential_error === "decrypt_failed" ? (
+                        <p className="mt-1.5 text-[11px] leading-snug text-amber-300/90">
+                          Сохранённый токен не читается текущим ключом шифрования — введите
+                          его заново.
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">

@@ -90,20 +90,44 @@ def build_rag_where_filter(
     return dict(kb_clause)
 
 
+def _chroma_http_headers() -> dict[str, str]:
+    token = (getattr(settings, "CHROMA_AUTH_TOKEN", None) or "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _chroma_client_settings() -> Any | None:
+    token = (getattr(settings, "CHROMA_AUTH_TOKEN", None) or "").strip()
+    if not token:
+        return None
+    from chromadb.config import Settings
+
+    return Settings(
+        chroma_client_auth_provider="chromadb.auth.token_authn.TokenAuthClientProvider",
+        chroma_client_auth_credentials=token,
+    )
+
+
 @lru_cache(maxsize=1)
 def _get_chroma_client() -> Any:
     """Create the shared Chroma client (sync SDK — call only from worker threads)."""
     server_host = settings.CHROMA_SERVER_HOST
     if server_host:
         logger.info(
-            "VectorDB.init | mode=http host={host} port={port}",
+            "VectorDB.init | mode=http host={host} port={port} auth={auth}",
             host=server_host,
             port=settings.CHROMA_SERVER_PORT,
+            auth="token" if _chroma_http_headers() else "none",
         )
-        return chromadb.HttpClient(
-            host=server_host,
-            port=settings.CHROMA_SERVER_PORT,
-        )
+        kwargs: dict[str, Any] = {
+            "host": server_host,
+            "port": settings.CHROMA_SERVER_PORT,
+        }
+        client_settings = _chroma_client_settings()
+        if client_settings is not None:
+            kwargs["settings"] = client_settings
+        return chromadb.HttpClient(**kwargs)
 
     logger.info(
         "VectorDB.init | mode=persistent path={path}",

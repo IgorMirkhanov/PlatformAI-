@@ -152,9 +152,17 @@ async def register_all_webhooks() -> dict[str, int]:
                 bot_token = decrypt_credential(row.encrypted_token or "")
             except Exception as exc:
                 stats["failed"] += 1
+                # The token is sealed with a key we no longer hold, so this channel
+                # can never deliver. Stop reporting it as connected — the UI has to
+                # prompt for re-entry instead of showing a green channel that is dead.
+                row.status = HubChannelStatus.DISCONNECTED
+                meta["credential_error"] = "decrypt_failed"
+                meta["credential_error_at"] = datetime.now(timezone.utc).isoformat()
+                row.meta_data = meta
                 logger.error(
                     "TelegramWebhookManager.decrypt_failed | bot_id={bot_id} "
-                    "channel_id={channel_id} error={error}",
+                    "channel_id={channel_id} error={error} "
+                    "action=channel marked disconnected, token must be re-entered",
                     bot_id=row.bot_id,
                     channel_id=row.id,
                     error=str(exc),

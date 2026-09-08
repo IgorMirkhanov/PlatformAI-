@@ -127,7 +127,11 @@ async def check_chromadb() -> tuple[bool, str]:
 
         url = f"http://{host}:{port}/api/v1/heartbeat"
         async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url)
+            headers: dict[str, str] = {}
+            token = (settings.CHROMA_AUTH_TOKEN or "").strip()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            resp = await client.get(url, headers=headers)
         ms = (time.perf_counter() - t0) * 1000
         if resp.status_code < 500:
             return True, f"OK ({ms:.0f}ms) {host}:{port} status={resp.status_code}"

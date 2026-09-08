@@ -193,6 +193,11 @@ class Settings:
     # Vector store
     CHROMA_PERSIST_DIRECTORY: str = os.getenv("CHROMA_PERSIST_DIRECTORY", "./data/chroma")
     CHROMA_COLLECTION_NAME: str = os.getenv("CHROMA_COLLECTION_NAME", "knowledge_base_chunks")
+    # Shared token between the Chroma container and the Python client. Empty =
+    # unauthenticated (dev). Production should set a random token; the server is
+    # still bound to the internal Docker network, but the CVEs in Chroma assume
+    # an unauthenticated or shared-auth listener.
+    CHROMA_AUTH_TOKEN: str | None = os.getenv("CHROMA_AUTH_TOKEN") or None
     EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "auto")  # auto | openai | local
 
     # AI orchestration limits

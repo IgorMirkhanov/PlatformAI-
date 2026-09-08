@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 .env.production
+# Timestamped copies left behind by rotate-encryption-key.ps1 — these hold
+# retired key material, so they must never be committed.
+.env*.bak-*
 !.env.example
 !.env.production.example
 

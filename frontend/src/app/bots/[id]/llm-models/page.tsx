@@ -1,9 +1,12 @@
 import { redirect } from "next/navigation";
 
 interface AgentLlmModelsRedirectProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
-export default function AgentLlmModelsRedirectPage({ params }: AgentLlmModelsRedirectProps) {
-  redirect(`/bots/${params.id}/llm-config`);
+export default async function AgentLlmModelsRedirectPage({
+  params,
+}: AgentLlmModelsRedirectProps) {
+  const { id } = await params;
+  redirect(`/bots/${id}/llm-config`);
 }

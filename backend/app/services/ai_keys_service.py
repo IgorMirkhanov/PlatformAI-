@@ -6,13 +6,13 @@ import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from typing import Final
+from typing import Any, Final
 
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
+from app.core.crypto import resolve_encryption_key_material, resolve_retired_key_materials
 from app.models.organization_api_key import OrganizationApiKey
 from app.schemas.organization_api_keys import (
     OrganizationApiKeyListResponse,
@@ -60,25 +60,37 @@ def _normalize_provider(provider: str) -> str:
 
 
 def _fernet_key_material() -> bytes:
-    raw = settings.ENCRYPTION_KEY or settings.CREDENTIALS_ENCRYPTION_KEY
+    # Same precedence as app.core.crypto so one key governs every at-rest store.
+    raw = resolve_encryption_key_material()
     if not raw or not str(raw).strip():
         raise AiKeysServiceError(
-            "ENCRYPTION_KEY is not configured on the server.",
+            "CREDENTIALS_ENCRYPTION_KEY / ENCRYPTION_KEY is not configured on the server.",
             500,
         )
     return str(raw).strip().encode("utf-8")
 
 
-def _fernet_instance():
+def _fernet_for(material: bytes):
     from cryptography.fernet import Fernet
 
-    material = _fernet_key_material()
     try:
         return Fernet(material)
     except Exception:
-        digest = hashlib.sha256(material).digest()
-        derived = base64.urlsafe_b64encode(digest)
+        derived = base64.urlsafe_b64encode(hashlib.sha256(material).digest())
         return Fernet(derived)
+
+
+def _fernet_instance():
+    """Fernet bound to the active key — used for writes."""
+    return _fernet_for(_fernet_key_material())
+
+
+def _fernet_read_instances() -> list[Any]:
+    """Active key first, then retired rotation keys, for decryption only."""
+    instances = [_fernet_instance()]
+    for material in resolve_retired_key_materials():
+        instances.append(_fernet_for(material.strip().encode("utf-8")))
+    return instances
 
 
 def encrypt_api_key(plaintext: str) -> str:
@@ -95,7 +107,25 @@ def decrypt_api_key(ciphertext: str) -> str:
     if not value.startswith(FERNET_PREFIX):
         raise AiKeysServiceError("Unsupported API key encryption format.", 500)
     token = value.removeprefix(FERNET_PREFIX).encode("ascii")
-    return _fernet_instance().decrypt(token).decode("utf-8")
+
+    for index, fernet in enumerate(_fernet_read_instances()):
+        try:
+            plaintext = fernet.decrypt(token).decode("utf-8")
+        except Exception:
+            continue
+        if index > 0:
+            logger.warning(
+                "AiKeys.decrypted_with_retired_key | retired_key_index={index} "
+                "hint=run scripts/reencrypt_credentials.py to migrate onto the active key",
+                index=index,
+            )
+        return plaintext
+
+    raise AiKeysServiceError(
+        "Stored API key cannot be decrypted with the configured encryption key. "
+        "Re-enter the key, or add the previous key to CREDENTIALS_ENCRYPTION_KEYS_OLD.",
+        500,
+    )
 
 
 def mask_api_key(plaintext: str) -> str:
