@@ -149,6 +149,9 @@ class BotManagementService:
             quota_service.raise_http(exc)
 
         # Inactive by default until channels + flow are configured.
+        # Auto-trial: new bots can chat immediately (admin can still disable).
+        from app.services.bot_billing_service import apply_auto_trial
+
         bot = Bot(
             user_id=user.id,
             organization_id=organization_id,
@@ -157,7 +160,10 @@ class BotManagementService:
             is_active=False,
             credentials={},
             created_by_id=user.id,
+            subscription_active=True,
+            subscription_expires_at=None,
         )
+        apply_auto_trial(bot)
         db.add(bot)
         await db.flush()
 

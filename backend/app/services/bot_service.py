@@ -149,6 +149,8 @@ class BotService:
             clone_name = clone_name[:252] + "…"
 
         owner_id = current_user_id or source.user_id
+        from app.services.bot_billing_service import apply_auto_trial
+
         clone = Bot(
             user_id=owner_id,
             organization_id=organization_id,
@@ -167,7 +169,10 @@ class BotService:
             message_buffer_delay=source.message_buffer_delay,
             custom_code_snippet=source.custom_code_snippet or "",
             created_by_id=owner_id,
+            subscription_active=True,
+            subscription_expires_at=None,
         )
+        apply_auto_trial(clone)
         db.add(clone)
         await db.flush()
 

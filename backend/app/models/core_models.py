@@ -390,8 +390,9 @@ class Bot(Base):
     )
     low_balance_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Per-bot SaaS: chat requires an active subscription; settings stay editable either way.
+    # New bots get an open-ended auto-trial (subscription_active=True) so they can chat immediately.
     subscription_active: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
+        Boolean, nullable=False, default=True, server_default="true"
     )
     subscription_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

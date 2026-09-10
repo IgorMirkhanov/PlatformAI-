@@ -15,6 +15,7 @@ from app.api.endpoints import health_check as health_ep
 from app.models.core_models import PlatformType, UserRole
 from app.schemas.core_schemas import CreateBotRequest
 from app.services.bot_management_service import BotManagementService
+from app.services.bot_service import BotService
 from app.services.quota_service import QuotaExceeded, QuotaService
 
 
@@ -107,6 +108,95 @@ async def test_create_bot_ensures_primary_company() -> None:
 
     assert user.company_id == org_id
     assert response.name == "Agent One"
+
+
+def _capture_added(db: AsyncMock) -> list[object]:
+    created: list[object] = []
+
+    def _add(obj):
+        created.append(obj)
+        if getattr(obj, "id", None) is None:
+            obj.id = uuid.uuid4()
+        if obj.__class__.__name__ == "BotFlow" and getattr(obj, "updated_at", None) is None:
+            obj.updated_at = None
+
+    db.add = MagicMock(side_effect=_add)
+    return created
+
+
+@pytest.mark.asyncio
+async def test_create_bot_grants_auto_trial() -> None:
+    service = BotManagementService()
+    user = _user()
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    created = _capture_added(db)
+
+    with (
+        patch("app.services.team_service.team_service._ensure_primary_company", AsyncMock()),
+        patch("app.services.quota_service.quota_service.assert_can_create_bot", AsyncMock()),
+    ):
+        payload = CreateBotRequest(
+            name="Trial Agent",
+            platform_type=PlatformType.TELEGRAM,
+            user_id=user.id,
+        )
+        await service.create_bot(db, payload, current_user=user)
+
+    bots = [obj for obj in created if obj.__class__.__name__ == "Bot"]
+    assert len(bots) == 1
+    assert bots[0].subscription_active is True
+    assert bots[0].subscription_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_clone_bot_grants_auto_trial() -> None:
+    service = BotService()
+    source = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        organization_id=uuid.uuid4(),
+        project_id=None,
+        name="Source",
+        platform_type=PlatformType.TELEGRAM,
+        default_chat_state=True,
+        timezone="Asia/Almaty",
+        schedule_config={},
+        prompt_instructions="",
+        llm_model_name="gpt-4o-mini",
+        llm_temperature=0.5,
+        message_split=False,
+        message_buffer_delay=0,
+        custom_code_snippet="",
+        subscription_active=False,
+        subscription_expires_at=None,
+        wallet_balance=0,
+    )
+    db = AsyncMock()
+    db.flush = AsyncMock()
+    created = _capture_added(db)
+
+    with (
+        patch.object(service, "_load_bot_for_org", AsyncMock(return_value=source)),
+        patch.object(
+            service,
+            "_extract_flow_graph",
+            AsyncMock(return_value=({}, [], [], "Draft")),
+        ),
+        patch("app.services.quota_service.quota_service.assert_can_create_bot", AsyncMock()),
+    ):
+        await service.clone_bot(
+            db,
+            source.id,
+            org_id=source.organization_id,
+            current_user_id=source.user_id,
+        )
+
+    bots = [obj for obj in created if obj.__class__.__name__ == "Bot"]
+    assert len(bots) == 1
+    assert bots[0].subscription_active is True
+    assert bots[0].subscription_expires_at is None
+    assert "Копия" in bots[0].name
 
 
 @pytest.mark.asyncio

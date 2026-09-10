@@ -15,6 +15,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.core_models import Bot
 
 
@@ -39,6 +40,26 @@ class BotWalletInsufficientError(RuntimeError):
         self.code = "INSUFFICIENT_FUNDS"
         self.balance = balance
         self.required = required
+
+
+def trial_starter_credits() -> int:
+    """Optional bot-wallet seed mirrored from register starter credits.
+
+    Groq chat works at wallet_balance=0; this only helps paid models.
+    Never reads or drains the organization wallet.
+    """
+    return max(0, int(getattr(settings, "REGISTER_WALLET_STARTER_CREDITS", 0) or 0))
+
+
+def apply_auto_trial(bot: Bot) -> Bot:
+    """Grant an open-ended trial so a newly created or cloned bot can chat."""
+    bot.subscription_active = True
+    bot.subscription_expires_at = None
+    starter = trial_starter_credits()
+    current = int(getattr(bot, "wallet_balance", 0) or 0)
+    if starter > 0 and current <= 0:
+        bot.wallet_balance = starter
+    return bot
 
 
 def is_subscription_active(bot: Any, *, now: datetime | None = None) -> bool:

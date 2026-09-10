@@ -901,13 +901,18 @@ class TelegramService:
             credentials["channels"] = channels
 
         if bot is None:
+            from app.services.bot_billing_service import apply_auto_trial
+
             bot = Bot(
                 user_id=user_id,
                 name=bot_name,
                 platform_type=PlatformType.TELEGRAM,
                 is_active=True,
                 credentials=credentials,
+                subscription_active=True,
+                subscription_expires_at=None,
             )
+            apply_auto_trial(bot)
             db.add(bot)
         else:
             bot.name = bot_name

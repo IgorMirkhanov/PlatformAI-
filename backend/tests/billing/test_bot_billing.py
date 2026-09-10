@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 from app.services.bot_billing_service import (
     BotSubscriptionInactiveError,
+    apply_auto_trial,
     is_subscription_active,
+    trial_starter_credits,
 )
 
 
@@ -35,6 +37,33 @@ def test_future_expiry_allows_chat() -> None:
         subscription_expires_at=datetime.now(UTC) + timedelta(days=30),
     )
     assert is_subscription_active(bot) is True
+
+
+def test_apply_auto_trial_enables_open_ended_subscription() -> None:
+    bot = SimpleNamespace(subscription_active=False, subscription_expires_at=None, wallet_balance=0)
+    apply_auto_trial(bot)  # type: ignore[arg-type]
+    assert bot.subscription_active is True
+    assert bot.subscription_expires_at is None
+
+
+def test_apply_auto_trial_mirrors_starter_credits(monkeypatch) -> None:
+    from app.core import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "REGISTER_WALLET_STARTER_CREDITS", 250)
+    bot = SimpleNamespace(subscription_active=False, subscription_expires_at=None, wallet_balance=0)
+    apply_auto_trial(bot)  # type: ignore[arg-type]
+    assert bot.subscription_active is True
+    assert bot.wallet_balance == 250
+    assert trial_starter_credits() == 250
+
+
+def test_apply_auto_trial_does_not_overwrite_existing_wallet(monkeypatch) -> None:
+    from app.core import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "REGISTER_WALLET_STARTER_CREDITS", 250)
+    bot = SimpleNamespace(subscription_active=False, subscription_expires_at=None, wallet_balance=10)
+    apply_auto_trial(bot)  # type: ignore[arg-type]
+    assert bot.wallet_balance == 10
 
 
 def test_ensure_subscription_raises() -> None:
