@@ -6,6 +6,7 @@ import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import sys
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -109,6 +110,9 @@ def e2e_bot_stack() -> dict[str, Any]:
         prompt_instructions="Global bot instructions for E2E.",
         llm_model_name="gpt-4o-mini",
         llm_temperature=0.4,
+        # Chat/LLM replies require an active per-bot subscription (bot_billing_service).
+        subscription_active=True,
+        wallet_balance=50_000,
         user=user,
     )
     flow = BotFlow(
@@ -194,7 +198,23 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
         def scalar_one(self) -> Any:
             return None
 
-    db.execute = AsyncMock(return_value=_EmptyResult())
+    class _BotResult:
+        def scalar_one_or_none(self) -> Any:
+            return bot
+
+        def scalar_one(self) -> Any:
+            return bot
+
+    async def _db_execute(stmt: Any) -> Any:
+        # bot_billing_service.get_bot() does select(Bot).where(...) to check
+        # subscription/wallet state; everything else keeps the graceful empty result.
+        try:
+            entity = stmt.column_descriptions[0]["entity"]
+        except Exception:
+            entity = None
+        return _BotResult() if entity is Bot else _EmptyResult()
+
+    db.execute = AsyncMock(side_effect=_db_execute)
 
     class _NestedSavepoint:
         async def __aenter__(self) -> "_NestedSavepoint":
@@ -314,11 +334,10 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     assert result["status"] == "processed"
     assert result.get("bot_silent") is not True
     assert provider.complete_calls == 1
-    assert wallet.deduct_credits.await_count == 1
-
-    deduct_call = wallet.deduct_credits.await_args
-    assert deduct_call.args[1] == org_id
-    assert deduct_call.args[2] == expected_credits
+    # LLM spend is billed to the bot's own wallet (bot_billing_service), not the
+    # org-level wallet mock, since bots gained their own subscription + credit wallet.
+    assert wallet.deduct_credits.await_count == 0
+    assert bot.wallet_balance == 50_000 - expected_credits
 
     assert len(outbound_messages) == 1
     outbound = outbound_messages[0]

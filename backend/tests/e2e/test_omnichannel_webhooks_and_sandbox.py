@@ -294,6 +294,8 @@ async def omni_harness(omni_session_factory: async_sessionmaker[AsyncSession]):
                 name="Omni Sandbox Bot",
                 platform_type=PlatformType.TELEGRAM,
                 is_active=True,
+                # Chat/LLM replies require an active per-bot subscription (bot_billing_service).
+                subscription_active=True,
                 credentials={
                     "webhook_secret_token": TELEGRAM_SECRET,
                     "channels": {
