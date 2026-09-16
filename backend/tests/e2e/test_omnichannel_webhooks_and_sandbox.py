@@ -294,6 +294,8 @@ async def omni_harness(omni_session_factory: async_sessionmaker[AsyncSession]):
                 name="Omni Sandbox Bot",
                 platform_type=PlatformType.TELEGRAM,
                 is_active=True,
+                subscription_active=True,
+                wallet_balance=100_000,
                 credentials={
                     "webhook_secret_token": TELEGRAM_SECRET,
                     "channels": {

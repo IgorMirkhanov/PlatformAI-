@@ -1,5 +1,8 @@
 # MP.AI Production migration & deploy guide
 #
+# Free / cheap public hosting (Vercel vs Docker VM vs Cloudflare Tunnel):
+#   docs/ops/FREE_HOSTING.md
+#
 # Target layout after this upgrade:
 #   docker-compose.prod.yml  — postgres, redis, chromadb, backend, celery,
 #                              whatsapp_service, frontend, nginx (+ optional monitoring)

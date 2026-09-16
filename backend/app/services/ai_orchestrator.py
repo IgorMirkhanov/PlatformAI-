@@ -302,6 +302,7 @@ class AIOrchestrator:
                 )
             response_text = (completion.text or "").strip()
             from app.services.llm.tool_reply_sanitize import (
+                ensure_user_visible_reply,
                 is_tool_debug_text,
                 sanitize_outbound_text,
             )
@@ -327,6 +328,18 @@ class AIOrchestrator:
                     tools=completion.tools_executed,
                 )
             response_text = sanitize_outbound_text(response_text) or response_text
+            if not (response_text or "").strip():
+                logger.warning(
+                    "AIOrchestrator.empty_completion_fallback | client_id={client_id} "
+                    "model={model} cache_hit={cache_hit} tokens={tokens}",
+                    client_id=client_id,
+                    model=used_model,
+                    cache_hit=completion.cache_hit,
+                    tokens=completion.total_tokens,
+                )
+                response_text = ensure_user_visible_reply(
+                    response_text, fallback=self.FALLBACK_MESSAGE
+                )
             attachments = self._collect_media_attachments(
                 rag_hits=rag_hits,
                 llm_text=response_text,
@@ -538,6 +551,20 @@ class AIOrchestrator:
             )
             if trace is not None:
                 trace.record_llm_metrics(metrics)
+            reply_text = (completion.text or "").strip()
+            if not reply_text:
+                logger.warning(
+                    "AIOrchestrator.trace_empty_completion_fallback | client_id={client_id} "
+                    "model={model}",
+                    client_id=client_id,
+                    model=completion.model_name or resolved_model,
+                )
+                from app.services.llm.tool_reply_sanitize import ensure_user_visible_reply
+
+                reply_text = ensure_user_visible_reply(
+                    reply_text, fallback=self.FALLBACK_MESSAGE
+                )
+                metrics.raw_response = reply_text
             if not completion.cache_hit and completion.total_tokens > 0 and bot_id is not None:
                 await self._record_llm_usage_and_debit(
                     db_session,
@@ -549,7 +576,7 @@ class AIOrchestrator:
                     client_id=client_id,
                     dry_run=dry_run,
                 )
-            return completion.text, metrics
+            return reply_text, metrics
         except BotSubscriptionInactiveError as exc:
             fallback = str(exc) or self.SUBSCRIPTION_FALLBACK_MESSAGE
             fallback_metrics = LLMMetricsTrace(
@@ -927,20 +954,19 @@ class AIOrchestrator:
         *,
         bot_id: uuid.UUID | None,
     ) -> str | None:
-        """Agent «Промптинг» instructions, then node-carried global prompt."""
+        """Prefer live Prompting-tab text; fall back to node-carried global prompt."""
+        if bot_id is not None:
+            bot = await db_session.get(Bot, bot_id)
+            if bot is not None:
+                live = str(getattr(bot, "prompt_instructions", "") or "").strip()
+                if live:
+                    return live
         from_node = str(
             current_node_data.get("global_prompt_instructions")
             or current_node_data.get("prompt_instructions")
             or ""
         ).strip()
-        if from_node:
-            return from_node
-        if bot_id is None:
-            return None
-        bot = await db_session.get(Bot, bot_id)
-        if bot is None:
-            return None
-        return str(getattr(bot, "prompt_instructions", "") or "").strip() or None
+        return from_node or None
 
     @staticmethod
     def normalize_channel(channel: str | None, *, source: str | None = None) -> str:
@@ -1529,6 +1555,7 @@ class AIOrchestrator:
 
         system_prompt = ""
         incoming_text = ""
+        history_turns = 0
         for message in messages:
             role = message.get("role")
             content = str(message.get("content") or "")
@@ -1536,21 +1563,28 @@ class AIOrchestrator:
                 system_prompt = content
             if role == "user":
                 incoming_text = content
+                history_turns += 1
+            elif role == "assistant":
+                history_turns += 1
 
-        # Exact-match Redis short-circuit before provider round-trips.
-        cached = await llm_response_cache.get_cached_response(
-            bot_id=bot_id,
-            system_prompt=system_prompt,
-            incoming_text=incoming_text,
-            model_name=resolved_model,
-            temperature=resolved_temperature,
-        )
-        if cached is None:
-            # Optional semantic stub — no-op until embedding registry is enabled.
-            cached = await llm_response_cache.get_semantic_cached_response(
+        # Exact-match ignores chat history; never short-circuit mid-dialog or the
+        # model keeps replaying an old scenario for greetings like «Добрый день».
+        allow_exact_cache = history_turns <= 1
+        cached = None
+        if allow_exact_cache:
+            cached = await llm_response_cache.get_cached_response(
                 bot_id=bot_id,
+                system_prompt=system_prompt,
                 incoming_text=incoming_text,
+                model_name=resolved_model,
+                temperature=resolved_temperature,
             )
+            if cached is None:
+                # Optional semantic stub — no-op until embedding registry is enabled.
+                cached = await llm_response_cache.get_semantic_cached_response(
+                    bot_id=bot_id,
+                    incoming_text=incoming_text,
+                )
 
         if cached is not None:
             logger.info(
@@ -1620,22 +1654,73 @@ class AIOrchestrator:
                     )
                     # Fall through to platform settings.OPENAI_API_KEY path below.
 
-        if completion is None and provider in {"auto", "openai", "openrouter", "groq"} and (
+        if completion is None and provider in {"auto", "openai", "openrouter", "groq", "gemini"} and (
             settings.OPENAI_API_KEY
             or getattr(settings, "OPENROUTER_API_KEY", None)
             or getattr(settings, "GROQ_API_KEY", None)
+            or getattr(settings, "GEMINI_API_KEY", None)
         ):
             try:
-                completion = await self._openai_completion(
-                    messages,
-                    model_name=resolved_model,
-                    temperature=resolved_temperature,
-                    bot_id=bot_id,
-                    client_id=client_id,
-                    node_id=node_id,
-                    tools=openai_tools,
-                    db=db,
-                )
+                # After a Gemini gateway/tool failure, call Groq directly — do not
+                # re-enter OpenRouter with the Gemini model id (402 / wrong vendor).
+                if provider == "gemini" and getattr(settings, "GROQ_API_KEY", None):
+                    from app.services.llm.client import OpenAIChatClient
+                    from app.services.llm_orchestrator import llm_orchestrator as _orch
+                    from app.services.llm.tool_reply_sanitize import sanitize_outbound_text
+
+                    fb_model, fb_key, fb_base = _orch._resolve_fallback_endpoint()
+                    client = OpenAIChatClient()
+                    fb_result = await client.chat_completion(
+                        messages=messages,
+                        model=fb_model or str(getattr(settings, "GROQ_CHAT_MODEL", "") or "openai/gpt-oss-20b"),
+                        temperature=resolved_temperature,
+                        tools=openai_tools,
+                        api_key=fb_key or settings.GROQ_API_KEY,
+                        base_url=fb_base
+                        or str(getattr(settings, "GROQ_BASE_URL", None) or "https://api.groq.com/openai/v1"),
+                        max_tokens=2048,
+                    )
+                    if fb_result.tool_calls and bot_id is not None:
+                        fb_result = await _orch._resolve_tool_calls(
+                            fb_result,
+                            messages=messages,
+                            model=fb_result.model or fb_model,
+                            temperature=resolved_temperature,
+                            tools=openai_tools,
+                            bot_id=bot_id,
+                            client_id=client_id,
+                            db=db,
+                        )
+                    completion = LLMCompletionResult(
+                        text=sanitize_outbound_text(
+                            fb_result.text,
+                            tools_executed=list(getattr(fb_result, "tools_executed", None) or []),
+                            booking_ok=bool(getattr(fb_result, "booking_tools_succeeded", False)),
+                        ),
+                        input_tokens=fb_result.input_tokens,
+                        output_tokens=fb_result.output_tokens,
+                        total_tokens=fb_result.total_tokens,
+                        model_name=fb_result.model or fb_model,
+                        tools_executed=list(getattr(fb_result, "tools_executed", None) or []),
+                        booking_tools_succeeded=bool(
+                            getattr(fb_result, "booking_tools_succeeded", False)
+                        ),
+                    )
+                    logger.info(
+                        "[LLM Fallback] Gemini path recovered via Groq | model={model}",
+                        model=completion.model_name,
+                    )
+                else:
+                    completion = await self._openai_completion(
+                        messages,
+                        model_name=resolved_model,
+                        temperature=resolved_temperature,
+                        bot_id=bot_id,
+                        client_id=client_id,
+                        node_id=node_id,
+                        tools=openai_tools,
+                        db=db,
+                    )
             except TransientLLMError as exc:
                 logger.warning(
                     "[LLM Fallback] Primary model failed with {error}, switching to fallback model",
@@ -1742,23 +1827,24 @@ class AIOrchestrator:
         if completion is None:
             raise RuntimeError("No LLM provider is configured or available")
 
-        # Persist for subsequent identical turns (non-blocking on Redis errors).
-        await llm_response_cache.set_cached_response(
-            bot_id=bot_id,
-            system_prompt=system_prompt,
-            incoming_text=incoming_text,
-            response_text=completion.text,
-            model_name=completion.model_name or resolved_model,
-            temperature=resolved_temperature,
-            input_tokens=completion.input_tokens,
-            output_tokens=completion.output_tokens,
-            total_tokens=completion.total_tokens,
-        )
-        await llm_response_cache.register_semantic_turn(
-            bot_id=bot_id,
-            incoming_text=incoming_text,
-            response_text=completion.text,
-        )
+        # Persist only first-turn exact matches — mid-dialog caching reuses stale scenarios.
+        if allow_exact_cache:
+            await llm_response_cache.set_cached_response(
+                bot_id=bot_id,
+                system_prompt=system_prompt,
+                incoming_text=incoming_text,
+                response_text=completion.text,
+                model_name=completion.model_name or resolved_model,
+                temperature=resolved_temperature,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                total_tokens=completion.total_tokens,
+            )
+            await llm_response_cache.register_semantic_turn(
+                bot_id=bot_id,
+                incoming_text=incoming_text,
+                response_text=completion.text,
+            )
         return completion
 
     async def _openai_completion(
@@ -1867,29 +1953,62 @@ class AIOrchestrator:
         return text[: limit - 3] + "..."
 
     def _truncate_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
-        total_chars = sum(len(message["content"]) for message in messages)
-        if total_chars <= settings.MAX_PROMPT_CHARS:
+        budget = max(2000, int(settings.MAX_PROMPT_CHARS))
+        if not messages:
+            return messages
+        total_chars = sum(len(str(message.get("content") or "")) for message in messages)
+        if total_chars <= budget:
             return messages
 
-        system_message = messages[0]
-        remaining = settings.MAX_PROMPT_CHARS - len(system_message["content"])
-        trimmed: list[dict[str, str]] = [system_message]
+        system = messages[0] if str(messages[0].get("role") or "") == "system" else None
+        body = list(messages[1:] if system is not None else messages)
+        latest = body[-1] if body else None
+        history = body[:-1] if body else []
 
-        tail = messages[1:]
-        for message in reversed(tail):
-            content = message["content"]
+        latest_text = str((latest or {}).get("content") or "")
+        latest_cap = min(len(latest_text), max(800, budget // 5)) if latest is not None else 0
+        latest_kept = None
+        if latest is not None:
+            latest_kept = {
+                **latest,
+                "content": (
+                    self._truncate(latest_text, latest_cap)
+                    if len(latest_text) > latest_cap
+                    else latest_text
+                ),
+            }
+
+        remaining = budget - len(str((latest_kept or {}).get("content") or ""))
+        system_kept = None
+        if system is not None:
+            sys_text = str(system.get("content") or "")
+            sys_cap = max(1500, remaining - 500)
+            system_kept = {**system, "content": self._truncate(sys_text, sys_cap)}
+            remaining -= len(system_kept["content"])
+
+        kept_history: list[dict[str, str]] = []
+        for message in reversed(history):
+            content = str(message.get("content") or "")
+            if remaining <= 0:
+                break
             if len(content) <= remaining:
-                trimmed.insert(1, message)
+                kept_history.insert(0, message)
                 remaining -= len(content)
-            elif remaining > 0:
-                trimmed.insert(1, {**message, "content": self._truncate(content, remaining)})
-                break
             else:
+                kept_history.insert(0, {**message, "content": self._truncate(content, remaining)})
                 break
 
+        trimmed: list[dict[str, str]] = []
+        if system_kept is not None:
+            trimmed.append(system_kept)
+        trimmed.extend(kept_history)
+        if latest_kept is not None:
+            trimmed.append(latest_kept)
         logger.warning(
-            "AIOrchestrator.prompt_truncated | original_messages={original} kept={kept}",
+            "AIOrchestrator.prompt_truncated | original_messages={original} kept={kept} "
+            "kept_latest={kept_latest}",
             original=len(messages),
             kept=len(trimmed),
+            kept_latest=bool(latest_kept),
         )
         return trimmed

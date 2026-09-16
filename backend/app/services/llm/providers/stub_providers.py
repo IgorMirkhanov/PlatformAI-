@@ -58,7 +58,7 @@ class GeminiProvider(OpenAIProvider):
             else getattr(settings, "GEMINI_API_KEY", None),
             model=model
             or getattr(settings, "GEMINI_CHAT_MODEL", None)
-            or "gemini-2.5-flash",
+            or "gemini-3.6-flash",
             timeout_seconds=timeout_seconds,
             client=client,
             base_url=base_url

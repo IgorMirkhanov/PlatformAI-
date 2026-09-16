@@ -291,12 +291,14 @@ async def _dispatch_platform(
             webhook_body=payload["body"],
         )
 
-    if platform in {"WHATSAPP_QR", "WHATSAPP-QR"}:
+    if platform in {"WHATSAPP_QR", "WHATSAPP-QR", "GREENAPI"}:
+        hub = str(((payload.get("normalized") or {}).get("metadata") or {}).get("hub_channel_type") or "")
+        source = "instagram" if hub == "instagram" else "whatsapp_qr"
         return await _process_normalized_inbound(
             db,
             bot_id=bot_id,
             payload=payload,
-            source="whatsapp_qr",
+            source=source,
         )
 
     if platform == "INSTAGRAM":

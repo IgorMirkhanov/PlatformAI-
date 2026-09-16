@@ -20,6 +20,7 @@ celery_app = Celery(
         "app.tasks.flow_tasks",
         "app.tasks.bot_tasks",
         "app.tasks.telegram_poll_task",
+        "app.tasks.greenapi_poll_task",
         "app.workers.crm_tasks",
         "app.workers.crm_webhook_tasks",
         "app.tasks.oauth_refresh_task",
@@ -126,7 +127,9 @@ celery_app.conf.update(
 def configure_worker_logging(**_: object) -> None:
     """Apply loguru formatting inside Celery worker containers."""
     from app.core.crypto import validate_encryption_at_startup
+    from app.core.logging_config import redact_secrets_filter
     from app.core.telemetry import init_telemetry
+    from app.db.session import reset_celery_async_state
 
     logger.remove()
     logger.add(
@@ -139,7 +142,14 @@ def configure_worker_logging(**_: object) -> None:
             "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
             "<level>{message}</level>"
         ),
+        filter=redact_secrets_filter,
     )
+    import logging
+
+    # Avoid leaking Telegram bot tokens via ``HTTP Request: …/bot<token>/…``.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    reset_celery_async_state()
     init_telemetry()
     validate_encryption_at_startup()
     # Ensure hybrid credential accessors are registered for decrypted token reads.
@@ -147,10 +157,9 @@ def configure_worker_logging(**_: object) -> None:
     import app.models.integrations  # noqa: F401
 
     logger.info(
-        "CeleryWorker.startup | inbound_queue={inbound} crm_queue={crm} broker={broker}",
+        "CeleryWorker.startup | inbound_queue={inbound} crm_queue={crm}",
         inbound=settings.CELERY_INBOUND_QUEUE,
         crm=settings.CELERY_CRM_QUEUE,
-        broker=settings.CELERY_BROKER_URL,
     )
 
 
@@ -168,6 +177,16 @@ def _start_telegram_poller(**_: object) -> None:
             logger.info("CeleryWorker.telegram_poller_started")
     except Exception as exc:
         logger.warning("CeleryWorker.telegram_poller_skip | error={error}", error=str(exc))
+    try:
+        from app.core.redis_client import get_redis_client
+        from app.tasks.greenapi_poll_task import poll_greenapi_notifications
+
+        redis = get_redis_client()
+        if redis.set("greenapi:poller:armed", "1", nx=True, ex=30):
+            poll_greenapi_notifications.apply_async()
+            logger.info("CeleryWorker.greenapi_poller_started")
+    except Exception as exc:
+        logger.warning("CeleryWorker.greenapi_poller_skip | error={error}", error=str(exc))
 
 
 @task_prerun.connect

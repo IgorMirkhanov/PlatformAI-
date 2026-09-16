@@ -125,6 +125,14 @@ async def _deliver_one(
             )
         elif provider in {"whatsapp_qr", "baileys", "whatsapp-qr"}:
             await _deliver_whatsapp_qr(bot_id=bot_id, phone=user_id, reply=reply_text)
+        elif provider in {"greenapi"}:
+            await _deliver_greenapi(
+                db,
+                bot_id=bot_id,
+                chat_id=user_id,
+                reply=reply_text,
+                hub_type=str(normalized.metadata.get("hub_channel_type") or ""),
+            )
         else:
             await _deliver_whatsapp_cloud(
                 db,
@@ -290,6 +298,39 @@ async def _deliver_whatsapp_qr(*, bot_id: uuid.UUID, phone: str, reply: str) -> 
     from app.services.whatsapp_qr_service import whatsapp_qr_service
 
     await whatsapp_qr_service.send_text_message(bot_id=bot_id, to=phone, text=reply)
+
+
+async def _deliver_greenapi(
+    db: AsyncSession,
+    *,
+    bot_id: uuid.UUID,
+    chat_id: str,
+    reply: str,
+    hub_type: str = "",
+) -> None:
+    from app.core.security import decrypt_credential
+    from app.models.channels import BotChannel, HubChannelStatus, HubChannelType
+    from app.services.greenapi_service import greenapi_service
+    from sqlalchemy import select
+
+    wanted = HubChannelType.INSTAGRAM if hub_type == "instagram" else HubChannelType.WHATSAPP_QR
+    fallback = HubChannelType.GREENAPI
+    result = await db.execute(
+        select(BotChannel).where(
+            BotChannel.bot_id == bot_id,
+            BotChannel.channel_type.in_((wanted, fallback)),
+            BotChannel.status == HubChannelStatus.CONNECTED,
+        )
+    )
+    rows = list(result.scalars().all())
+    row = next((item for item in rows if item.channel_type == wanted), None) or (
+        rows[0] if rows else None
+    )
+    if row is None or not row.encrypted_token or not row.reference_id:
+        logger.warning("OutboundRouter.greenapi_no_credentials | bot_id={bot_id}", bot_id=bot_id)
+        return
+    token = decrypt_credential(row.encrypted_token)
+    await greenapi_service.send_text(str(row.reference_id), token, chat_id, reply)
 
 
 async def _deliver_web_widget(*, bot_id: uuid.UUID, session_id: str, reply: str) -> None:

@@ -39,7 +39,7 @@ from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token, hash_password
 from app.models.admin_audit import AdminAuditLog
 from app.models.billing import OrganizationWallet
-from app.models.core_models import UserRole
+from app.models.core_models import Bot, UserRole
 from app.models.usage import LLMUsageLog
 from app.models.users import User
 from app.schemas.llm_models import LLMModelTestConnectionResponse
@@ -484,6 +484,13 @@ async def test_full_platform_user_and_admin_lifecycle(life_harness: dict) -> Non
     assert publish.status_code == 200, publish.text
     report.mark(2, "Create+publish bot", True, f"bot_id={bot_id}")
 
+    async with factory() as db:
+        bot_row = await db.get(Bot, uuid.UUID(bot_id))
+        assert bot_row is not None
+        assert bot_row.subscription_active is True
+        bot_row.wallet_balance = starter
+        await db.commit()
+
     # ------------------------------------------------------------------
     # 3. Sandbox primary turn + debit
     # ------------------------------------------------------------------
@@ -499,14 +506,18 @@ async def test_full_platform_user_and_admin_lifecycle(life_harness: dict) -> Non
     assert tokens > 0
 
     async with factory() as db:
-        bal_after = await wallet_service.get_balance(db, org_id)
+        bot_row = await db.get(Bot, uuid.UUID(bot_id))
+        assert bot_row is not None
+        org_bal = await wallet_service.get_balance(db, org_id)
+        bal_after = int(bot_row.wallet_balance or 0)
+    assert org_bal == starter
     assert bal_after == starter - EXPECTED_CREDITS_DEFAULT
     report.balance_after_sandbox = bal_after
     report.mark(
         3,
         "Sandbox debit",
         True,
-        f"tokens={tokens} debit={EXPECTED_CREDITS_DEFAULT} bal={bal_after}",
+        f"tokens={tokens} debit={EXPECTED_CREDITS_DEFAULT} bot_wallet={bal_after}",
     )
 
     # ------------------------------------------------------------------
@@ -563,14 +574,17 @@ async def test_full_platform_user_and_admin_lifecycle(life_harness: dict) -> Non
     assert float(gbody["amount_delta"]) == float(ADMIN_GRANT_CREDITS)
 
     async with factory() as db:
-        bal_granted = await wallet_service.get_balance(db, org_id)
-    assert bal_granted == bal_after + ADMIN_GRANT_CREDITS
+        org_granted = await wallet_service.get_balance(db, org_id)
+        bot_row = await db.get(Bot, uuid.UUID(bot_id))
+        bal_granted = int(getattr(bot_row, "wallet_balance", 0) or 0)
+    assert org_granted == starter + ADMIN_GRANT_CREDITS
+    assert bal_granted == bal_after
     report.balance_after_grant = bal_granted
     report.mark(
         6,
         "Admin credit grant",
         True,
-        f"+{ADMIN_GRANT_CREDITS} wallet={bal_granted} currency={gbody.get('currency')}",
+        f"+{ADMIN_GRANT_CREDITS} org_wallet={org_granted} bot_wallet={bal_granted}",
     )
 
     # ------------------------------------------------------------------
@@ -674,7 +688,9 @@ async def test_full_platform_user_and_admin_lifecycle(life_harness: dict) -> Non
     # Pricing for custom model may equal default fallback — accept either if
     # _price_for falls back, but require exact ledger math on observed debit.
     async with factory() as db:
-        final_bal = await wallet_service.get_balance(db, org_id)
+        bot_row = await db.get(Bot, uuid.UUID(bot_id))
+        final_bal = int(getattr(bot_row, "wallet_balance", 0) or 0)
+        org_final = await wallet_service.get_balance(db, org_id)
         usage_rows = (
             await db.scalars(
                 select(LLMUsageLog).where(
@@ -687,6 +703,7 @@ async def test_full_platform_user_and_admin_lifecycle(life_harness: dict) -> Non
         # Stress turns only — filter by model after switch.
         stress_debit = bal_granted - final_bal
         per_turn = stress_debit // STRESS_DIALOGS if STRESS_DIALOGS else 0
+    assert org_final == starter + ADMIN_GRANT_CREDITS
 
     report.balance_final = final_bal
     report.usage_custom = len(custom_rows)

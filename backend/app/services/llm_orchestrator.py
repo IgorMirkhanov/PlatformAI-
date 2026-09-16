@@ -308,12 +308,36 @@ class LLMOrchestrator:
 
         # Second completion — model reads tool output and replies to the user.
         # Do not pass tools again: force a natural-language answer for the client.
-        final = await self._client.chat_completion(
-            messages=follow_up,
-            model=model,
-            temperature=temperature,
-            tools=None,
-        )
+        try:
+            final = await self._client.chat_completion(
+                messages=follow_up,
+                model=model,
+                temperature=temperature,
+                tools=None,
+                max_tokens=2048,
+            )
+        except Exception as primary_exc:
+            # Tool follow-ups used to hit OpenRouter without max_tokens (65536 → 402).
+            # Recover via Groq so the user still gets a reply after a successful tool run.
+            fb_model, fb_key, fb_base = self._resolve_fallback_endpoint()
+            if not fb_key or not fb_model or fb_model == model:
+                raise
+            logger.warning(
+                "LLMOrchestrator.tool_followup_fallback | primary={primary} "
+                "fallback={fallback} error={error}",
+                primary=model,
+                fallback=fb_model,
+                error=f"{type(primary_exc).__name__}: {primary_exc}",
+            )
+            final = await self._client.chat_completion(
+                messages=follow_up,
+                model=fb_model,
+                temperature=temperature,
+                tools=None,
+                api_key=fb_key,
+                base_url=fb_base,
+                max_tokens=2048,
+            )
         final.tool_calls = None
         final.tools_executed = tools_executed
         final.booking_tools_succeeded = booking_ok
@@ -341,6 +365,7 @@ class LLMOrchestrator:
                     model=model,
                     temperature=temperature,
                     tools=None,
+                    max_tokens=1024,
                 )
                 final.text = sanitize_outbound_text(
                     retry.text,
@@ -353,11 +378,35 @@ class LLMOrchestrator:
                     bot_id=bot_id,
                     error=str(exc),
                 )
-                final.text = sanitize_outbound_text(
-                    None,
-                    tools_executed=tools_executed,
-                    booking_ok=booking_ok,
-                )
+                try:
+                    fb_model, fb_key, fb_base = self._resolve_fallback_endpoint()
+                    if fb_key and fb_model:
+                        retry = await self._client.chat_completion(
+                            messages=nudge,
+                            model=fb_model,
+                            temperature=temperature,
+                            tools=None,
+                            api_key=fb_key,
+                            base_url=fb_base,
+                            max_tokens=1024,
+                        )
+                        final.text = sanitize_outbound_text(
+                            retry.text,
+                            tools_executed=tools_executed,
+                            booking_ok=booking_ok,
+                        )
+                    else:
+                        final.text = sanitize_outbound_text(
+                            None,
+                            tools_executed=tools_executed,
+                            booking_ok=booking_ok,
+                        )
+                except Exception:
+                    final.text = sanitize_outbound_text(
+                        None,
+                        tools_executed=tools_executed,
+                        booking_ok=booking_ok,
+                    )
 
         if final.text:
             logger.info(

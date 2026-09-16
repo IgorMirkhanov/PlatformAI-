@@ -46,6 +46,8 @@ LLM_CREDIT_PRICING: dict[str, CreditModelPrice] = {
     "claude-3.5-sonnet": {"prompt_per_1k": 30, "completion_per_1k": 150},
     "claude-3-haiku": {"prompt_per_1k": 5, "completion_per_1k": 25},
     # Google Gemini
+    "gemini-3.6-flash": {"prompt_per_1k": 8, "completion_per_1k": 32},
+    "gemini-3.5-flash-lite": {"prompt_per_1k": 3, "completion_per_1k": 12},
     "gemini-3.1-flash-lite": {"prompt_per_1k": 4, "completion_per_1k": 16},
     "gemini-2.5-flash": {"prompt_per_1k": 8, "completion_per_1k": 32},
     "gemini-2.5-flash-lite": {"prompt_per_1k": 3, "completion_per_1k": 12},
@@ -100,6 +102,8 @@ MODEL_PROVIDER_MAP: dict[str, str] = {
     "claude-3.5-sonnet": "anthropic",
     "claude-3-haiku": "anthropic",
     # Google
+    "gemini-3.6-flash": "gemini",
+    "gemini-3.5-flash-lite": "gemini",
     "gemini-3.1-flash-lite": "gemini",
     "gemini-2.5-flash": "gemini",
     "gemini-2.5-flash-lite": "gemini",

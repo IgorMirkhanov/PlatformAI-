@@ -12,6 +12,7 @@ import pytest
 from app.services.llm.base import (
     BaseLLMProvider,
     LLMAuthenticationError,
+    LLMInvalidResponseError,
     LLMProviderError,
     LLMRateLimitError,
     LLMResponse,
@@ -118,6 +119,21 @@ async def test_openai_provider_maps_token_usage(mock_openai_client: MagicMock) -
     assert result.completion_tokens == 42
     assert result.total_tokens == 142
     assert result.model_name == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_rejects_empty_content_without_tools(
+    mock_openai_client: MagicMock,
+) -> None:
+    mock_openai_client.chat.completions.create = AsyncMock(
+        return_value=_fake_openai_response(content="", completion_tokens=1000)
+    )
+    provider = OpenAIProvider(api_key="sk-test", client=mock_openai_client)
+
+    with pytest.raises(LLMInvalidResponseError) as exc_info:
+        await provider.complete([{"role": "user", "content": "cargo details"}])
+
+    assert "empty message content" in str(exc_info.value).lower()
 
 
 @pytest.mark.asyncio

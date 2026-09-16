@@ -12,10 +12,8 @@ x-logging: &default-logging
 
 x-backend-env: &backend-env
   PYTHONPATH: /app
-  DATABASE_URL: ${DATABASE_URL}
-  REDIS_URL: ${REDIS_URL}
-  CELERY_BROKER_URL: ${CELERY_BROKER_URL}
-  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+  # Connection URLs come only from env_file (.env.production). Do not interpolate
+  # DATABASE_URL / REDIS_URL here — a host pytest/dev shell would override Postgres.
   CELERY_INBOUND_QUEUE: ${CELERY_INBOUND_QUEUE:-inbound_messages}
   CELERY_CRM_QUEUE: ${CELERY_CRM_QUEUE:-crm_actions}
   CELERY_QUEUES: ${CELERY_QUEUES:-inbound_messages,crm_actions}
@@ -25,7 +23,14 @@ x-backend-env: &backend-env
   LOG_FORMAT: ${LOG_FORMAT:-json}
   WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL}
   NGROK_TUNNEL_URL: ${NGROK_TUNNEL_URL:-}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
   CORS_ORIGINS: ${CORS_ORIGINS}
+  INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+  INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+  INSTAGRAM_OAUTH_REDIRECT_URI: ${INSTAGRAM_OAUTH_REDIRECT_URI:-}
+  META_APP_ID: ${META_APP_ID:-}
+  META_APP_SECRET: ${META_APP_SECRET:-}
+  BITRIX24_WEBHOOK_URL: ${BITRIX24_WEBHOOK_URL:-}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
   OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
@@ -36,10 +41,12 @@ x-backend-env: &backend-env
   GROQ_CHAT_MODEL: ${GROQ_CHAT_MODEL:-openai/gpt-oss-20b}
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
-  GEMINI_CHAT_MODEL: ${GEMINI_CHAT_MODEL:-gemini-2.5-flash}
-  FALLBACK_LLM_PROVIDER: ${FALLBACK_LLM_PROVIDER:-groq}
-  FALLBACK_LLM_MODEL: ${FALLBACK_LLM_MODEL:-openai/gpt-oss-20b}
-  LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+  GEMINI_CHAT_MODEL: gemini-3.6-flash
+  # Gemini Flash is the live Russian chat path; Groq remains fallback.
+  # Hardcoded so .env.production LLM_PROVIDER=groq cannot keep the weak gpt-oss model.
+  FALLBACK_LLM_PROVIDER: groq
+  FALLBACK_LLM_MODEL: openai/gpt-oss-20b
+  LLM_PROVIDER: gemini
   OPERATOR_WS_TOKEN: ${OPERATOR_WS_TOKEN}
   # Required + distinct from ENCRYPTION_KEY (deploy.sh / checklist §2.2). No fallback.
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}

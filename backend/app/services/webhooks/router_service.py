@@ -208,8 +208,39 @@ async def ingest_provider_webhook(
         return Response(status_code=status.HTTP_200_OK)
 
     platform = _PROVIDER_TO_PLATFORM.get(provider_key, provider_key.upper())
+    task_payload: dict[str, Any] = dict(payload)
+    if provider_key == "greenapi":
+        from app.services.inbound.normalizer import attach_normalized, normalize_greenapi
+
+        hub_type = (
+            channel.channel_type.value
+            if channel.channel_type is not None
+            else "whatsapp_qr"
+        )
+        sender = payload.get("senderData") if isinstance(payload.get("senderData"), dict) else {}
+        name = str((sender or {}).get("senderName") or parsed.external_chat_id)
+        normalized = normalize_greenapi(
+            bot_id=channel.bot_id,
+            chat_id=parsed.external_chat_id,
+            message_text=parsed.text,
+            client_name=name,
+            hub_channel_type=hub_type,
+            raw_payload=payload,
+        )
+        task_payload = attach_normalized(
+            {
+                "bot_id": str(channel.bot_id),
+                "body": payload,
+                "external_id": parsed.external_chat_id,
+                "username": parsed.external_chat_id,
+                "first_name": name,
+                "message_text": parsed.text,
+            },
+            normalized,
+        )
+        platform = "GREENAPI"
     task = process_inbound_message_task.apply_async(
-        args=[str(channel.bot_id), platform, dict(payload)],
+        args=[str(channel.bot_id), platform, task_payload],
         queue=settings.CELERY_INBOUND_QUEUE,
     )
     record_webhook_event(provider_key, "queued")

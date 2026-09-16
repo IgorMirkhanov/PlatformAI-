@@ -546,10 +546,12 @@ class FlowExecutor:
         prompt_context = self._render_template(str(data.get("prompt_context") or ""))
         prompt_modifier = self._render_template(str(data.get("prompt_modifier") or ""))
         bot_cfg = getattr(self, "bot_config", None) or {}
+        # Live Prompting-tab / bot_config wins over baked graph fields so edits
+        # apply without republishing a node that still carries an old copy.
         global_prompt = str(
-            data.get("global_prompt_instructions")
-            or self.variables.get("prompt_instructions")
+            self.variables.get("prompt_instructions")
             or bot_cfg.get("prompt_instructions")
+            or data.get("global_prompt_instructions")
             or ""
         ).strip()
         temperature = float(
@@ -622,6 +624,16 @@ class FlowExecutor:
                 bot_id=bot_id,
                 global_prompt=global_prompt,
             )
+
+        text = (text or "").strip()
+        if not text:
+            from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
+
+            logger.warning(
+                "FlowParser.empty_llm_fallback | node_id={node_id}",
+                node_id=node_id,
+            )
+            text = SAFE_USER_FALLBACK_MESSAGE
 
         self.variables["llm_output"] = text
         self.variables["api_response"] = text

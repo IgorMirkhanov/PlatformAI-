@@ -28,6 +28,7 @@ async def charge_llm_credits(
 
     Idempotent when ``reference_id`` matches an existing org ledger row.
     """
+    from app.core.config import settings
     from app.services.billing.wallet_service import (
         InsufficientFundsError,
         wallet_service as default_wallet_service,
@@ -39,6 +40,10 @@ async def charge_llm_credits(
     from app.services.llm.base import InsufficientCreditsForLLMError
 
     credits = calculate_cost(model_name, prompt_tokens, completion_tokens)
+    # Per-bot free Groq/Gemini route must not fail a chat because a fallback
+    # vendor slug is priced. Org playground / BYOK still debit as usual.
+    if bot_id is not None and bool(getattr(settings, "is_free_llm_route", False)):
+        credits = 0
     billing_meta: dict[str, Any] = {
         "credits": credits,
         "reference_id": reference_id,

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { normalizeBitrixIncomingWebhook, validateBitrixIncomingWebhook } from "@/lib/integrations/bitrixWebhook";
 import type { HubProvider } from "@/types/integration-hub";
 
 interface HubApiKeyConnectFormProps {
@@ -33,11 +34,12 @@ export function HubApiKeyConnectForm({
     setLocalError(null);
     if (isBitrix) {
       const url = webhookUrl.trim();
-      if (!/^https?:\/\/.+/i.test(url) || !url.includes("/rest/")) {
-        setLocalError("Укажите Incoming Webhook URL Bitrix24 (…/rest/1/xxxxx/).");
+      const invalid = validateBitrixIncomingWebhook(url);
+      if (invalid) {
+        setLocalError(invalid);
         return;
       }
-      await onSubmit({ webhook_url: url.endsWith("/") ? url : `${url}/` });
+      await onSubmit({ webhook_url: normalizeBitrixIncomingWebhook(url) });
       return;
     }
     if (isKaspi) {
@@ -75,7 +77,9 @@ export function HubApiKeyConnectForm({
       {isBitrix ? (
         <>
           <p className="text-xs leading-relaxed text-zinc-500">
-            В Bitrix24: Разработчикам → Другое → Входящий вебхук. Права: CRM (сделки, контакты).
+            В Bitrix24 откройте Разработчикам → Другое → Входящий вебхук. Включите права CRM
+            (сделки и контакты) и вставьте URL вида https://xxx.bitrix24.ru/rest/1/xxxxxxxx/ —
+            не ссылку на канбан сделок.
           </p>
           <label className="block text-xs font-medium text-zinc-400">
             Incoming Webhook URL
@@ -129,7 +133,7 @@ export function HubApiKeyConnectForm({
       ) : (
         <p className="text-[11px] text-zinc-500">
           {isBitrix
-            ? "URL проверяется запросом profile.json и сохраняется только после успеха."
+            ? "URL проверяется запросом profile.json. Ссылка на канбан CRM (/crm/deal/kanban/) не сработает."
             : "Ключ проверяется через testConnection() и сохраняется только после успешной проверки."}
         </p>
       )}

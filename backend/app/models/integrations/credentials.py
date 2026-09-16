@@ -23,6 +23,8 @@ _SENSITIVE_BITRIX_FIELDS = ("webhook_url", "access_token", "api_key")
 def _safe_decrypt(value: Any, *, field: str) -> Any:
     if value is None or not isinstance(value, str) or value == "":
         return value
+    if not EncryptionService.is_sealed(value):
+        return value
     try:
         return decrypt_credential(value)
     except Exception as exc:
@@ -31,7 +33,7 @@ def _safe_decrypt(value: Any, *, field: str) -> Any:
             field=field,
             error=str(exc),
         )
-        return value
+        return None
 
 
 def _safe_encrypt(value: Any) -> Any:
@@ -89,7 +91,7 @@ def get_bitrix_webhook_url(bot: Bot) -> str | None:
     if not config or not config.get("connected"):
         return None
     url = config.get("webhook_url")
-    if isinstance(url, str) and url.strip():
+    if isinstance(url, str) and "/rest/" in url.lower():
         return url.rstrip("/") + "/"
     return None
 

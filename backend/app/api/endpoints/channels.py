@@ -8,17 +8,18 @@ import json
 import uuid
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import JSONResponse, RedirectResponse
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_bot_access, require_credential_access
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.rbac import Permission
+from app.core.rbac import Permission, get_current_user
 from app.models.channels import HubChannelType
 from app.models.core_models import Bot
+from app.models.users import User
 from app.schemas.channel_hub_schemas import (
     ChannelConnectRequest,
     ChannelConnectResponse,
@@ -26,6 +27,13 @@ from app.schemas.channel_hub_schemas import (
     HubChannelsResponse,
 )
 from app.services.channels_service import channels_hub_service
+from app.services.instagram_oauth import (
+    InstagramOAuthError,
+    build_instagram_authorize_url,
+    decode_instagram_oauth_state,
+    exchange_instagram_code,
+    instagram_frontend_result,
+)
 from app.services.whatsapp_qr_service import whatsapp_qr_service
 
 router = APIRouter(tags=["channels-hub"])
@@ -65,6 +73,77 @@ async def list_hub_channels(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to load channel hub statuses.",
         ) from exc
+
+
+@router.get(
+    "/bots/{bot_id}/channels/instagram/oauth/start",
+    summary="Start Instagram Business Login — redirects the user to instagram.com",
+)
+async def instagram_oauth_start(
+    bot_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_bot_access(Permission.BOT_CHANNELS)),
+    user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    del db
+    try:
+        return {"authorize_url": build_instagram_authorize_url(bot_id=bot_id, user_id=user.id)}
+    except InstagramOAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@router.get(
+    "/channels/instagram/oauth/callback",
+    summary="Instagram OAuth callback — exchange code and connect the hub channel",
+)
+async def instagram_oauth_callback(
+    db: AsyncSession = Depends(get_db),
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str | None = Query(default=None),
+    error_description: str | None = Query(default=None),
+) -> RedirectResponse:
+    bot_id_hint = ""
+    if state:
+        try:
+            bot_id_hint = str(decode_instagram_oauth_state(state).get("bot_id") or "")
+        except InstagramOAuthError:
+            bot_id_hint = ""
+    if error:
+        reason = (error_description or error or "access_denied")[:180]
+        return RedirectResponse(
+            url=instagram_frontend_result(status="error", message=reason, bot_id=bot_id_hint)
+        )
+    if not code or not state:
+        return RedirectResponse(
+            url=instagram_frontend_result(
+                status="error", message="missing_code_or_state", bot_id=bot_id_hint
+            )
+        )
+    try:
+        payload = decode_instagram_oauth_state(state)
+        bot_id = uuid.UUID(str(payload.get("bot_id")))
+        bot_id_hint = str(bot_id)
+        tokens = await exchange_instagram_code(code)
+        await channels_hub_service.complete_instagram_oauth(
+            db,
+            bot_id,
+            access_token=tokens["access_token"],
+            ig_user_id=tokens["ig_user_id"],
+            username=tokens.get("username") or "",
+        )
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.warning("InstagramOAuth.callback_failed | error={error}", error=str(exc))
+        return RedirectResponse(
+            url=instagram_frontend_result(
+                status="error", message=str(exc)[:180], bot_id=bot_id_hint
+            )
+        )
+    return RedirectResponse(
+        url=instagram_frontend_result(status="connected", bot_id=bot_id_hint)
+    )
 
 
 @router.post(
@@ -311,10 +390,12 @@ async def whatsapp_qr_websocket(websocket: WebSocket, bot_id: uuid.UUID) -> None
                             session_id=str(frame.get("session_id") or bot_id),
                             phone=str(frame.get("reference_id") or "") or None,
                         )
-                        # Keep socket briefly so the UI can settle, then exit cleanly.
-                        await asyncio.sleep(1.0)
-                        break
-                    if event in {"connection_failed", "AUTH_FAILURE", "DISCONNECTED"}:
+                        # Keep proxy open so the UI can show the linked number
+                        # instead of closing the QR modal immediately.
+                    if event in {"AUTH_FAILURE"} or (
+                        event in {"connection_failed", "DISCONNECTED"}
+                        and str(frame.get("status") or "") == "failed"
+                    ):
                         break
             finally:
                 client_task.cancel()

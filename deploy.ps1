@@ -13,10 +13,12 @@
   .\deploy.ps1
   .\deploy.ps1 -VerifyOnly
   .\deploy.ps1 -SkipBuild
+  .\deploy.ps1 -Backup
 #>
 param(
   [switch]$VerifyOnly,
-  [switch]$SkipBuild
+  [switch]$SkipBuild,
+  [switch]$Backup
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,6 +111,27 @@ if (-not (Test-Path ".\nginx\ssl\fullchain.pem") -or -not (Test-Path ".\nginx\ss
     throw "TLS pem missing under nginx/ssl. Set ALLOW_SELF_SIGNED=1 or provide certs."
   }
   Write-Host "[deploy] WARN: TLS pem missing; generate self-signed before nginx recreate (openssl)."
+}
+
+if ($Backup) {
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $dir = Join-Path "backups" "pg_$stamp"
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $pgUser = Get-EnvValue "POSTGRES_USER"
+  $pgDb = Get-EnvValue "POSTGRES_DB"
+  $out = Join-Path $dir "postgres.sql"
+  Write-Host "[deploy] Dumping $pgDb ..."
+  Invoke-Compose exec -T postgres pg_dump -U $pgUser -d $pgDb --no-owner --format=plain |
+    Set-Content -Path $out -Encoding utf8
+  $len = (Get-Item $out).Length
+  if ($len -lt 1000) { throw "Postgres backup too small ($len bytes)" }
+  @"
+stamp=$stamp
+db=$pgDb
+bytes=$len
+"@ | Set-Content (Join-Path $dir "MANIFEST.txt")
+  Write-Host "[deploy] Backup written to $dir ($len bytes). Folder is gitignored."
+  exit 0
 }
 
 if ($VerifyOnly) {

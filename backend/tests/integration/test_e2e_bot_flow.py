@@ -102,6 +102,8 @@ def e2e_bot_stack() -> dict[str, Any]:
         name="E2E Telegram Bot",
         platform_type=PlatformType.TELEGRAM,
         is_active=True,
+        subscription_active=True,
+        wallet_balance=50_000,
         credentials={
             "token_hash": hash_bot_token(token),
             "telegram_bot_token": encrypt_credential(token),
@@ -194,7 +196,21 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
         def scalar_one(self) -> Any:
             return None
 
-    db.execute = AsyncMock(return_value=_EmptyResult())
+    class _BotResult:
+        def scalar_one_or_none(self) -> Any:
+            return bot
+
+        def scalar_one(self) -> Any:
+            return bot
+
+    async def _db_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        froms = getattr(stmt, "froms", None) or ()
+        names = " ".join(str(getattr(item, "name", item)) for item in froms).lower()
+        if "bots" in names:
+            return _BotResult()
+        return _EmptyResult()
+
+    db.execute = AsyncMock(side_effect=_db_execute)
 
     class _NestedSavepoint:
         async def __aenter__(self) -> "_NestedSavepoint":
@@ -314,11 +330,8 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     assert result["status"] == "processed"
     assert result.get("bot_silent") is not True
     assert provider.complete_calls == 1
-    assert wallet.deduct_credits.await_count == 1
-
-    deduct_call = wallet.deduct_credits.await_args
-    assert deduct_call.args[1] == org_id
-    assert deduct_call.args[2] == expected_credits
+    assert bot.wallet_balance == 50_000 - expected_credits
+    assert wallet.deduct_credits.await_count == 0
 
     assert len(outbound_messages) == 1
     outbound = outbound_messages[0]

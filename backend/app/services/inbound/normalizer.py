@@ -102,6 +102,19 @@ def normalize_wazzup_inbound(
     return normalized
 
 
+def whatsapp_qr_reply_target(from_phone: str, raw_payload: dict[str, Any] | None = None) -> str:
+    """Prefer the original Baileys JID (including @lid) so replies reach the same chat."""
+    raw = raw_payload or {}
+    jid = str(raw.get("remote_jid") or "").strip()
+    lowered = jid.lower()
+    if lowered.endswith("@lid") or lowered.endswith("@s.whatsapp.net") or lowered.endswith("@c.us"):
+        return jid
+    candidate = str(from_phone or "").strip()
+    if "@" in candidate:
+        return candidate
+    return clean_phone_number(candidate) or candidate
+
+
 def normalize_whatsapp_qr(
     *,
     bot_id: uuid.UUID,
@@ -110,14 +123,39 @@ def normalize_whatsapp_qr(
     push_name: str | None = None,
     raw_payload: dict[str, Any] | None = None,
 ) -> NormalizedInboundMessage:
-    phone = clean_phone_number(from_phone) or from_phone
+    target = whatsapp_qr_reply_target(from_phone, raw_payload)
     return normalize_whatsapp(
         bot_id=bot_id,
-        phone=phone,
+        phone=target,
         message_text=message_text,
-        client_name=push_name or phone,
+        client_name=push_name or target,
         provider="whatsapp_qr",
         raw_payload=raw_payload or {},
+    )
+
+
+def normalize_greenapi(
+    *,
+    bot_id: uuid.UUID,
+    chat_id: str,
+    message_text: str,
+    client_name: str | None = None,
+    hub_channel_type: str = "whatsapp_qr",
+    raw_payload: dict[str, Any] | None = None,
+) -> NormalizedInboundMessage:
+    user_id = str(chat_id or "").strip()
+    return NormalizedInboundMessage(
+        channel=InboundChannel.WHATSAPP,
+        channel_user_id=user_id,
+        bot_id=bot_id,
+        message_text=message_text,
+        metadata={
+            "hub_channel_type": hub_channel_type,
+            "client_name": client_name or user_id,
+            "provider": "greenapi",
+            "chat_id": user_id,
+            "raw_payload": raw_payload or {},
+        },
     )
 
 

@@ -286,6 +286,17 @@ def test_effective_chat_model_rewrites_openai_aliases_on_gemini(
     assert settings.is_free_llm_route is True
 
 
+def test_effective_chat_model_rewrites_retired_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "LLM_PROVIDER", "gemini", raising=False)
+    monkeypatch.setattr(settings, "GEMINI_CHAT_MODEL", "gemini-3.6-flash", raising=False)
+
+    assert settings.effective_chat_model("gemini-2.5-flash") == "gemini-3.6-flash"
+
+
 @pytest.mark.asyncio
 async def test_post_deduct_insufficient_maps_to_llm_error() -> None:
     """Race after preflight: deduct raises → standardized 402 error."""

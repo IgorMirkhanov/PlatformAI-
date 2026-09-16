@@ -478,7 +478,7 @@ async def process_inbound_message(
             action_data=crm_action,
         )
 
-    response_text = str(next_node.get("text") or "")
+    response_text = str(next_node.get("text") or "").strip()
     raw_buttons = next_node.get("buttons") or []
     buttons = [FlowButton.model_validate(btn) for btn in raw_buttons]
     bot_silent = bool(next_node.get("bot_silent"))
@@ -489,6 +489,16 @@ async def process_inbound_message(
     ai_generated = next_node.get("node_type") in {"ai_agent", "llm"}
     ai_payload: dict[str, object] = {}
     media_attachments: list = list(next_node.get("media_attachments") or [])
+
+    if ai_generated and not bot_silent and not response_text:
+        from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
+
+        response_text = SAFE_USER_FALLBACK_MESSAGE
+        logger.warning(
+            "WebhookService.empty_ai_reply_fallback | client_id={client_id} node_id={node_id}",
+            client_id=client.id,
+            node_id=next_node.get("node_id"),
+        )
 
     if ai_generated:
         node_data = next_node.get("data") or {}

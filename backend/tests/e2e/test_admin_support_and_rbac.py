@@ -207,6 +207,8 @@ async def _seed_user(
                         name="Support Inspect Bot",
                         platform_type=PlatformType.TELEGRAM,
                         is_active=True,
+                        subscription_active=True,
+                        wallet_balance=100_000,
                     )
                 )
         await db.commit()

@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react";
 import { IntegrationModalShell } from "@/components/integrations/IntegrationModalShell";
 import { PipelineMappingStep } from "@/components/integrations/PipelineMappingStep";
 import { fetchCRMPipelines } from "@/lib/api";
+import { normalizeBitrixIncomingWebhook, validateBitrixIncomingWebhook } from "@/lib/integrations/bitrixWebhook";
 import { cn } from "@/lib/utils";
 import type { CRMIntegrationDefinition } from "@/types/crm-integrations";
 import type {
@@ -77,14 +78,15 @@ export function Bitrix24Modal({
 
   const handleVerify = async (): Promise<void> => {
     setError(null);
-    if (!credentials.webhook_url.trim()) {
-      setError("Укажите incoming webhook URL Bitrix24.");
+    const invalid = validateBitrixIncomingWebhook(credentials.webhook_url);
+    if (invalid) {
+      setError(invalid);
       return;
     }
 
     try {
       await onSave({
-        webhook_url: credentials.webhook_url.trim(),
+        webhook_url: normalizeBitrixIncomingWebhook(credentials.webhook_url),
         sync_enabled: true,
       });
       setStep(2);
@@ -137,7 +139,8 @@ export function Bitrix24Modal({
                 className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100"
               />
               <p className="mt-1.5 text-[11px] text-zinc-600">
-                Webhook должен иметь права CRM, контактов и сделок для асинхронной очереди Celery.
+                Не вставляйте ссылку на канбан. Нужен Incoming Webhook с правами CRM, контактов и
+                сделок.
               </p>
             </div>
 

@@ -310,18 +310,29 @@ class TelegramService:
                 },
             )
 
-            if result.bot_silent or not result.response_text:
+            if result.bot_silent:
                 logger.info(
                     "TelegramService.bot_silent | chat_id={chat_id} operator_paused={paused}",
                     chat_id=inbound.chat_id,
-                    paused=result.bot_silent,
+                    paused=True,
                 )
                 return {"status": "processed", "bot_silent": True, "client_id": str(result.client_id)}
+
+            outbound_text = (result.response_text or "").strip()
+            if not outbound_text:
+                from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
+
+                outbound_text = SAFE_USER_FALLBACK_MESSAGE
+                logger.warning(
+                    "TelegramService.empty_ai_reply_fallback | chat_id={chat_id} client_id={client_id}",
+                    chat_id=inbound.chat_id,
+                    client_id=result.client_id,
+                )
 
             await self.send_message(
                 bot_token=bot_token,
                 chat_id=inbound.chat_id,
-                text=result.response_text or "…",
+                text=outbound_text,
                 buttons=[button.model_dump() for button in result.buttons],
                 bot_id=bot.id,
                 client_id=result.client_id,
@@ -339,7 +350,7 @@ class TelegramService:
             return {
                 "status": "processed",
                 "client_id": str(result.client_id),
-                "response_text": result.response_text,
+                "response_text": outbound_text,
                 "media_attachments": len(result.media_attachments or []),
             }
         except MessengerAPIError:
@@ -352,22 +363,11 @@ class TelegramService:
                 chat_id=inbound.chat_id,
                 error=str(exc),
             )
-            try:
-                await self.send_message(
-                    bot_token=bot_token,
-                    chat_id=inbound.chat_id,
-                    text="Something went wrong. Please try again in a moment.",
-                    buttons=[],
-                    bot_id=bot.id,
-                    db=db,
-                )
-            except MessengerAPIError:
-                raise
-            except Exception as send_exc:
-                logger.error(
-                    "TelegramService.fallback_send_failed | error={error}",
-                    error=str(send_exc),
-                )
+            if db is not None:
+                from contextlib import suppress
+
+                with suppress(Exception):
+                    await db.rollback()
             raise
 
     async def send_message(

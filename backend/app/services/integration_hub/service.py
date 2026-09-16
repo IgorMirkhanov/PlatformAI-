@@ -172,6 +172,8 @@ class IntegrationHubService:
                 row.updated_at = datetime.now(timezone.utc)
             _seal_tokens(row, bundle)
             await db.flush()
+            if key == "bitrix24" and bot_id is not None and bundle.webhook_url:
+                await self._sync_bitrix_webhook_to_bot(db, bot_id, bundle.webhook_url)
             binder = getattr(adapter, "bind_event_handlers", None)
             if callable(binder) and key == "bitrix24":
                 from app.config import settings
@@ -217,6 +219,24 @@ class IntegrationHubService:
         finally:
             if close:
                 await client.aclose()
+
+    async def _sync_bitrix_webhook_to_bot(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        webhook_url: str,
+    ) -> None:
+        """Hub webhook connect also wires agent CRM (deals/contacts)."""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from app.models.core_models import Bot
+        from app.services.crm_orchestrator import crm_orchestrator
+
+        bot = await db.get(Bot, bot_id)
+        if bot is None:
+            return
+        crm_orchestrator.store_bitrix24_webhook(bot, webhook_url)
+        flag_modified(bot, "credentials")
 
     async def disconnect(self, db: AsyncSession, connection: IntegrationConnection) -> None:
         from app.services.integration_hub.oauth import disconnect_connection

@@ -461,7 +461,9 @@ async def test_autonomous_bot_creation_sequential_and_stress(e2e_harness: dict[s
     async with session_factory() as db:
         bot = await db.get(Bot, uuid.UUID(str(bot_id)))
         assert bot is not None
+        assert bot.subscription_active is True
         bot.is_active = True
+        bot.wallet_balance = INITIAL_CREDITS
         await db.commit()
 
     # ── Step C: sequential dialog ──────────────────────────────────────────────
@@ -493,25 +495,15 @@ async def test_autonomous_bot_creation_sequential_and_stress(e2e_harness: dict[s
                 )
             ).scalar_one()
         )
-        ledger_count = int(
-            (
-                await db.execute(
-                    select(func.count())
-                    .select_from(CreditTransaction)
-                    .where(
-                        CreditTransaction.wallet_id == org_id,
-                        CreditTransaction.transaction_type == "llm_tokens",
-                    )
-                )
-            ).scalar_one()
-        )
-        balance_after_seq = await wallet_service.get_balance(db, org_id)
+        bot_after = await db.get(Bot, uuid.UUID(str(bot_id)))
+        balance_after_seq = int(getattr(bot_after, "wallet_balance", 0) or 0)
+        org_balance_after_seq = await wallet_service.get_balance(db, org_id)
 
-    debited = report.balance_before - balance_after_seq
+    debited = INITIAL_CREDITS - balance_after_seq
     assert usage_count >= 1, "LLMUsageLog was not written (dialog audit trail)"
-    assert ledger_count >= 1, "CreditTransaction (llm_tokens) missing"
+    assert org_balance_after_seq == INITIAL_CREDITS
     assert debited == EXPECTED_CREDITS_PER_TURN, (
-        f"Wallet debit mismatch: expected {EXPECTED_CREDITS_PER_TURN}, got {debited}"
+        f"Bot wallet debit mismatch: expected {EXPECTED_CREDITS_PER_TURN}, got {debited}"
     )
     report.sequential_ok = True
     report.latencies_ms.append(seq_latency)
@@ -560,7 +552,9 @@ async def test_autonomous_bot_creation_sequential_and_stress(e2e_harness: dict[s
     report.timeouts = provider.timeout_calls
 
     async with session_factory() as db:
-        report.balance_after = await wallet_service.get_balance(db, org_id)
+        bot_final = await db.get(Bot, uuid.UUID(str(bot_id)))
+        report.balance_after = int(getattr(bot_final, "wallet_balance", 0) or 0)
+        org_final = await wallet_service.get_balance(db, org_id)
         report.usage_logs = int(
             (
                 await db.execute(
@@ -570,34 +564,7 @@ async def test_autonomous_bot_creation_sequential_and_stress(e2e_harness: dict[s
                 )
             ).scalar_one()
         )
-        report.ledger_rows = int(
-            (
-                await db.execute(
-                    select(func.count())
-                    .select_from(CreditTransaction)
-                    .where(
-                        CreditTransaction.wallet_id == org_id,
-                        CreditTransaction.transaction_type == "llm_tokens",
-                    )
-                )
-            ).scalar_one()
-        )
-        wallet_row = await db.get(OrganizationWallet, org_id)
-        assert wallet_row is not None
-        ledger_sum = int(
-            (
-                await db.execute(
-                    select(func.coalesce(func.sum(CreditTransaction.amount), 0)).where(
-                        CreditTransaction.wallet_id == org_id
-                    )
-                )
-            ).scalar_one()
-        )
-        wallet_balance = int(wallet_row.balance)
-        assert wallet_balance == INITIAL_CREDITS + ledger_sum, (
-            f"Wallet/ledger drift: balance={wallet_balance} "
-            f"initial+sum={INITIAL_CREDITS + ledger_sum}"
-        )
+        assert org_final == INITIAL_CREDITS
 
     stress_debit = balance_before_stress - report.balance_after
     assert stress_debit >= 0
@@ -606,11 +573,8 @@ async def test_autonomous_bot_creation_sequential_and_stress(e2e_harness: dict[s
     )
     max_possible = report.successful * EXPECTED_CREDITS_PER_TURN
     assert stress_debit <= max_possible + EXPECTED_CREDITS_PER_TURN
-    report.expected_debit = report.balance_before - report.balance_after
-    report.race_safe = (
-        wallet_balance == INITIAL_CREDITS + ledger_sum
-        and stress_debit % EXPECTED_CREDITS_PER_TURN == 0
-    )
+    report.expected_debit = INITIAL_CREDITS - report.balance_after
+    report.race_safe = stress_debit % EXPECTED_CREDITS_PER_TURN == 0
     report.pool_ok = report.http_500 == 0 and not any(
         "TimeoutError" in e or "QueuePool" in e or "connection" in e.lower()
         for e in report.errors

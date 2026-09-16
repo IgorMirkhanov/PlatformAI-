@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from typing import Any
 
@@ -12,7 +11,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from app.core.celery_app import celery_app
-from app.core.database import async_session_factory
+from app.core.database import async_session_factory, run_celery_async
 from app.models.core_models import DiagnosticErrorType
 from app.schemas.crm_schemas import CRMActionPayload, CRMAutomationTaskPayload
 from app.services.crm_orchestrator import CRMTransientError, crm_orchestrator
@@ -104,7 +103,7 @@ def _run_crm_automation(
     node_id = str(validated_action.get("node_id") or "") or None
 
     try:
-        result = asyncio.run(
+        result = run_celery_async(
             crm_orchestrator.execute_crm_action(
                 envelope.bot_id,
                 envelope.session_id,
@@ -132,7 +131,7 @@ def _run_crm_automation(
         try:
             raise retry_callback(exc)
         except MaxRetriesExceededError:
-            asyncio.run(
+            run_celery_async(
                 _persist_crm_disconnect(
                     bot_id=envelope.bot_id,
                     session_id=envelope.session_id,
@@ -154,7 +153,7 @@ def _run_crm_automation(
             session_id=session_id,
             error=str(exc),
         )
-        asyncio.run(
+        run_celery_async(
             _persist_crm_disconnect(
                 bot_id=envelope.bot_id,
                 session_id=envelope.session_id,
@@ -391,7 +390,7 @@ def capture_lead_task(self, client_id_str: str, bot_id_str: str) -> dict[str, An
         queue=settings.CELERY_CRM_QUEUE,
     )
     try:
-        return asyncio.run(
+        return run_celery_async(
             _capture_lead_async(uuid.UUID(client_id_str), uuid.UUID(bot_id_str))
         )
     except Exception as exc:
@@ -469,7 +468,7 @@ def run_automation_task(
         queue=settings.CELERY_CRM_QUEUE,
     )
     try:
-        return asyncio.run(
+        return run_celery_async(
             _run_automation_async(
                 uuid.UUID(organization_id_str),
                 uuid.UUID(deal_id_str),

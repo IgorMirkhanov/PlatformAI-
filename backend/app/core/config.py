@@ -177,7 +177,7 @@ class Settings:
         "GEMINI_BASE_URL",
         "https://generativelanguage.googleapis.com/v1beta/openai/",
     )
-    GEMINI_CHAT_MODEL: str = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
+    GEMINI_CHAT_MODEL: str = os.getenv("GEMINI_CHAT_MODEL", "gemini-3.6-flash")
     DEEPSEEK_API_KEY: str | None = os.getenv("DEEPSEEK_API_KEY") or os.getenv(
         "PLATFORM_DEEPSEEK_FALLBACK_KEY"
     ) or None
@@ -209,7 +209,7 @@ class Settings:
 
     # AI orchestration limits
     MAX_CHAT_HISTORY_MESSAGES: int = int(os.getenv("MAX_CHAT_HISTORY_MESSAGES", "10"))
-    MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
+    MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "48000"))
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "3"))
     RAG_MIN_SIMILARITY_SCORE: float = float(os.getenv("RAG_MIN_SIMILARITY_SCORE", "0.35"))
     RAG_SEARCH_TIMEOUT_SECONDS: float = float(os.getenv("RAG_SEARCH_TIMEOUT_SECONDS", "8.0"))
@@ -296,6 +296,12 @@ class Settings:
     WHATSAPP_ACCESS_TOKEN: str | None = os.getenv("WHATSAPP_ACCESS_TOKEN") or None
     WHATSAPP_PHONE_NUMBER_ID: str | None = os.getenv("WHATSAPP_PHONE_NUMBER_ID") or None
     # Meta / Facebook app secret for X-Hub-Signature-256 on WhatsApp Cloud + Instagram.
+    META_APP_ID: str | None = os.getenv("META_APP_ID") or os.getenv("INSTAGRAM_APP_ID") or None
+    INSTAGRAM_APP_ID: str | None = os.getenv("INSTAGRAM_APP_ID") or os.getenv("META_APP_ID") or None
+    INSTAGRAM_APP_SECRET: str | None = (
+        os.getenv("INSTAGRAM_APP_SECRET") or os.getenv("META_APP_SECRET") or None
+    )
+    INSTAGRAM_OAUTH_REDIRECT_URI: str | None = os.getenv("INSTAGRAM_OAUTH_REDIRECT_URI") or None
     META_APP_SECRET: str | None = (
         os.getenv("META_APP_SECRET")
         or os.getenv("FACEBOOK_APP_SECRET")
@@ -415,7 +421,7 @@ class Settings:
             if provider == "groq":
                 return (self.GROQ_CHAT_MODEL or "openai/gpt-oss-20b").strip()
             if provider == "gemini":
-                return (self.GEMINI_CHAT_MODEL or "gemini-2.5-flash").strip()
+                return (self.GEMINI_CHAT_MODEL or "gemini-3.6-flash").strip()
             return (self.OPENROUTER_FREE_MODEL or "meta-llama/llama-3.2-3b-instruct:free").strip()
         if provider == "groq":
             groq_model = (self.GROQ_CHAT_MODEL or "").strip()
@@ -439,8 +445,16 @@ class Settings:
         """Rewrite legacy OpenAI aliases onto the platform vendor model."""
         raw = (model_name or "").strip()
         provider = (self.LLM_PROVIDER or "").strip().lower()
+        lowered = raw.lower()
+        retired_gemini = {
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        }
+        if provider == "gemini" and lowered in retired_gemini:
+            return self.resolved_chat_model
         if provider in {"groq", "gemini", "ollama"}:
-            lowered = raw.lower()
             if (
                 not raw
                 or lowered.startswith("gpt-")
