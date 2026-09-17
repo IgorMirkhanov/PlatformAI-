@@ -68,6 +68,25 @@ async def lifespan(app: FastAPI):
         present=present,
         absent=absent,
     )
+    _llm_provider_keys = (
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GROQ_API_KEY",
+        "GEMINI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "OPENROUTER_API_KEY",
+    )
+    _configured_llm_providers = [k for k in _llm_provider_keys if audit.get(k)]
+    if len(_configured_llm_providers) < 2:
+        logger.warning(
+            "Application.no_llm_fallback_redundancy | configured={configured} "
+            "— ResilientLLMGateway's fallback chain (LLM_PROVIDER -> "
+            "FALLBACK_LLM_PROVIDER={fallback}) has at most one real provider "
+            "to fall back to. A single vendor outage will take down /execute "
+            "entirely. Set a second provider's API key before commercial launch.",
+            configured=_configured_llm_providers,
+            fallback=settings.FALLBACK_LLM_PROVIDER,
+        )
     try:
         logger.info("[STARTUP] Запуск TelegramWebhookManager...")
         from app.core.config import webhook_base_is_public
@@ -206,6 +225,13 @@ async def rate_limit_exceeded_handler(
         limit=str(getattr(exc, "detail", "") or exc),
         cid=_correlation_id(request),
     )
+    try:
+        from app.core.metrics import record_rate_limit_exceeded
+
+        scope = "execute" if "/execute" in request.url.path else "default"
+        record_rate_limit_exceeded(scope)
+    except Exception:  # noqa: BLE001 — metrics must never break a response
+        pass
     return JSONResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         content={

@@ -573,6 +573,14 @@ class Settings:
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", "10"))
     DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    # Set to true when DATABASE_URL points at PgBouncer in transaction-pooling
+    # mode: asyncpg's client-side prepared-statement cache assumes a stable
+    # backend connection, but PgBouncer can hand a query to a different
+    # Postgres backend on every transaction, causing
+    # "DuplicatePreparedStatementError" / "prepared statement does not
+    # exist" under real traffic (confirmed against a live PgBouncer 1.22).
+    # Disabling the cache is the fix asyncpg's own error message recommends.
+    DB_PGBOUNCER_COMPAT: bool = os.getenv("DB_PGBOUNCER_COMPAT", "false").strip().lower() == "true"
 
     # Flow Builder engine — hop limit + Redis session TTL.
     FLOW_MAX_EXECUTION_STEPS: int = int(os.getenv("FLOW_MAX_EXECUTION_STEPS", "50"))

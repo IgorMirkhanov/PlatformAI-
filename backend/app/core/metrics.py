@@ -42,6 +42,21 @@ try:
         "Organization token wallet blocked / insufficient events",
         ["reason"],
     )
+    RATE_LIMIT_EXCEEDED = Counter(
+        "mpai_rate_limit_exceeded_total",
+        "Requests rejected with 429 by the Redis-backed rate limiter",
+        ["scope"],
+    )
+    LLM_CACHE_LOOKUPS = Counter(
+        "mpai_llm_cache_lookups_total",
+        "LLM response cache lookups",
+        ["cache_type", "result"],
+    )
+    LLM_COMPLETIONS = Counter(
+        "mpai_llm_completions_total",
+        "LLM gateway completion attempts (one per provider try, real traffic)",
+        ["provider", "result"],
+    )
 
     def metrics_payload() -> tuple[bytes, str]:
         return generate_latest(), CONTENT_TYPE_LATEST
@@ -70,6 +85,9 @@ except ImportError:  # pragma: no cover
     CRM_LEAD_CREATE = _Noop()
     OAUTH_REFRESH = _Noop()
     WALLET_BLOCKED = _Noop()
+    RATE_LIMIT_EXCEEDED = _Noop()
+    LLM_CACHE_LOOKUPS = _Noop()
+    LLM_COMPLETIONS = _Noop()
 
     def metrics_payload() -> tuple[bytes, str]:
         body = b"# prometheus_client not installed\n"
@@ -108,6 +126,21 @@ def record_oauth_refresh(crm: str, result: str) -> None:
 
 def record_wallet_blocked(reason: str) -> None:
     WALLET_BLOCKED.labels(reason=(reason or "unknown")[:64]).inc()
+
+
+def record_rate_limit_exceeded(scope: str) -> None:
+    RATE_LIMIT_EXCEEDED.labels(scope=(scope or "unknown")[:32]).inc()
+
+
+def record_llm_cache_lookup(cache_type: str, *, hit: bool) -> None:
+    LLM_CACHE_LOOKUPS.labels(
+        cache_type=(cache_type or "unknown")[:16],
+        result="hit" if hit else "miss",
+    ).inc()
+
+
+def record_llm_completion(provider: str, result: str) -> None:
+    LLM_COMPLETIONS.labels(provider=(provider or "unknown")[:32], result=result).inc()
 
 
 metrics_router = APIRouter(tags=["metrics"])

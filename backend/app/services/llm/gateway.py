@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,29 @@ def _provider_model_name(provider: BaseLLMProvider, model_hint: Any = None) -> s
     if model_hint:
         return str(model_hint)
     return str(getattr(provider, "model", None) or getattr(provider, "model_name", None) or "unknown")
+
+
+def _record_completion_metrics(
+    provider_label: str,
+    model_name: str,
+    started_at: float,
+    *,
+    result: str,
+) -> None:
+    """Real-traffic equivalent of a synthetic '/execute' health probe.
+
+    Every actual completion attempt (success or failure) feeds
+    mpai_llm_completions_total + ai_provider_latency_seconds — no extra
+    (paid) LLM calls needed to know whether the pipeline is slow or failing,
+    unlike a synthetic prober that would burn tokens on every scrape.
+    """
+    try:
+        from app.core.metrics import observe_ai_latency, record_llm_completion
+
+        record_llm_completion(provider_label, result)
+        observe_ai_latency(provider_label, model_name, time.perf_counter() - started_at)
+    except Exception:  # noqa: BLE001 — metrics must never break a completion
+        pass
 
 
 def _sentry_fallback_breadcrumb(*, primary: str, secondary: str) -> None:
@@ -545,6 +569,7 @@ class ResilientLLMGateway:
                 dict(kwargs) if index == 0 else self._kwargs_for_provider(provider, kwargs)
             )
             model_name = _provider_model_name(provider, call_kwargs.get("model"))
+            started = time.perf_counter()
             try:
                 response = await provider.complete(
                     messages,
@@ -556,6 +581,7 @@ class ResilientLLMGateway:
             except LLMAuthenticationError as exc:
                 # Permanent credential failures must not trip the circuit breaker.
                 failures.append(exc)
+                _record_completion_metrics(label, model_name, started, result="auth_error")
                 logger.error(
                     "LLMGateway.auth_failed | provider={provider} index={index} error={error}",
                     provider=label,
@@ -572,6 +598,7 @@ class ResilientLLMGateway:
             ) as exc:
                 opened = breaker.record_failure()
                 failures.append(exc)
+                _record_completion_metrics(label, model_name, started, result="error")
                 logger.warning(
                     "LLMGateway.provider_failed | provider={provider} index={index} "
                     "error={error} state={state} — trying next",
@@ -597,6 +624,7 @@ class ResilientLLMGateway:
                     cause=exc,
                 )
                 failures.append(wrapped)
+                _record_completion_metrics(label, model_name, started, result="error")
                 logger.exception(
                     "LLMGateway.provider_unexpected | provider={provider} index={index}",
                     provider=label,
@@ -612,6 +640,7 @@ class ResilientLLMGateway:
                 continue
 
             breaker.record_success()
+            _record_completion_metrics(label, model_name, started, result="success")
             if not response.provider:
                 response.provider = label
             if index > 0 or skipped_open:
@@ -634,6 +663,13 @@ class ResilientLLMGateway:
             )
         else:
             detail = "; ".join(parts) or "no providers available"
+
+        try:
+            from app.core.metrics import record_llm_completion
+
+            record_llm_completion("all", "exhausted")
+        except Exception:  # noqa: BLE001 — metrics must never break the error path
+            pass
 
         raise LLMGatewayError(
             f"All LLM providers failed. {detail}",

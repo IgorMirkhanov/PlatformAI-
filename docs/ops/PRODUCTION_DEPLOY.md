@@ -219,6 +219,7 @@ service in transaction-pooling mode; it's opt-in:
 ```bash
 # .env.production
 DATABASE_URL=postgresql+asyncpg://mpai_app:...@pgbouncer:5432/mpai_production
+DB_PGBOUNCER_COMPAT=true      # REQUIRED — see below
 CELERY_BROKER_URL=... # unchanged — this only affects the Postgres connection
 
 docker compose -f docker-compose.prod.yml --env-file .env.production \
@@ -229,4 +230,112 @@ docker compose -f docker-compose.prod.yml --env-file .env.production \
 backend connections to Postgres, however many client connections
 (`PGBOUNCER_MAX_CLIENT_CONN=1000`) the app opens against it — this is what
 actually decouples "requests in flight" from "Postgres connections used."
+
+**This was actually stood up and load-tested** (PgBouncer 1.22, transaction
+pooling, `default_pool_size=50`), not just documented from the compose file.
+Two real incompatibilities surfaced immediately and are now fixed in code —
+if you deploy PgBouncer without these, the API breaks on the first request:
+
+1. **`unsupported startup parameter: statement_timeout`.** `app/db/session.py`
+   used to send `statement_timeout` / `lock_timeout` /
+   `idle_in_transaction_session_timeout` via asyncpg's `server_settings`
+   (a Postgres startup-packet parameter). PgBouncer only forwards a fixed
+   whitelist of startup parameters and rejects the rest outright — every
+   request failed at connect time. Fixed by moving these three GUCs to
+   `ALTER DATABASE ... SET` (migration `067_db_session_timeouts`), which
+   Postgres applies to every new backend session whether it arrived directly
+   or through a pooler. Run this migration **directly against Postgres**
+   (port 5432), not through PgBouncer — like any DDL, it doesn't belong in a
+   pooled transaction-mode connection.
+
+2. **`DuplicatePreparedStatementError: prepared statement "__asyncpg_stmt_1__"
+   already exists`.** asyncpg caches prepared statements per client
+   connection, but PgBouncer in transaction mode can hand the same client
+   connection a *different* Postgres backend on every transaction, so a
+   statement prepared against backend A doesn't exist on backend B. This is
+   a well-known asyncpg/PgBouncer incompatibility (asyncpg's own error
+   message names the fix). Fixed with a new flag:
+   `DB_PGBOUNCER_COMPAT=true` sets `statement_cache_size=0` on the asyncpg
+   connection, which disables client-side prepared-statement caching. Leave
+   this **unset/false** when `DATABASE_URL` points straight at Postgres —
+   there's a small perf cost to disabling the cache, so only pay it when
+   PgBouncer is actually in front.
+
+Verified after both fixes: 60 concurrent authenticated requests through
+PgBouncer with zero errors, then a full Locust run (10→25→50 users, 9 min)
+against the API pointed at PgBouncer — 0% failures, and noticeably *lower*
+latency than the same run direct-to-Postgres (though that direct-Postgres
+run had a `next build` competing for CPU on the same box, so treat the
+absolute numbers as directional, not a clean pooled-vs-direct comparison).
+
+## 12. Observability: cache hit-rate, rate-limit abuse, LLM pipeline health
+
+### LLM response cache hit-rate
+
+`app/core/llm_cache.py` only implements **exact-match** caching today —
+`get_semantic_cached_response` / `register_semantic_turn` are unimplemented
+stubs that always miss (no embedding index wired up yet). Don't tune a
+"semantic similarity threshold" that doesn't exist; if semantic caching gets
+built later, wire its hit/miss into the same `mpai_llm_cache_lookups_total`
+counter with `cache_type="semantic"`.
+
+Every exact-match lookup now increments
+`mpai_llm_cache_lookups_total{cache_type="exact",result="hit"|"miss"}`.
+Hit-rate query:
+
+```promql
+sum(rate(mpai_llm_cache_lookups_total{cache_type="exact",result="hit"}[1h]))
+/
+clamp_min(sum(rate(mpai_llm_cache_lookups_total{cache_type="exact"}[1h])), 0.001)
+```
+
+A low hit rate on a bot with repetitive traffic (FAQ-style flows) usually
+means `normalize_incoming_text` isn't collapsing enough variance (punctuation,
+emoji, case) — that's the first thing to widen, not a similarity threshold.
+
+### Rate-limit abuse / undersized limits
+
+`POST /bots/{bot_id}/execute`'s 429s (and every other endpoint's) now
+increment `mpai_rate_limit_exceeded_total{scope="execute"|"default"}`, and
+`monitoring/alerts.yml` has `MpaiRateLimitSpike` (>100 rejections/10m). The
+metric is deliberately **not** labeled by `bot_id` — that would be an
+unbounded cardinality label on a Redis-backed counter with potentially
+thousands of bots. To find *which* bot is hammering a limit, grep the
+existing `RateLimit.exceeded` log line (already emitted on every 429,
+`path=` includes the bot id) for the alert's time window — that log line was
+already there, it just had no matching metric/alert to point you at it
+before now.
+
+### LLM pipeline health — real traffic, not a synthetic prober
+
+The stress test showed `/execute` accounting for most of the run's timeouts
+— exactly the traffic a synthetic health-check would need to probe. A
+synthetic prober that fires a real completion request on every `/health`
+scrape would burn tokens/money on every poll interval and could itself get
+rate-limited by the vendor; instead, `ResilientLLMGateway.complete()` now
+records **every real completion attempt** (success or failure, per
+provider) to two previously-unused-but-already-declared metrics:
+
+- `mpai_llm_completions_total{provider,result}` — `result` is `success`,
+  `error`, `auth_error`, or `exhausted` (all providers failed/circuit-open).
+- `ai_provider_latency_seconds{provider,model}` — was declared in
+  `app/core/metrics.py` but never actually `.observe()`d anywhere; that gap
+  meant there was no way to see LLM latency in Prometheus at all before this.
+
+Two new alerts consume them: `MpaiLLMPipelineDegraded` (>20% completion
+failure rate over 10m — the earliest signal /execute is unhealthy, ahead of
+user reports) and `MpaiLLMPipelineSlow` (p95 latency >8s over 10m).
+
+### Fallback-chain redundancy check at boot
+
+`ResilientLLMGateway` already builds a real ordered fallback chain
+(`LLM_PROVIDER` → `FALLBACK_LLM_PROVIDER`, default `groq`) — this was
+already correct in code, not a gap. The actual risk is operational: if only
+one provider's API key is ever set in `.env.production`, the "fallback" is a
+keyless stub that can never serve traffic, so a single vendor outage takes
+`/execute` down completely. `main.py`'s startup now logs
+`Application.no_llm_fallback_redundancy` (warning level) whenever fewer than
+2 of `{OPENAI,ANTHROPIC,GROQ,GEMINI,DEEPSEEK,OPENROUTER}_API_KEY` are
+configured — check for that line in the boot log before commercial launch,
+and set at least the primary + `FALLBACK_LLM_PROVIDER`'s key.
 

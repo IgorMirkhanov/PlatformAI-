@@ -186,13 +186,16 @@ class LLMResponseCacheManager:
             return None
 
         if not raw:
+            self._record_lookup("exact", hit=False)
             return None
 
         try:
             payload = json.loads(raw)
             text = str(payload.get("text") or "").strip()
             if not text:
+                self._record_lookup("exact", hit=False)
                 return None
+            self._record_lookup("exact", hit=True)
             return CachedLLMResponse(
                 text=text,
                 cache_hit=True,
@@ -209,7 +212,17 @@ class LLMResponseCacheManager:
                 bot_id=bot_id,
                 error=str(exc),
             )
+            self._record_lookup("exact", hit=False)
             return None
+
+    @staticmethod
+    def _record_lookup(cache_type: str, *, hit: bool) -> None:
+        try:
+            from app.core.metrics import record_llm_cache_lookup
+
+            record_llm_cache_lookup(cache_type, hit=hit)
+        except Exception:  # noqa: BLE001 — metrics must never break the cache path
+            pass
 
     async def set_cached_response(
         self,
