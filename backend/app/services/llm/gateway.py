@@ -512,16 +512,20 @@ class ResilientLLMGateway:
         failures: list[BaseException] = []
         attempted: list[str] = []
         skipped_open: list[str] = []
-        rewritten = settings.effective_chat_model(
-            str(kwargs.get("model") or "") or None
-        )
-        if rewritten:
-            kwargs = dict(kwargs)
-            kwargs["model"] = rewritten
-        model_hint = kwargs.get("model")
-        providers = self._ordered_providers(
-            model=str(model_hint) if model_hint else None,
-        )
+        # Only rewrite when the caller actually asked for a model.
+        # effective_chat_model(None) still returns a synthesized platform
+        # default, but injecting that into every call — including the first,
+        # unremapped provider — would override each provider's own configured
+        # model, and treating it as an explicit pin would override the
+        # configured LLM_PROVIDER/FALLBACK_LLM_PROVIDER chain with whichever
+        # vendor happens to own that default model.
+        explicit_model = str(kwargs.get("model") or "") or None
+        if explicit_model:
+            rewritten = settings.effective_chat_model(explicit_model)
+            if rewritten:
+                kwargs = dict(kwargs)
+                kwargs["model"] = rewritten
+        providers = self._ordered_providers(model=explicit_model)
 
         for index, provider in enumerate(providers):
             label = str(getattr(provider, "provider_id", type(provider).__name__))

@@ -265,14 +265,22 @@ def _seed_pipeline(store: Store, org: uuid.UUID) -> tuple[CrmPipeline, CrmStage]
     return pipeline, stage
 
 
-def _bind(store: Store) -> tuple[ApiKeyService, InboundLeadService]:
+def _bind(
+    monkeypatch: pytest.MonkeyPatch, store: Store
+) -> tuple[ApiKeyService, InboundLeadService]:
     import sys
 
     from app.services.crm.contact_service import ContactService
     from app.services.crm.deal_service import DealService
 
+    # contact_service/deal_service (below) are process-wide singletons shared
+    # with every other test module, so every override here goes through
+    # monkeypatch — never a raw assignment — or it leaks past this test and
+    # breaks whichever test runs next.
     keys = ApiKeyService()
-    keys._repo = lambda _db, org: FakeApiKeyRepo(store, org)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        keys, "_repo", lambda _db, org: FakeApiKeyRepo(store, org), raising=False
+    )
 
     async def _get_by_hash(_db: Any, digest: str):
         row = store.keys_by_hash.get(digest)
@@ -281,44 +289,70 @@ def _bind(store: Store) -> tuple[ApiKeyService, InboundLeadService]:
         return row
 
     key_mod = sys.modules["app.services.crm.api_key_service"]
-    key_mod.get_active_api_key_by_hash = _get_by_hash  # type: ignore[assignment]
-    key_mod.api_key_repository = (  # type: ignore[assignment]
-        lambda db, *, organization_id: FakeApiKeyRepo(store, organization_id)
+    monkeypatch.setattr(key_mod, "get_active_api_key_by_hash", _get_by_hash, raising=False)
+    monkeypatch.setattr(
+        key_mod,
+        "api_key_repository",
+        lambda db, *, organization_id: FakeApiKeyRepo(store, organization_id),
+        raising=False,
     )
 
     contacts = ContactService()
-    contacts._contacts = lambda _db, org: FakeContactRepo(store, org)  # type: ignore[method-assign]
-    contacts._accounts = lambda _db, org: FakeAccountRepo(store, org)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        contacts, "_contacts", lambda _db, org: FakeContactRepo(store, org), raising=False
+    )
+    monkeypatch.setattr(
+        contacts, "_accounts", lambda _db, org: FakeAccountRepo(store, org), raising=False
+    )
     contact_mod = sys.modules["app.services.crm.contact_service"]
-    contact_mod.contact_service = contacts
-    contact_mod.contact_repository = (  # type: ignore[assignment]
-        lambda db, *, organization_id: FakeContactRepo(store, organization_id)
+    monkeypatch.setattr(contact_mod, "contact_service", contacts, raising=False)
+    monkeypatch.setattr(
+        contact_mod,
+        "contact_repository",
+        lambda db, *, organization_id: FakeContactRepo(store, organization_id),
+        raising=False,
     )
 
     deals = DealService()
-    deals._deals = lambda _db, org, **_kw: FakeDealRepo(store, org)  # type: ignore[method-assign]
-    deals._pipelines = lambda _db, org: FakePipelineRepo(store, org)  # type: ignore[method-assign]
-    deals._stages = lambda _db, org: FakeStageRepo(store, org)  # type: ignore[method-assign]
-    deals._contacts = lambda _db, org: FakeContactRepo(store, org)  # type: ignore[method-assign]
-    deals._accounts = lambda _db, org: FakeAccountRepo(store, org)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        deals, "_deals", lambda _db, org, **_kw: FakeDealRepo(store, org), raising=False
+    )
+    monkeypatch.setattr(
+        deals, "_pipelines", lambda _db, org: FakePipelineRepo(store, org), raising=False
+    )
+    monkeypatch.setattr(
+        deals, "_stages", lambda _db, org: FakeStageRepo(store, org), raising=False
+    )
+    monkeypatch.setattr(
+        deals, "_contacts", lambda _db, org: FakeContactRepo(store, org), raising=False
+    )
+    monkeypatch.setattr(
+        deals, "_accounts", lambda _db, org: FakeAccountRepo(store, org), raising=False
+    )
 
     async def _noop(*_a: Any, **_k: Any) -> None:
         return None
 
-    deals._log_event = _noop  # type: ignore[method-assign]
-    deals._dispatch_automations = _noop  # type: ignore[method-assign]
+    monkeypatch.setattr(deals, "_log_event", _noop, raising=False)
+    monkeypatch.setattr(deals, "_dispatch_automations", _noop, raising=False)
     deal_mod = sys.modules["app.services.crm.deal_service"]
-    deal_mod.deal_service = deals
+    monkeypatch.setattr(deal_mod, "deal_service", deals, raising=False)
 
     inbound_mod = sys.modules["app.services.crm.inbound_lead_service"]
-    inbound_mod.contact_repository = (  # type: ignore[assignment]
-        lambda db, *, organization_id: FakeContactRepo(store, organization_id)
+    monkeypatch.setattr(
+        inbound_mod,
+        "contact_repository",
+        lambda db, *, organization_id: FakeContactRepo(store, organization_id),
+        raising=False,
     )
-    inbound_mod.pipeline_repository = (  # type: ignore[assignment]
-        lambda db, *, organization_id: FakePipelineRepo(store, organization_id)
+    monkeypatch.setattr(
+        inbound_mod,
+        "pipeline_repository",
+        lambda db, *, organization_id: FakePipelineRepo(store, organization_id),
+        raising=False,
     )
-    inbound_mod.contact_service = contacts
-    inbound_mod.deal_service = deals
+    monkeypatch.setattr(inbound_mod, "contact_service", contacts, raising=False)
+    monkeypatch.setattr(inbound_mod, "deal_service", deals, raising=False)
 
     inbound = InboundLeadService()
     return keys, inbound
@@ -335,9 +369,11 @@ def test_raw_key_never_equals_stored_hash() -> None:
 
 
 @pytest.mark.asyncio
-async def test_admin_creates_api_key_returns_raw_once() -> None:
+async def test_admin_creates_api_key_returns_raw_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = Store()
-    keys, _ = _bind(store)
+    keys, _ = _bind(monkeypatch, store)
     db = FlushSession()
     org = uuid.uuid4()
 
@@ -360,9 +396,9 @@ async def test_admin_creates_api_key_returns_raw_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_inbound_lead_rejects_bad_key() -> None:
+async def test_inbound_lead_rejects_bad_key(monkeypatch: pytest.MonkeyPatch) -> None:
     store = Store()
-    keys, inbound = _bind(store)
+    keys, inbound = _bind(monkeypatch, store)
     db = FlushSession()
     org = uuid.uuid4()
     _seed_pipeline(store, org)
@@ -391,9 +427,11 @@ async def test_inbound_lead_rejects_bad_key() -> None:
 
 
 @pytest.mark.asyncio
-async def test_inbound_lead_success_creates_contact_and_deal() -> None:
+async def test_inbound_lead_success_creates_contact_and_deal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = Store()
-    keys, inbound = _bind(store)
+    keys, inbound = _bind(monkeypatch, store)
     db = FlushSession()
     org = uuid.uuid4()
     _seed_pipeline(store, org)
@@ -436,7 +474,7 @@ async def test_inbound_lead_success_creates_contact_and_deal() -> None:
 @pytest.mark.asyncio
 async def test_api_key_management_and_public_http(monkeypatch: pytest.MonkeyPatch) -> None:
     store = Store()
-    keys, inbound = _bind(store)
+    keys, inbound = _bind(monkeypatch, store)
     db = FlushSession()
     org = uuid.uuid4()
     _seed_pipeline(store, org)
