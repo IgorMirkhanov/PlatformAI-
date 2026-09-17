@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Update
 
 from app.core.security import encrypt_credential, hash_bot_token
 from app.models.core_models import Bot, BotFlow, Client, Company, PlatformType, UserRole
@@ -204,7 +205,25 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
         def scalar_one(self) -> Any:
             return bot
 
+    class _BotUpdateResult:
+        def __init__(self, new_balance: int) -> None:
+            self._new_balance = new_balance
+
+        def one_or_none(self) -> Any:
+            return (self._new_balance,)
+
     async def _db_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        # bot_billing_service.debit_credits() now does an atomic
+        # UPDATE bots ... RETURNING wallet_balance (populate_existing fix for
+        # SELECT FOR UPDATE + identity-map staleness under concurrency).
+        if isinstance(stmt, Update) and getattr(stmt.table, "name", "") == "bots":
+            params = stmt.compile().params
+            debit = next(
+                (v for k, v in params.items() if k.startswith("wallet_balance") and isinstance(v, int)),
+                0,
+            )
+            bot.wallet_balance = int(bot.wallet_balance or 0) - int(debit)
+            return _BotUpdateResult(bot.wallet_balance)
         # bot_billing_service.get_bot() does select(Bot).where(...) to check
         # subscription/wallet state; everything else keeps the graceful empty result.
         froms = getattr(stmt, "froms", None) or ()
