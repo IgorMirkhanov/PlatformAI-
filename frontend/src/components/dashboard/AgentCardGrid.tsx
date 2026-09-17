@@ -112,10 +112,20 @@ function AgentCard({
               <h3 className="truncate text-base font-semibold text-zinc-100">{agent.bot_name}</h3>
               <p className="mt-0.5 text-xs text-zinc-500">{agent.platform_type}</p>
               <p className="mt-1 text-[11px]">
-                {agent.subscription_active ? (
-                  <span className="text-emerald-400">Подписка активна · баланс {agent.wallet_balance ?? 0}</span>
-                ) : (
+                {!agent.subscription_active ? (
                   <span className="text-amber-400">Нет подписки — чат отключён</span>
+                ) : (agent.wallet_balance ?? 0) <= 0 ? (
+                  <span className="font-medium text-rose-400">
+                    Баланс 0 — платные модели не отвечают
+                  </span>
+                ) : (agent.wallet_balance ?? 0) <= 100 ? (
+                  <span className="text-amber-400">
+                    Низкий баланс · {agent.wallet_balance}
+                  </span>
+                ) : (
+                  <span className="text-emerald-400">
+                    Подписка активна · баланс {agent.wallet_balance ?? 0}
+                  </span>
                 )}
               </p>
             </div>

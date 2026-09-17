@@ -17,6 +17,7 @@ from app.core.vector_db import RAGSearchHit, search_knowledge_base
 from app.models.core_models import (
     Bot,
     ChatMessage,
+    Client,
     DiagnosticErrorType,
     MessageSender,
     Organization,
@@ -1222,15 +1223,37 @@ class AIOrchestrator:
         self,
         db_session: AsyncSession,
         client_id: uuid.UUID,
+        *,
+        bot: Bot | None = None,
     ) -> list[dict[str, str]]:
-        limit = settings.MAX_CHAT_HISTORY_MESSAGES
+        from app.services.bot_control_config import (
+            get_control_config,
+            history_cutoff,
+            history_message_limit,
+        )
+
+        control = get_control_config(bot) if bot is not None else None
+        if control is None and bot is None:
+            # Resolve bot via client when caller did not pass it.
+            client_row = await db_session.get(Client, client_id)
+            if client_row is not None:
+                bot = await db_session.get(Bot, client_row.bot_id)
+                control = get_control_config(bot)
+
+        limit = history_message_limit(control or {}, settings.MAX_CHAT_HISTORY_MESSAGES)
+        cutoff = history_cutoff(control) if control else None
+
+        filters = [
+            ChatMessage.client_id == client_id,
+            ChatMessage.sender.in_([MessageSender.CLIENT, MessageSender.BOT]),
+            ~ChatMessage.message_text.like("[System]%"),
+        ]
+        if cutoff is not None:
+            filters.append(ChatMessage.created_at >= cutoff)
+
         result = await db_session.execute(
             select(ChatMessage)
-            .where(
-                ChatMessage.client_id == client_id,
-                ChatMessage.sender.in_([MessageSender.CLIENT, MessageSender.BOT]),
-                ~ChatMessage.message_text.like("[System]%"),
-            )
+            .where(*filters)
             .order_by(ChatMessage.created_at.desc())
             .limit(limit)
         )

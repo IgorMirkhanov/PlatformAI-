@@ -381,7 +381,14 @@ async def process_inbound_message(
 
     )
 
+    from app.services.bot_control_gate import (
+        apply_keyword_gates,
+        check_spam_limit,
+        maybe_auto_resume,
+    )
 
+    resume_text = await maybe_auto_resume(db, bot=bot, client=client)
+    await apply_keyword_gates(db, bot=bot, client=client, message_text=message_text)
 
     if client.is_paused_by_operator or getattr(client, "conversation_status", "active") == "escalated":
 
@@ -404,6 +411,38 @@ async def process_inbound_message(
             inbound_payload=inbound_payload,
 
         )
+
+    spam_reply = await check_spam_limit(bot=bot, client_id=client.id)
+    if spam_reply:
+        client_message = ChatMessage(
+            client_id=client.id,
+            sender=MessageSender.CLIENT,
+            message_text=message_text,
+            payload={"source": source, "external_id": external_id, "spam_throttled": True},
+        )
+        db.add(client_message)
+        bot_message = ChatMessage(
+            client_id=client.id,
+            sender=MessageSender.BOT,
+            message_text=spam_reply,
+            payload={"source": "spam_protection"},
+        )
+        db.add(bot_message)
+        await db.flush()
+        await broadcast_chat_message(client, client_message)
+        await broadcast_chat_message(client, bot_message)
+        return WebhookSimulateResponse(
+            response_text=spam_reply,
+            buttons=[],
+            current_step_id=client.current_step_id,
+            bot_silent=False,
+            client_id=client.id,
+        )
+
+    if resume_text:
+        # Auto-resume notice is delivered as the first bot reply this turn via prepend.
+        inbound_payload = dict(inbound_payload or {})
+        inbound_payload["auto_resume_message"] = resume_text
 
 
 
@@ -485,6 +524,15 @@ async def process_inbound_message(
     if bot_silent:
         response_text = ""
         buttons = []
+
+    auto_resume_message = str((inbound_payload or {}).get("auto_resume_message") or "").strip()
+    if auto_resume_message:
+        response_text = (
+            f"{auto_resume_message}\n\n{response_text}".strip()
+            if response_text
+            else auto_resume_message
+        )
+        bot_silent = False
 
     ai_generated = next_node.get("node_type") in {"ai_agent", "llm"}
     ai_payload: dict[str, object] = {}

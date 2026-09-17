@@ -274,8 +274,10 @@ export function getWsBaseUrl(): string {
 }
 
 export function getOperatorWsUrl(operatorId: string, token?: string): string {
-  const wsToken = token ?? getOperatorWsToken();
-  return `${getWsBaseUrl()}/ws/operator/${operatorId}?token=${encodeURIComponent(wsToken)}`;
+  // Production rejects the shared OPERATOR_WS_TOKEN; use the logged-in JWT.
+  const wsToken = token ?? getAccessToken() ?? getOperatorWsToken();
+  const path = `/api/v1/ws/operator/${encodeURIComponent(operatorId)}`;
+  return `${getWsBaseUrl()}${path}?token=${encodeURIComponent(wsToken)}`;
 }
 
 export function getOperatorWsToken(): string {
@@ -1939,10 +1941,13 @@ export async function cancelTeamInvitation(invitationId: string): Promise<void> 
 export function getSandboxWsUrl(botId: string): string {
   const wsBase = getWsBaseUrl();
   const path = `/api/v1/sandbox/${encodeURIComponent(botId)}`;
+  // Prefer JWT; fall back to shared operator token (same as Live Inbox).
+  const token = getAccessToken() ?? getOperatorWsToken();
+  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
   if (wsBase.endsWith("/api")) {
-    return `${wsBase}/v1/sandbox/${encodeURIComponent(botId)}`;
+    return `${wsBase}/v1/sandbox/${encodeURIComponent(botId)}${qs}`;
   }
-  return `${wsBase}${path}`;
+  return `${wsBase}${path}${qs}`;
 }
 
 /** Streaming execution channel: /api/v1/ws/execution/{sessionId} */

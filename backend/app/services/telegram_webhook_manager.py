@@ -96,8 +96,15 @@ async def _sync_bot_credentials_webhook(
 
 def _arm_telegram_poller() -> None:
     try:
+        from app.core.redis_client import get_redis_client
         from app.tasks.telegram_poll_task import poll_telegram_updates
 
+        redis = get_redis_client()
+        # Only one API/Celery process should kick the chain — concurrent getUpdates
+        # causes Telegram 409 Conflict and drops inbound silently.
+        if not redis.set("telegram:poller:armed", "1", nx=True, ex=30):
+            logger.info("TelegramWebhookManager.poller_already_armed")
+            return
         poll_telegram_updates.apply_async(countdown=1)
         logger.info("TelegramWebhookManager.poller_armed")
     except Exception as exc:

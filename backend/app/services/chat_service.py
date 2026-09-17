@@ -305,6 +305,26 @@ async def send_manual_operator_message(
     await db.flush()
 
     try:
+        from app.services.bot_control_gate import (
+            mark_operator_paused,
+            should_pause_on_operator_message,
+        )
+
+        if await should_pause_on_operator_message(
+            db, bot=bot, client=client, message_text=message_text
+        ):
+            client.is_paused_by_operator = True
+            await mark_operator_paused(client.id)
+            await db.flush()
+            await broadcast_bot_toggled(client)
+    except Exception as exc:
+        logger.debug(
+            "ChatService.operator_pause_policy_skipped | client_id={client_id} error={error}",
+            client_id=client_id,
+            error=str(exc),
+        )
+
+    try:
         from app.services.inbound.outbound_router import deliver_outbound, resolve_client_outbound
 
         normalized = await resolve_client_outbound(db, client=client, bot=bot)
@@ -345,6 +365,15 @@ async def toggle_operator_pause(
         client.is_paused_by_operator = paused
 
     await db.flush()
+    try:
+        from app.services.bot_control_gate import clear_operator_paused_mark, mark_operator_paused
+
+        if client.is_paused_by_operator:
+            await mark_operator_paused(client.id)
+        else:
+            await clear_operator_paused_mark(client.id)
+    except Exception:
+        pass
     await broadcast_bot_toggled(client)
 
     status_text = "paused" if client.is_paused_by_operator else "resumed"

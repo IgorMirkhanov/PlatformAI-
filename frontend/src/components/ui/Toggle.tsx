@@ -27,7 +27,13 @@ export function Toggle({
   className,
 }: ToggleProps) {
   return (
-    <div className={cn("flex items-start justify-between gap-4", className)}>
+    <div
+      className={cn(
+        "flex gap-4",
+        label || description ? "items-start justify-between" : "items-center justify-center",
+        className,
+      )}
+    >
       {(label || description) && (
         <div>
           {label && (
@@ -50,6 +56,7 @@ export function Toggle({
         onCheckedChange={onChange}
         disabled={disabled}
         isLoading={isLoading}
+        className="shrink-0"
       />
     </div>
   );

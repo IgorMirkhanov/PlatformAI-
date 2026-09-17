@@ -818,6 +818,47 @@ class ScheduleConfig(BaseModel):
     day_enabled: dict[str, bool] | None = None
 
 
+class BotControlHistorySettings(BaseModel):
+    message_limit: int = Field(default=20, ge=1, le=200)
+    time_window_days: int = Field(default=7, ge=1, le=90)
+
+
+class BotControlSpamSettings(BaseModel):
+    enabled: bool = False
+    limit_message: str = Field(default="Секунду, принимаю информацию...", max_length=2000)
+    message_count: int = Field(default=5, ge=1, le=100)
+    duration_seconds: int = Field(default=10, ge=1, le=3600)
+
+
+class BotControlOperatorSettings(BaseModel):
+    pause_on_operator_message: bool = True
+    ignore_first_operator_message: bool = False
+    auto_resume_enabled: bool = False
+    auto_resume_days: int = Field(default=0, ge=0, le=30)
+    auto_resume_hours: int = Field(default=3, ge=0, le=23)
+    auto_resume_minutes: int = Field(default=0, ge=0, le=59)
+    resume_message_enabled: bool = False
+    resume_message: str = Field(default="Добрый день!", max_length=2000)
+    exception_phrases_enabled: bool = False
+    exception_phrases: list[str] = Field(default_factory=list, max_length=50)
+
+
+class BotControlKeywordSettings(BaseModel):
+    stop_enabled: bool = False
+    stop_phrases: list[str] = Field(default_factory=list, max_length=50)
+    resume_enabled: bool = False
+    resume_phrases: list[str] = Field(default_factory=list, max_length=50)
+
+
+class BotControlConfig(BaseModel):
+    history: BotControlHistorySettings = Field(default_factory=BotControlHistorySettings)
+    spam_protection: BotControlSpamSettings = Field(default_factory=BotControlSpamSettings)
+    operator_intervention: BotControlOperatorSettings = Field(
+        default_factory=BotControlOperatorSettings
+    )
+    keyword_dialog: BotControlKeywordSettings = Field(default_factory=BotControlKeywordSettings)
+
+
 class BotSettingsUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
@@ -826,6 +867,7 @@ class BotSettingsUpdate(BaseModel):
     schedule_config: ScheduleConfig | None = None
     message_split: bool | None = None
     message_buffer_delay: int | None = Field(default=None, ge=0, le=60000)
+    control_config: BotControlConfig | None = None
 
 
 class BotPromptingUpdate(BaseModel):
@@ -919,12 +961,14 @@ class BotAgentProfileRead(BaseModel):
     subscription_active: bool = False
     subscription_expires_at: datetime | None = None
     wallet_balance: int = 0
+    control_config: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
     def inject_avatar_url(cls, data: Any) -> Any:
         if isinstance(data, dict):
             return data
+        from app.services.bot_control_config import get_control_config
         from app.services.bot_workspace_config import get_workspace, openai_tools_for_bot
 
         credentials = getattr(data, "credentials", None) or {}
@@ -959,6 +1003,7 @@ class BotAgentProfileRead(BaseModel):
         payload["function_tools"] = workspace["functions"]
         payload["agent_rag"] = workspace["agent_rag"]
         payload["openai_tools"] = openai_tools_for_bot(data)
+        payload["control_config"] = get_control_config(data)
         return payload
 
     @model_validator(mode="after")
