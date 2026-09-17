@@ -86,6 +86,17 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    # Stock image default is max_connections=100. The API alone can open up to
+    # DB_POOL_SIZE+DB_MAX_OVERFLOW per uvicorn worker (70 x 4 workers = 280 by
+    # default), before Celery/whatsapp-service/pollers add their own sessions —
+    # raise the ceiling so a traffic spike fails on backpressure, not on
+    # Postgres refusing new connections outright. Prefer enabling the
+    # `pgbouncer` profile below for real scale-out; this is the safety net
+    # either way.
+    command: >
+      postgres
+      -c max_connections=${PG_MAX_CONNECTIONS:-300}
+      -c shared_buffers=${PG_SHARED_BUFFERS:-512MB}
     volumes:
       - pg_data:/var/lib/postgresql/data
     networks: [mpai_net]
@@ -104,6 +115,12 @@ services:
       retries: 10
       start_period: 20s
 
+  # Recommended for real horizontal scale-out (more than one backend/Celery
+  # deployment, or traffic spikes): pools many app-level connections onto a
+  # small number of real Postgres backends (transaction mode). Disabled by
+  # default — enable with `docker compose --profile pgbouncer up -d` and
+  # point DATABASE_URL/CELERY at `pgbouncer:5432` instead of `postgres:5432`
+  # (see docs/ops/PRODUCTION_DEPLOY.md).
   pgbouncer:
     image: bitnami/pgbouncer:1.22.1
     restart: unless-stopped
@@ -115,6 +132,7 @@ services:
       POSTGRESQL_DATABASE: ${POSTGRES_DB}
       POSTGRESQL_USERNAME: ${POSTGRES_USER}
       POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD}
+      PGBOUNCER_PORT: "5432"
       PGBOUNCER_POOL_MODE: transaction
       PGBOUNCER_MAX_CLIENT_CONN: "1000"
       PGBOUNCER_DEFAULT_POOL_SIZE: "50"

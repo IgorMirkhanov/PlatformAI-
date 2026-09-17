@@ -174,3 +174,59 @@ Behaviour notes:
   an internal key is **expected**.
 - Do **not** delete volume `mpai_whatsapp_sessions` on redeploy.
 
+## 11. Protecting the DB under a traffic spike
+
+Three things keep a burst of inbound traffic from taking down Postgres.
+All three are on by default except PgBouncer.
+
+### Request-rate limiting is Redis-backed
+
+`app/core/rate_limit.py` (SlowAPI) is keyed off `REDIS_URL`, so the configured
+limits (`RATE_LIMIT_DEFAULT`, `RATE_LIMIT_EXECUTE`) are enforced **across every
+uvicorn worker and every replica**, not per-process. An in-memory limiter would
+silently multiply its real ceiling by the worker count — verify this stays
+Redis-backed if you ever touch `limiter = Limiter(...)`.
+
+`POST /bots/{bot_id}/execute` — the one endpoint that does an LLM call plus DB
+writes per request — is keyed by `bot_id` (`RATE_LIMIT_EXECUTE`, default
+`60/minute`), not by IP: a chat widget embedded on a public site has many
+visitors sharing one IP/NAT, and a flood aimed at a single bot shouldn't need
+an org lookup to be contained.
+
+### Connection-pool math vs. `max_connections`
+
+The backend's own pool (`DB_POOL_SIZE` + `DB_MAX_OVERFLOW`, default 50 + 20 =
+70) is **per uvicorn worker**. With the Dockerfile's `--workers 4` that's up
+to **280** possible connections from the API alone, before Celery workers,
+`whatsapp-service`, or the Telegram/GreenAPI pollers open their own. Stock
+Postgres ships with `max_connections=100` — comfortably below that ceiling.
+
+`docker-compose.prod.yml`'s `postgres` service now sets
+`max_connections=${PG_MAX_CONNECTIONS:-300}` and
+`shared_buffers=${PG_SHARED_BUFFERS:-512MB}` so the app degrades on its own
+backpressure (pool timeout → 503) instead of Postgres refusing new connections
+outright (`FATAL: sorry, too many clients already`, which affects *every*
+tenant at once). If you raise `DB_POOL_SIZE` or add more uvicorn/Celery
+replicas, raise `PG_MAX_CONNECTIONS` (and `PG_MEM_LIMIT`) to match.
+
+### PgBouncer — enable for real horizontal scale-out
+
+For more than one backend/Celery deployment, or sustained high concurrency,
+raising `max_connections` further stops being the right lever (each Postgres
+connection reserves real memory). The compose file already ships a `pgbouncer`
+service in transaction-pooling mode; it's opt-in:
+
+```bash
+# .env.production
+DATABASE_URL=postgresql+asyncpg://mpai_app:...@pgbouncer:5432/mpai_production
+CELERY_BROKER_URL=... # unchanged — this only affects the Postgres connection
+
+docker compose -f docker-compose.prod.yml --env-file .env.production \
+  --profile pgbouncer up -d
+```
+
+`PGBOUNCER_DEFAULT_POOL_SIZE=50` means pgbouncer itself only ever holds 50 real
+backend connections to Postgres, however many client connections
+(`PGBOUNCER_MAX_CLIENT_CONN=1000`) the app opens against it — this is what
+actually decouples "requests in flight" from "Postgres connections used."
+

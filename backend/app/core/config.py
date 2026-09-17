@@ -29,9 +29,10 @@ class Settings:
         os.getenv("INTERNAL_SERVICE_API_KEY") or os.getenv("SERVICE_API_KEY") or None
     )
 
-    # Rate limiting (slowapi)
+    # Rate limiting (slowapi, Redis-backed — see app/core/rate_limit.py)
     RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "120/minute")
+    RATE_LIMIT_EXECUTE: str = os.getenv("RATE_LIMIT_EXECUTE", "60/minute")
 
     # Sentry (optional)
     SENTRY_DSN: str | None = os.getenv("SENTRY_DSN") or None
