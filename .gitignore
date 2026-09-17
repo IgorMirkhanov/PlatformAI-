@@ -54,3 +54,7 @@ yarn-error.log*
 
 # Load-test artifacts
 backend/reports/
+
+# Local sandbox data (Postgres/ChromaDB dev volumes)
+.dev-data/
+.dev-logs/

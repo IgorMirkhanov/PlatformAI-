@@ -112,9 +112,6 @@ def e2e_bot_stack() -> dict[str, Any]:
         prompt_instructions="Global bot instructions for E2E.",
         llm_model_name="gpt-4o-mini",
         llm_temperature=0.4,
-        # Chat/LLM replies require an active per-bot subscription (bot_billing_service).
-        subscription_active=True,
-        wallet_balance=50_000,
         user=user,
     )
     flow = BotFlow(
