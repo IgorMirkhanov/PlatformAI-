@@ -986,6 +986,12 @@ class BotManagementService:
             if hasattr(schedule, "model_dump"):
                 updates["schedule_config"] = schedule.model_dump()
 
+        control_payload = updates.pop("control_config", None)
+        if control_payload is not None:
+            from app.services.bot_control_config import set_control_config
+
+            set_control_config(bot, control_payload)
+
         for field, value in updates.items():
             setattr(bot, field, value)
 

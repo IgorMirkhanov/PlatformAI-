@@ -151,7 +151,7 @@ export function HubProviderCard({
   return (
     <article
       className={cn(
-        "group relative flex min-h-[240px] flex-col overflow-hidden rounded-2xl border p-5 transition duration-300",
+        "group relative flex min-h-[220px] flex-col overflow-hidden rounded-2xl border p-5 transition duration-300",
         "border-zinc-800/80 bg-[#0b0b0d]/90 hover:border-zinc-700/80",
         uiState === "connected" && "border-emerald-500/25",
         uiState === "expired" && "border-amber-500/40",
@@ -250,17 +250,18 @@ export function HubProviderCard({
       ) : null}
 
       {uiState === "connected" ? (
-        <div className="relative mt-4 space-y-3">
+        <div className="relative mt-4 flex flex-1 flex-col space-y-2.5">
           {account ? (
-            <p className="truncate font-mono text-xs text-zinc-400">{account}</p>
+            <p className="truncate font-mono text-[11px] text-zinc-400">{account}</p>
           ) : null}
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Разрешения</p>
-            <ul className="mt-1.5 flex flex-wrap gap-1.5">
-              {definition.permissions.map((item) => (
+            <ul className="mt-1.5 flex flex-wrap gap-1">
+              {definition.permissions.slice(0, 3).map((item) => (
                 <li
                   key={item}
-                  className="rounded-full bg-zinc-800/80 px-2 py-0.5 text-[11px] text-zinc-300 ring-1 ring-zinc-700/60"
+                  className="max-w-full truncate rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-[10px] text-zinc-300 ring-1 ring-zinc-700/60"
+                  title={item}
                 >
                   {item}
                 </li>
@@ -268,7 +269,7 @@ export function HubProviderCard({
             </ul>
           </div>
           {channelList.length > 0 ? (
-            <p className="text-[11px] text-zinc-500">
+            <p className="truncate text-[11px] text-zinc-500">
               Каналы:{" "}
               {channelList
                 .map((row) => {
@@ -279,7 +280,7 @@ export function HubProviderCard({
                 .join(", ")}
             </p>
           ) : null}
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-auto flex flex-wrap gap-2 pt-1">
             <Button size="sm" variant="secondary" onClick={() => setPanel(panel === "settings" ? "idle" : "settings")}>
               <Settings2 className="h-3.5 w-3.5" />
               Настроить

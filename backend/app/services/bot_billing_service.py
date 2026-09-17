@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -73,10 +73,17 @@ def is_subscription_active(bot: Any, *, now: datetime | None = None) -> bool:
 
 
 class BotBillingService:
-    async def get_bot(self, db: AsyncSession, bot_id: uuid.UUID, *, for_update: bool = False) -> Bot | None:
+    async def get_bot(
+        self, db: AsyncSession, bot_id: uuid.UUID, *, for_update: bool = False
+    ) -> Bot | None:
         stmt = select(Bot).where(Bot.id == bot_id, Bot.deleted_at.is_(None))
         if for_update:
-            stmt = stmt.with_for_update()
+            # Critical: the same request often already loaded Bot via
+            # ``ensure_chat_allowed`` before the LLM call. Without
+            # ``populate_existing``, SELECT FOR UPDATE returns the row lock
+            # but leaves a stale ``wallet_balance`` in the identity map —
+            # concurrent sandbox turns then overwrite each other's debits.
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
         return (await db.execute(stmt)).scalar_one_or_none()
 
     def ensure_subscription(self, bot: Bot | None) -> Bot:
@@ -124,30 +131,47 @@ class BotBillingService:
                 "balance_after": int(getattr(bot, "wallet_balance", 0) or 0) if bot else 0,
                 "reference_id": reference_id,
             }
+
         bot = await self.get_bot(db, bot_id, for_update=True)
         self.ensure_subscription(bot)
-        before = int(bot.wallet_balance or 0)
-        if before < amount:
+
+        # Atomic decrement — does not trust the in-memory attribute alone.
+        result = await db.execute(
+            update(Bot)
+            .where(
+                Bot.id == bot_id,
+                Bot.deleted_at.is_(None),
+                Bot.wallet_balance >= amount,
+            )
+            .values(wallet_balance=Bot.wallet_balance - amount)
+            .returning(Bot.wallet_balance)
+        )
+        row = result.one_or_none()
+        if row is None:
+            before = int(bot.wallet_balance or 0)
             raise BotWalletInsufficientError(
                 (bot.low_balance_message or "").strip()
                 or "Баланс агента исчерпан. Пополните баланс бота, чтобы возобновить ответы.",
                 balance=before,
                 required=amount,
             )
-        bot.wallet_balance = before - amount
+
+        after = int(row[0])
+        before = after + amount
+        bot.wallet_balance = after
         await db.flush()
         logger.info(
             "BotBilling.debit | bot={bot} amount={amount} before={before} after={after} ref={ref}",
             bot=bot_id,
             amount=amount,
             before=before,
-            after=bot.wallet_balance,
+            after=after,
             ref=reference_id or "-",
         )
         return {
             "credits": amount,
             "balance_before": before,
-            "balance_after": int(bot.wallet_balance),
+            "balance_after": after,
             "reference_id": reference_id,
             "idempotent_replay": False,
         }
@@ -160,23 +184,52 @@ class BotBillingService:
     ) -> dict[str, Any]:
         if amount_delta == 0:
             raise ValueError("amount_delta must be non-zero.")
+
         bot = await self.get_bot(db, bot_id, for_update=True)
         if bot is None:
             raise LookupError("Bot not found.")
-        before = int(bot.wallet_balance or 0)
-        after = before + int(amount_delta)
-        if after < 0:
-            raise BotWalletInsufficientError(
-                f"Balance cannot go negative (current={before}, delta={amount_delta}).",
-                balance=before,
-                required=abs(int(amount_delta)),
+
+        delta = int(amount_delta)
+        if delta < 0:
+            result = await db.execute(
+                update(Bot)
+                .where(
+                    Bot.id == bot_id,
+                    Bot.deleted_at.is_(None),
+                    Bot.wallet_balance >= abs(delta),
+                )
+                .values(wallet_balance=Bot.wallet_balance + delta)
+                .returning(Bot.wallet_balance)
             )
+            row = result.one_or_none()
+            if row is None:
+                before = int(bot.wallet_balance or 0)
+                raise BotWalletInsufficientError(
+                    f"Balance cannot go negative (current={before}, delta={delta}).",
+                    balance=before,
+                    required=abs(delta),
+                )
+            after = int(row[0])
+            before = after - delta
+        else:
+            result = await db.execute(
+                update(Bot)
+                .where(Bot.id == bot_id, Bot.deleted_at.is_(None))
+                .values(wallet_balance=Bot.wallet_balance + delta)
+                .returning(Bot.wallet_balance)
+            )
+            row = result.one_or_none()
+            if row is None:
+                raise LookupError("Bot not found.")
+            after = int(row[0])
+            before = after - delta
+
         bot.wallet_balance = after
         await db.flush()
         return {
             "bot_id": bot.id,
             "previous_balance": before,
-            "amount_delta": int(amount_delta),
+            "amount_delta": delta,
             "new_balance": after,
         }
 

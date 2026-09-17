@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_bot_access
 from app.core.database import async_session_factory, get_db
 from app.core.rbac import Permission
-from app.core.ws_auth import require_ws_bot_access
 from app.models.core_models import Bot
 from app.models.users import User
 from app.schemas.sandbox_schemas import (
@@ -77,15 +76,35 @@ async def post_sandbox_message(
 @router.websocket("/{bot_id}")
 async def sandbox_websocket(websocket: WebSocket, bot_id: uuid.UUID) -> None:
     """Process sandbox chat messages over WebSocket without writing production chat history."""
+    from app.api.deps import get_bot_for_workspace
+    from app.core.config import settings
+    from app.core.ws_auth import authenticate_websocket_user, extract_ws_bearer
+
     async with async_session_factory() as db:
-        authorized = await require_ws_bot_access(
-            websocket,
-            db,
-            bot_id,
-            Permission.BOT_MESSAGES,
-        )
-    if authorized is None:
-        return
+        user = await authenticate_websocket_user(websocket, db)
+        if user is not None:
+            try:
+                from app.core.rbac import assert_permission
+                from app.models.core_models import UserRole
+
+                assert_permission(user.role or UserRole.OPERATOR, Permission.BOT_MESSAGES)
+                await get_bot_for_workspace(bot_id=bot_id, db=db, current_user=user)
+            except Exception:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+        else:
+            shared = (settings.OPERATOR_WS_TOKEN or "").strip()
+            presented = (extract_ws_bearer(websocket) or "").strip()
+            bot = await db.get(Bot, bot_id)
+            if (
+                not shared
+                or presented != shared
+                or bot is None
+                or getattr(bot, "deleted_at", None) is not None
+            ):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                return
+            logger.info("SandboxWS.legacy_token_ok | bot_id={bot_id}", bot_id=bot_id)
 
     await websocket.accept()
     logger.info("SandboxWS.connected | bot_id={bot_id}", bot_id=bot_id)

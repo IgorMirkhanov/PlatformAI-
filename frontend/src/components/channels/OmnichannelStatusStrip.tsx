@@ -1,17 +1,10 @@
 "use client";
 
+import { ChannelBrandIcon } from "@/components/bots/channels/ChannelBrandIcon";
 import { cn } from "@/lib/utils";
 import { OMNICHANNEL_DEFINITIONS } from "@/types/channels";
 import type { ChannelIntegrationType, ChannelStatus } from "@/types/channels";
 import { mergeChannelStatuses } from "@/types/channels";
-
-const CHANNEL_SHORT_LABELS: Record<ChannelIntegrationType, string> = {
-  telegram: "TG",
-  whatsapp: "WA",
-  instagram: "IG",
-  vkontakte: "VK",
-  web_widget: "WEB",
-};
 
 interface OmnichannelStatusStripProps {
   statuses?: Record<ChannelIntegrationType, ChannelStatus>;
@@ -34,6 +27,9 @@ export function OmnichannelStatusStrip({
       }).map((definition) => definition.id),
   );
 
+  const box = size === "sm" ? "h-7 w-7" : "h-8 w-8";
+  const icon = size === "sm" ? "h-4 w-4" : "h-5 w-5";
+
   return (
     <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
       {OMNICHANNEL_DEFINITIONS.map((channel) => {
@@ -49,23 +45,21 @@ export function OmnichannelStatusStrip({
                 : `${channel.title} · Отключено`
             }
             className={cn(
-              "inline-flex items-center justify-center rounded-lg border font-bold tracking-wide transition",
-              size === "sm" ? "h-7 min-w-[1.75rem] px-1.5 text-[9px]" : "h-8 min-w-[2rem] px-2 text-[10px]",
+              "inline-flex items-center justify-center rounded-full transition",
+              box,
               active
-                ? "border-transparent text-white"
-                : "border-zinc-800 bg-zinc-950/80 text-zinc-600",
+                ? "ring-1 ring-white/10"
+                : "bg-zinc-950/80 opacity-40 grayscale ring-1 ring-zinc-800",
             )}
             style={
               active
                 ? {
-                    backgroundColor: `${channel.brandColor}22`,
-                    boxShadow: `0 0 16px ${channel.brandColor}66`,
-                    color: channel.brandColor,
+                    boxShadow: `0 0 14px ${channel.brandColor}55`,
                   }
                 : undefined
             }
           >
-            {CHANNEL_SHORT_LABELS[channel.id]}
+            <ChannelBrandIcon channelId={channel.id} className={cn(icon, "rounded-full")} />
             {active && status?.telegram_username && channel.id === "telegram" ? (
               <span className="sr-only">@{status.telegram_username}</span>
             ) : null}

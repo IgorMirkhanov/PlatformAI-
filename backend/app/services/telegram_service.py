@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -655,8 +656,10 @@ class TelegramService:
         }
         if offset is not None:
             payload["offset"] = int(offset)
+        # HTTP client must outlive Telegram long-poll timeout or we drop the stream.
+        http_timeout = float(payload["timeout"]) + 10.0
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=http_timeout) as client:
                 response = await client.post(url, json=payload)
         except httpx.TimeoutException:
             return []
@@ -665,11 +668,28 @@ class TelegramService:
             return []
         data = _safe_telegram_json(response)
         if not data.get("ok"):
-            logger.warning(
-                "TelegramService.getUpdates_rejected | description={description}",
-                description=str(data.get("description") or response.status_code),
-            )
-            return []
+            description = str(data.get("description") or response.status_code)
+            # Another getUpdates is in flight (multi-worker race / external poller).
+            if "Conflict" in description or "terminated by other getUpdates" in description:
+                logger.warning(
+                    "TelegramService.getUpdates_conflict | description={description}",
+                    description=description,
+                )
+                await asyncio.sleep(1.5)
+                try:
+                    async with httpx.AsyncClient(timeout=http_timeout) as client:
+                        response = await client.post(url, json=payload)
+                    data = _safe_telegram_json(response)
+                except Exception:
+                    return []
+                if not data.get("ok"):
+                    return []
+            else:
+                logger.warning(
+                    "TelegramService.getUpdates_rejected | description={description}",
+                    description=description,
+                )
+                return []
         result = data.get("result")
         return result if isinstance(result, list) else []
 

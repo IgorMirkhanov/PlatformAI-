@@ -53,6 +53,46 @@ export interface BotAgentProfile {
   subscription_active?: boolean;
   subscription_expires_at?: string | null;
   wallet_balance?: number;
+  control_config?: BotControlConfig;
+}
+
+export interface BotControlHistorySettings {
+  message_limit: number;
+  time_window_days: number;
+}
+
+export interface BotControlSpamSettings {
+  enabled: boolean;
+  limit_message: string;
+  message_count: number;
+  duration_seconds: number;
+}
+
+export interface BotControlOperatorSettings {
+  pause_on_operator_message: boolean;
+  ignore_first_operator_message: boolean;
+  auto_resume_enabled: boolean;
+  auto_resume_days: number;
+  auto_resume_hours: number;
+  auto_resume_minutes: number;
+  resume_message_enabled: boolean;
+  resume_message: string;
+  exception_phrases_enabled: boolean;
+  exception_phrases: string[];
+}
+
+export interface BotControlKeywordSettings {
+  stop_enabled: boolean;
+  stop_phrases: string[];
+  resume_enabled: boolean;
+  resume_phrases: string[];
+}
+
+export interface BotControlConfig {
+  history: BotControlHistorySettings;
+  spam_protection: BotControlSpamSettings;
+  operator_intervention: BotControlOperatorSettings;
+  keyword_dialog: BotControlKeywordSettings;
 }
 
 export interface BotSettingsUpdate {
@@ -63,6 +103,7 @@ export interface BotSettingsUpdate {
   schedule_config?: ScheduleConfig;
   message_split?: boolean;
   message_buffer_delay?: number;
+  control_config?: BotControlConfig;
 }
 
 export interface BotPromptingUpdate {

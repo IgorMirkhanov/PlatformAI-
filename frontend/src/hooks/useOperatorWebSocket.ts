@@ -107,6 +107,12 @@ function connectSharedSocket(operatorId: string): void {
   }
 
   const url = getOperatorWsUrl(operatorId);
+  // Without a real JWT the server closes with 403 and we spin forever.
+  if (!url.includes("token=") || url.endsWith("token=")) {
+    useInboxStore.getState().setWsConnected(false);
+    return;
+  }
+
   const socket = new WebSocket(url);
   sharedSocket = socket;
 

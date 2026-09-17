@@ -211,7 +211,6 @@ export default function FunctionEditorPage() {
           <Switch
             checked={current.is_active}
             onCheckedChange={(v) => update({ is_active: v })}
-            className="h-6 w-11 data-[state=checked]:bg-violet-600 data-[state=unchecked]:bg-zinc-600"
           />
         </div>
       </Section>
@@ -421,7 +420,6 @@ export default function FunctionEditorPage() {
           <Switch
             checked={Boolean(current.disable_delayed_messages)}
             onCheckedChange={(v) => update({ disable_delayed_messages: v })}
-            className="h-6 w-11 data-[state=checked]:bg-violet-600 data-[state=unchecked]:bg-zinc-600"
           />
         </div>
       </Section>

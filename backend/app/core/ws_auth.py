@@ -15,13 +15,23 @@ from app.models.users import User
 
 
 def extract_ws_bearer(websocket: WebSocket) -> str | None:
-    """Prefer ``?token=`` / ``?access_token=``, then ``Authorization: Bearer``."""
+    """Prefer query token, then Bearer header, then session cookie.
+
+    Browser ``WebSocket`` cannot set ``Authorization``; same-origin sockets
+    still send cookies, so ``mpai_access_token`` is a valid auth channel for
+    sandbox / operator feeds.
+    """
     token = websocket.query_params.get("token") or websocket.query_params.get("access_token")
     if token:
         return token.strip()
     auth = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
     if auth and auth.lower().startswith("bearer "):
         return auth.split(" ", 1)[1].strip()
+    cookie_header = websocket.headers.get("cookie") or websocket.headers.get("Cookie") or ""
+    for part in cookie_header.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name in {"mpai_access_token", "access_token"} and value:
+            return value.strip()
     return None
 
 

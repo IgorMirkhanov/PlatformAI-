@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Radio, Settings2 } from "lucide-react";
 
 import { ChannelConfigModal } from "@/components/channel-hub/ChannelConfigModal";
+import { HubChannelBrandIcon } from "@/components/channel-hub/HubChannelBrandIcon";
 import { Toggle } from "@/components/ui/Toggle";
 import { useToast } from "@/hooks/useToast";
 import { fetchHubChannels, patchHubChannelEnabled } from "@/lib/api";
@@ -148,11 +149,8 @@ export function HubChannelGrid({ botId, profile }: HubChannelGridProps) {
                 />
                 <div className="relative flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    <div
-                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-xs font-bold ring-1 ring-zinc-800"
-                      style={{ color: item.accent, backgroundColor: `${item.accent}18` }}
-                    >
-                      {item.shortLabel}
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl ring-1 ring-zinc-800/80">
+                      <HubChannelBrandIcon channelId={item.id} className="h-10 w-10" />
                     </div>
                     <div>
                       <h3 className="text-base font-semibold text-zinc-50">{item.label}</h3>
@@ -174,7 +172,7 @@ export function HubChannelGrid({ botId, profile }: HubChannelGridProps) {
                       ) : null}
                     </div>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-2">
+                  <div className="flex shrink-0 flex-col items-end gap-2.5">
                     <button
                       type="button"
                       disabled={busy}
@@ -195,13 +193,14 @@ export function HubChannelGrid({ botId, profile }: HubChannelGridProps) {
                         "Подключить"
                       )}
                     </button>
-                    <Toggle
-                      checked={connected && enabled}
-                      disabled={busy}
-                      onChange={(value) => void handleToggle(item, value)}
-                      label=""
-                      description=""
-                    />
+                    <div className="flex h-7 w-11 items-center justify-center rounded-full bg-zinc-900/80 ring-1 ring-zinc-800">
+                      <Toggle
+                        checked={connected && enabled}
+                        disabled={busy}
+                        onChange={(value) => void handleToggle(item, value)}
+                        className="gap-0"
+                      />
+                    </div>
                   </div>
                 </div>
                 <p className="relative mt-4 flex-1 text-sm leading-relaxed text-zinc-400">

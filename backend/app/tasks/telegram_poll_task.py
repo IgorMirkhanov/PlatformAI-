@@ -18,9 +18,12 @@ from app.services.telegram_service import telegram_service
 from app.tasks.webhook_tasks import process_inbound_message_task
 
 POLL_LOCK_KEY = "telegram:poll:lock"
-POLL_LOCK_TTL = 25
+# Must cover long-poll getUpdates (25s) + processing slack.
+POLL_LOCK_TTL = 45
 OFFSET_KEY = "telegram:poll:offset:{token_hash}"
-POLL_INTERVAL_SECONDS = 3
+POLL_INTERVAL_SECONDS = 1
+# Hold Telegram's getUpdates stream so a competing poller cannot steal updates.
+TELEGRAM_LONG_POLL_TIMEOUT = 25
 
 
 def _is_polling_row(row: BotChannel) -> bool:
@@ -86,7 +89,11 @@ async def _poll_connected_bots() -> int:
         token_hash = str(meta.get("token_hash") or row.bot_id)
         offset_raw = redis.get(OFFSET_KEY.format(token_hash=token_hash))
         offset = int(offset_raw) if offset_raw else None
-        updates = await telegram_service.fetch_updates(token, offset=offset, timeout=0)
+        updates = await telegram_service.fetch_updates(
+            token,
+            offset=offset,
+            timeout=TELEGRAM_LONG_POLL_TIMEOUT,
+        )
         if not updates:
             continue
 

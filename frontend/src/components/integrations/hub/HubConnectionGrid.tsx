@@ -50,7 +50,7 @@ export function HubConnectionGrid({ botId }: HubConnectionGridProps) {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-2">
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {HUB_CARD_PROVIDERS.map((definition) => (
         <HubProviderCard
           key={definition.id}

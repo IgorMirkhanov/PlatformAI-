@@ -23,10 +23,16 @@ router = APIRouter(tags=["operator-websocket"])
 
 
 def _legacy_operator_token_ok(token: str | None) -> bool:
-    """Dev-only shared token fallback (disabled in production)."""
-    if settings.is_production or not token:
+    """Shared operator WS token (query ``?token=``).
+
+    Used when the browser cannot attach an Authorization header on WebSocket.
+    Prefer JWT via ``getAccessToken()`` on the client; this remains a fallback
+    for local/prod consoles that still ship ``OPERATOR_WS_TOKEN``.
+    """
+    expected = (settings.OPERATOR_WS_TOKEN or "").strip()
+    if not token or not expected:
         return False
-    return token == settings.OPERATOR_WS_TOKEN
+    return token.strip() == expected
 
 
 @router.websocket("/ws/operator/{operator_id}")
