@@ -296,6 +296,7 @@ async def omni_harness(omni_session_factory: async_sessionmaker[AsyncSession]):
                 is_active=True,
                 # Chat/LLM replies require an active per-bot subscription (bot_billing_service).
                 subscription_active=True,
+                wallet_balance=100_000,
                 credentials={
                     "webhook_secret_token": TELEGRAM_SECRET,
                     "channels": {

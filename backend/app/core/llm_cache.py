@@ -6,10 +6,12 @@ normalized user utterance. Semantic hooks are stubbed for a future embedding ind
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -69,8 +71,27 @@ class LLMResponseCacheManager:
         env_enabled = getattr(settings, "LLM_CACHE_ENABLED", True)
         self._enabled = bool(enabled if enabled is not None else env_enabled)
         self._async_client: Any | None = None
+        self._bound_loop: asyncio.AbstractEventLoop | None = None
+
+    async def aclose(self) -> None:
+        """Drop the cached Redis client (call when the event loop is replaced)."""
+        client = self._async_client
+        self._async_client = None
+        self._bound_loop = None
+        if client is None:
+            return
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if close is None:
+            return
+        with suppress(Exception):
+            result = close()
+            if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+                await result
 
     async def _client(self) -> Any:
+        loop = asyncio.get_running_loop()
+        if self._async_client is not None and self._bound_loop is not loop:
+            await self.aclose()
         if self._async_client is None:
             import redis.asyncio as aioredis
 
@@ -81,6 +102,7 @@ class LLMResponseCacheManager:
                 decode_responses=True,
                 max_connections=50,
             )
+            self._bound_loop = loop
         return self._async_client
 
     def _version_key(self, bot_id: uuid.UUID | str) -> str:

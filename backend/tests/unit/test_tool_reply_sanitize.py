@@ -56,3 +56,14 @@ def test_sanitize_replaces_called_tools_with_generic_fallback() -> None:
 def test_sanitize_empty_without_tools() -> None:
     assert sanitize_outbound_text("Called tools: x") == ""
     assert sanitize_outbound_text("") == ""
+
+
+def test_ensure_user_visible_reply_uses_fallback() -> None:
+    from app.services.llm.tool_reply_sanitize import ensure_user_visible_reply
+    from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
+
+    assert ensure_user_visible_reply("Привет") == "Привет"
+    assert ensure_user_visible_reply("  ") == SAFE_USER_FALLBACK_MESSAGE
+    assert ensure_user_visible_reply("") == SAFE_USER_FALLBACK_MESSAGE
+    assert ensure_user_visible_reply(None) == SAFE_USER_FALLBACK_MESSAGE
+    assert ensure_user_visible_reply("", fallback="Попробуйте позже.") == "Попробуйте позже."

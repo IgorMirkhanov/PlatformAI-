@@ -1,52 +1,32 @@
 "use client";
 
 import { useState } from "react";
+import { Loader2 } from "lucide-react";
 
 import { ChannelActionButtons } from "@/components/channel-hub/ChannelActionButtons";
 import { ChannelSetupPanel } from "@/components/channel-hub/ChannelSetupPanel";
 import { useChannelHub } from "@/components/channel-hub/ChannelHubContext";
 import { useToast } from "@/hooks/useToast";
-import { connectHubChannel, disconnectHubChannel } from "@/lib/api";
-import { validateHubInstagramForm } from "@/lib/channel-validation";
+import { disconnectHubChannel, startInstagramOAuth } from "@/lib/api";
+import { rememberInstagramOAuthReturn } from "@/lib/integrations/hubOAuthPopup";
 import { getApiErrorMessage } from "@/store/useBotStore";
 
 export default function InstagramChannelPage() {
   const { botId, statuses, refreshStatuses } = useChannelHub();
   const status = statuses.instagram;
   const { showToast } = useToast();
-  const [instanceId, setInstanceId] = useState("");
-  const [apiToken, setApiToken] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const clearError = () => {
-    if (error) setError(null);
-  };
-
   const handleConnect = async () => {
-    const validationError = validateHubInstagramForm({
-      instance_id: instanceId,
-      api_token: apiToken,
-    });
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
     setIsPending(true);
     setError(null);
     try {
-      const response = await connectHubChannel(botId, "instagram", {
-        reference_id: instanceId.trim(),
-        api_key: apiToken.trim(),
-        access_token: apiToken.trim(),
-        token: apiToken.trim(),
-      });
-      showToast(response.message || "Instagram подключён.", "success");
-      setApiToken("");
-      await refreshStatuses();
+      const { authorize_url } = await startInstagramOAuth(botId);
+      rememberInstagramOAuthReturn(botId);
+      window.location.assign(authorize_url);
     } catch (err) {
-      const msg = getApiErrorMessage(err, "Не удалось подключить Instagram.");
+      const msg = getApiErrorMessage(err, "Не удалось открыть вход Instagram.");
       setError(msg);
       showToast(msg, "error");
     } finally {
@@ -73,50 +53,32 @@ export default function InstagramChannelPage() {
   return (
     <ChannelSetupPanel
       title="Instagram"
-      subtitle="Direct Messages через Green API"
+      subtitle="Direct Messages через вход в Instagram"
       accent="#E4405F"
       status={status}
       error={error}
       instructions={
         <>
-          <p>1. Создайте инстанс Instagram в кабинете Green API.</p>
-          <p>2. Скопируйте Instance ID (idInstance) и API Token (apiTokenInstance).</p>
-          <p>3. Укажите webhook URL из статуса подключения в настройках инстанса.</p>
+          <p>1. Нажмите «Войти через Instagram» — откроется instagram.com.</p>
+          <p>2. Войдите в бизнес-аккаунт и разрешите сообщения.</p>
+          <p>3. После возврата канал появится как подключённый.</p>
         </>
       }
     >
-      <label className="block text-xs font-medium text-zinc-400">
-        Instance ID
-        <input
-          value={instanceId}
-          disabled={isPending}
-          onChange={(event) => {
-            setInstanceId(event.target.value);
-            clearError();
-          }}
-          className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-[#E4405F]/50 focus:ring-2 focus:ring-[#E4405F]/20 disabled:opacity-50"
-        />
-      </label>
-      <label className="block text-xs font-medium text-zinc-400">
-        API Token
-        <input
-          type="password"
-          value={apiToken}
-          disabled={isPending}
-          onChange={(event) => {
-            setApiToken(event.target.value);
-            clearError();
-          }}
-          className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-[#E4405F]/50 focus:ring-2 focus:ring-[#E4405F]/20 disabled:opacity-50"
-        />
-      </label>
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={() => void handleConnect()}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#F58529] via-[#E4405F] to-[#833AB4] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-95 disabled:opacity-50"
+      >
+        {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        Войти через Instagram
+      </button>
       <ChannelActionButtons
         isPending={isPending}
-        canConnect={!isPending}
-        canDisconnect={status.connected}
-        onConnect={() => void handleConnect()}
+        canConnect={false}
+        canDisconnect={Boolean(status.connected)}
         onDisconnect={() => void handleDisconnect()}
-        connectClassName="bg-gradient-to-r from-[#F58529] via-[#E4405F] to-[#833AB4]"
       />
     </ChannelSetupPanel>
   );

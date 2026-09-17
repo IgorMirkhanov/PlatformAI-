@@ -117,6 +117,15 @@ SEED_LLM_MODELS: list[dict[str, object]] = [
         "cost_per_1k_input": Decimal("0.000000"),
         "cost_per_1k_output": Decimal("0.000000"),
     },
+    {
+        "provider": "gemini",
+        "model_name": "gemini-3.6-flash",
+        "display_name": "Gemini 3.6 Flash",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "context_window": 1_048_576,
+        "cost_per_1k_input": Decimal("0.000000"),
+        "cost_per_1k_output": Decimal("0.000000"),
+    },
 ]
 
 # Models the vendor pulled from the free tier: keep the row for audit trail but

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import secrets as pysecrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -38,9 +39,77 @@ _AUTH_ERRORS = frozenset(
     {"expired_token", "invalid_token", "NO_AUTH_FOUND", "insufficient_scope", "ACCESS_DENIED"}
 )
 
+_INCOMING_WEBHOOK_RE = re.compile(r"(https?://[^/\s]+/rest/\d+/[^/\s?#]+)", re.IGNORECASE)
+
+BITRIX_INCOMING_WEBHOOK_HINT = (
+    "Нужен Incoming Webhook, не страница портала. В Bitrix24: "
+    "Разработчикам → Другое → Входящий вебхук (права CRM: сделки и контакты). "
+    "Скопируйте URL вида https://xxx.bitrix24.ru/rest/1/xxxxxxxx/"
+)
+
 
 class BitrixAuthExpired(Exception):
     """OAuth access token rejected — refresh or re-install."""
+
+
+def normalize_bitrix_incoming_webhook(url: str) -> str:
+    """Accept only Bitrix Incoming Webhook REST URLs (…/rest/{userId}/{code}/)."""
+    raw = (url or "").strip()
+    if not raw:
+        raise ValueError("Укажите Incoming Webhook URL Bitrix24.")
+    lowered = raw.lower()
+    if "/crm/" in lowered or "kanban" in lowered:
+        raise ValueError(
+            "Это страница CRM Bitrix24, не Incoming Webhook. " + BITRIX_INCOMING_WEBHOOK_HINT
+        )
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
+        raise ValueError("Incoming Webhook должен начинаться с https://")
+    match = _INCOMING_WEBHOOK_RE.search(raw)
+    if match is None:
+        raise ValueError(BITRIX_INCOMING_WEBHOOK_HINT)
+    return match.group(1).rstrip("/") + "/"
+
+
+def _bitrix_error_message(response: httpx.Response) -> str | None:
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error_description") or body.get("error")
+    return str(error) if error else None
+
+
+async def probe_bitrix_incoming_webhook(http: httpx.AsyncClient, webhook: str) -> dict[str, Any]:
+    """GET profile.json and require a Bitrix REST JSON envelope, not HTML."""
+    url = webhook.rstrip("/") + "/profile.json"
+    try:
+        response = await http.get(url, timeout=15.0)
+    except httpx.RequestError as exc:
+        raise ValueError(f"Bitrix24 недоступен: {exc}") from exc
+
+    content_type = (response.headers.get("content-type") or "").lower()
+    text = response.text or ""
+    if "html" in content_type or text.lstrip()[:15].lower().startswith("<!doctype html") or text.lstrip()[:6].lower().startswith("<html"):
+        raise ValueError(
+            "Bitrix24 вернул страницу входа, а не REST JSON. " + BITRIX_INCOMING_WEBHOOK_HINT
+        )
+    if response.status_code >= 400:
+        raise ValueError(_bitrix_error_message(response) or "Bitrix24 webhook URL отклонён.")
+    try:
+        body = response.json()
+    except Exception as exc:
+        raise ValueError(
+            "Bitrix24 не вернул JSON. " + BITRIX_INCOMING_WEBHOOK_HINT
+        ) from exc
+    if not isinstance(body, dict):
+        raise ValueError("Bitrix24 webhook URL отклонён.")
+    if body.get("error"):
+        raise ValueError(str(body.get("error_description") or body.get("error")))
+    if "result" not in body:
+        raise ValueError("Bitrix24 webhook URL отклонён: нет профиля пользователя.")
+    return body
 
 
 class Bitrix24HubAdapter:
@@ -72,14 +141,12 @@ class Bitrix24HubAdapter:
         webhook = str(payload.get("webhook_url") or "").strip()
         code = str(payload.get("authorization_code") or payload.get("code") or "").strip()
         if webhook:
-            url = webhook.rstrip("/") + "/profile.json"
-            response = await http.get(url, timeout=15.0)
-            if response.status_code >= 400:
-                raise ValueError("Bitrix24 webhook URL отклонён.")
+            normalized = normalize_bitrix_incoming_webhook(webhook)
+            await probe_bitrix_incoming_webhook(http, normalized)
             return TokenBundle(
-                webhook_url=webhook.rstrip("/") + "/",
+                webhook_url=normalized,
                 extra={"auth_mode": "webhook"},
-                external_account_id=webhook.split("/")[-2] if "/" in webhook else webhook[:32],
+                external_account_id=normalized.rstrip("/").split("/")[-1][:32],
             )
         if platform_app is None or not platform_app.client_id or not platform_app.client_secret:
             raise ValueError("Platform Bitrix24 OAuth app is not configured.")
@@ -98,9 +165,11 @@ class Bitrix24HubAdapter:
         """Validate webhook or OAuth credentials with a lightweight profile call."""
         del connection_id
         if (secrets.extra or {}).get("auth_mode") == "webhook" or secrets.webhook_url:
-            endpoint = self._rest_endpoint(secrets)
-            response = await http.get(f"{endpoint}profile.json", timeout=15.0)
-            return response.status_code < 400
+            normalized = normalize_bitrix_incoming_webhook(
+                secrets.webhook_url or str((secrets.extra or {}).get("webhook_url") or "")
+            )
+            await probe_bitrix_incoming_webhook(http, normalized)
+            return True
         if not secrets.access_token:
             return False
         endpoint = self._rest_endpoint(secrets)

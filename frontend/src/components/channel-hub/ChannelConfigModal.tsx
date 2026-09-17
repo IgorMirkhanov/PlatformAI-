@@ -9,7 +9,9 @@ import {
   connectHubChannel,
   disconnectHubChannel,
   patchHubChannelEnabled,
+  startInstagramOAuth,
 } from "@/lib/api";
+import { rememberInstagramOAuthReturn } from "@/lib/integrations/hubOAuthPopup";
 import {
   validateHubGreenApiForm,
   validateHubTelegramToken,
@@ -41,22 +43,30 @@ function Field({
   onChange,
   password,
   placeholder,
+  autoComplete = "off",
+  inputMode,
+  name,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   password?: boolean;
   placeholder?: string;
+  autoComplete?: string;
+  inputMode?: "numeric" | "text" | "tel";
+  name?: string;
 }) {
   return (
     <label className="block text-xs font-medium text-zinc-400">
       {label}
       <input
         type={password ? "password" : "text"}
+        name={name}
         value={value}
         placeholder={placeholder}
         aria-label={label}
-        autoComplete="off"
+        autoComplete={autoComplete}
+        inputMode={inputMode}
         onChange={(event) => onChange(event.target.value)}
         className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/30"
       />
@@ -117,7 +127,12 @@ function buildConnectPayload(
     };
   }
 
-  if (channelType === "whatsapp_qr" || channelType === "instagram") {
+  if (channelType === "whatsapp_qr") {
+    if (!fields.instanceId.trim() && !fields.apiKey.trim()) {
+      throw new Error(
+        "Для личного WhatsApp нажмите «Подключить по QR-коду». Поля Green API нужны только если есть инстанс на green-api.com.",
+      );
+    }
     const validationError = validateHubGreenApiForm({
       instance_id: fields.instanceId,
       api_token: fields.apiKey,
@@ -129,6 +144,10 @@ function buildConnectPayload(
       access_token: fields.apiKey.trim(),
       token: fields.apiKey.trim(),
     };
+  }
+
+  if (channelType === "instagram") {
+    throw new Error("Нажмите «Войти через Instagram» — откроется страница входа Instagram.");
   }
 
   if (channelType === "waba") {
@@ -256,6 +275,25 @@ export function ChannelConfigModal({
       phoneNumberId.trim() ||
       sipLogin.trim() ||
       sipPassword.trim();
+    if (channelType === "whatsapp_qr" && !instanceId.trim() && !apiKey.trim()) {
+      setQrOpen(true);
+      return;
+    }
+    if (channelType === "instagram") {
+      setSaving(true);
+      try {
+        const { authorize_url } = await startInstagramOAuth(botId);
+        rememberInstagramOAuthReturn(botId);
+        window.location.assign(authorize_url);
+        return;
+      } catch (err) {
+        const message = getApiErrorMessage(err, "Не удалось открыть вход Instagram.");
+        setError(message);
+        showToast(message, "error");
+        setSaving(false);
+      }
+      return;
+    }
     if (connected && secretChannels.includes(channelType) && !enteredSecret) {
       onClose();
       return;
@@ -409,16 +447,27 @@ export function ChannelConfigModal({
             {channelType === "whatsapp_qr" ? (
               <>
                 <p className="text-sm text-zinc-400">
-                  Подключите номер через Green API (Instance ID + API Token) или отсканируйте
-                  QR-код в WhatsApp.
+                  Для личного номера нажмите «Подключить по QR-коду» и отсканируйте код в WhatsApp
+                  → Связанные устройства. Green API ниже — только если у вас уже есть инстанс на
+                  green-api.com.
                 </p>
                 <Field
-                  label="Instance ID"
+                  label="Instance ID (Green API, необязательно для QR)"
                   value={instanceId}
                   onChange={setInstanceId}
-                  placeholder="1101xxxxxxxx"
+                  placeholder="свой idInstance, не пример"
+                  name="greenapi-instance-id"
+                  autoComplete="off"
+                  inputMode="numeric"
                 />
-                <Field label="API Token" value={apiKey} onChange={setApiKey} password />
+                <Field
+                  label="API Token (Green API)"
+                  value={apiKey}
+                  onChange={setApiKey}
+                  password
+                  name="greenapi-api-token"
+                  autoComplete="new-password"
+                />
                 <button
                   type="button"
                   onClick={() => {
@@ -436,15 +485,18 @@ export function ChannelConfigModal({
             {channelType === "instagram" ? (
               <>
                 <p className="text-sm text-zinc-400">
-                  Instagram Direct через Green API: Instance ID и API Token инстанса.
+                  Нажмите кнопку ниже — откроется страница входа Instagram. Войдите в бизнес-аккаунт
+                  и разрешите Direct Messages.
                 </p>
-                <Field
-                  label="Instance ID"
-                  value={instanceId}
-                  onChange={setInstanceId}
-                  placeholder="1101xxxxxxxx"
-                />
-                <Field label="API Token" value={apiKey} onChange={setApiKey} password />
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void persistAndConnect()}
+                  className="inline-flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-[#F58529] via-[#E4405F] to-[#833AB4] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-95 disabled:opacity-50"
+                >
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Войти через Instagram
+                </button>
               </>
             ) : null}
 
@@ -530,13 +582,23 @@ export function ChannelConfigModal({
               )
             ) : null}
 
-            {status?.webhook_url && channelType !== "api" ? (
+            {status?.webhook_url &&
+            channelType !== "api" &&
+            !/127\.0\.0\.1|localhost/i.test(status.webhook_url) ? (
               <div className="rounded-xl border border-zinc-800 bg-zinc-950/50 p-3">
                 <p className="mb-1 text-[10px] uppercase tracking-wide text-zinc-500">Webhook</p>
                 <code className="block break-all font-mono text-[11px] text-zinc-400">
                   {status.webhook_url}
                 </code>
               </div>
+            ) : null}
+            {channelType === "instagram" ? (
+              <p className="text-[11px] leading-relaxed text-zinc-500">
+                Нужен Instagram Business или Creator. В Meta App Dashboard укажите Redirect URI
+                <code className="ml-1 break-all text-zinc-400">
+                  /api/v1/channels/instagram/oauth/callback
+                </code>
+              </p>
             ) : null}
           </div>
 
@@ -567,7 +629,7 @@ export function ChannelConfigModal({
               )}
             >
               {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {connected ? "Сохранить" : "Сохранить и подключить"}
+              {connected ? "Сохранить" : channelType === "instagram" ? "Войти через Instagram" : "Сохранить и подключить"}
             </button>
           </div>
         </div>
@@ -578,9 +640,7 @@ export function ChannelConfigModal({
         open={qrOpen}
         onClose={() => setQrOpen(false)}
         onConnected={() => {
-          setQrOpen(false);
-          onSaved();
-          onClose();
+          void onSaved();
         }}
       />
     </>

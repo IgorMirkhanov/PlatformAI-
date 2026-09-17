@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
+
 _CALLED_TOOLS_RE = re.compile(r"^\s*Called tools\s*:", re.IGNORECASE)
 _DEFAULT_TOOL_FALLBACK_RU = (
     "Готово — я всё обработал. Если нужно что-то уточнить, напишите мне."
@@ -37,3 +39,11 @@ def sanitize_outbound_text(
     if tools_executed:
         return fallback or _DEFAULT_TOOL_FALLBACK_RU
     return ""
+
+
+def ensure_user_visible_reply(text: str | None, *, fallback: str | None = None) -> str:
+    """Never hand an empty string to a messenger user."""
+    cleaned = (text or "").strip()
+    if cleaned:
+        return cleaned
+    return (fallback or SAFE_USER_FALLBACK_MESSAGE).strip() or SAFE_USER_FALLBACK_MESSAGE

@@ -1337,6 +1337,10 @@ export async function fetchHubChannels(botId: string): Promise<HubChannelsRespon
   return apiRequest<HubChannelsResponse>(`/api/v1/bots/${botId}/channels`);
 }
 
+export async function startInstagramOAuth(botId: string): Promise<{ authorize_url: string }> {
+  return apiRequest(`/api/v1/bots/${botId}/channels/instagram/oauth/start`);
+}
+
 export async function connectHubChannel(
   botId: string,
   channelType: HubChannelType,

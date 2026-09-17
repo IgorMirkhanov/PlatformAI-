@@ -512,6 +512,12 @@ class ResilientLLMGateway:
         failures: list[BaseException] = []
         attempted: list[str] = []
         skipped_open: list[str] = []
+        rewritten = settings.effective_chat_model(
+            str(kwargs.get("model") or "") or None
+        )
+        if rewritten:
+            kwargs = dict(kwargs)
+            kwargs["model"] = rewritten
         model_hint = kwargs.get("model")
         providers = self._ordered_providers(
             model=str(model_hint) if model_hint else None,

@@ -189,32 +189,42 @@ class CRMOrchestrator:
         await db.commit()
         return token_data
 
+    def store_bitrix24_webhook(self, bot: Bot, webhook_url: str) -> None:
+        """Seal Incoming Webhook onto ``bot.credentials.crm.bitrix24`` (no HTTP)."""
+        credentials = dict(bot.credentials or {})
+        crm = dict(credentials.get("crm") or {})
+        existing = dict(crm.get("bitrix24") or {}) if isinstance(crm.get("bitrix24"), dict) else {}
+        existing.update(
+            {
+                "webhook_url": webhook_url.rstrip("/") + "/",
+                "connected": True,
+                "sync_enabled": True,
+                "connected_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        crm["bitrix24"] = seal_bitrix_config(existing)
+        credentials["crm"] = crm
+        bot.credentials = credentials
+
     async def connect_bitrix24(
         self,
         db: AsyncSession,
         bot: Bot,
         webhook_url: str,
     ) -> None:
-        normalized = webhook_url.rstrip("/") + "/"
-        async with self._client() as client:
-            response = await client.get(f"{normalized}app.info.json")
-            response.raise_for_status()
-            body = response.json()
-            if body.get("error"):
-                raise ValueError(body.get("error_description") or body.get("error"))
+        from sqlalchemy.orm.attributes import flag_modified
 
-        credentials = dict(bot.credentials or {})
-        crm = dict(credentials.get("crm") or {})
-        crm["bitrix24"] = seal_bitrix_config(
-            {
-                "webhook_url": normalized,
-                "connected": True,
-                "sync_enabled": True,
-                "connected_at": datetime.now(UTC).isoformat(),
-            }
+        from app.services.integration_hub.adapters.bitrix24 import (
+            normalize_bitrix_incoming_webhook,
+            probe_bitrix_incoming_webhook,
         )
-        credentials["crm"] = crm
-        bot.credentials = credentials
+
+        normalized = normalize_bitrix_incoming_webhook(webhook_url)
+        async with self._client() as client:
+            await probe_bitrix_incoming_webhook(client, normalized)
+
+        self.store_bitrix24_webhook(bot, normalized)
+        flag_modified(bot, "credentials")
         await db.commit()
 
     async def get_integration_status(self, bot: Bot) -> list[dict[str, Any]]:
@@ -822,7 +832,7 @@ class CRMOrchestrator:
         if not config:
             return None
         url = config.get("webhook_url")
-        if config.get("connected") and isinstance(url, str) and url.strip():
+        if config.get("connected") and isinstance(url, str) and "/rest/" in url.lower():
             return url.rstrip("/") + "/"
         return None
 

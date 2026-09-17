@@ -174,17 +174,50 @@ function jidToPhone(jid) {
   return String(jid).split("@")[0].split(":")[0];
 }
 
-async function forwardInboundToFastAPI(botId, message, pushName) {
-  const from = jidToPhone(message.key?.remoteJid);
-  let messageText = "";
-  const contentType = Object.keys(message.message || {})[0] || "unknown";
+function chatJidFromMessage(message) {
+  const key = message.key || {};
+  const remote = String(key.remoteJid || "").trim();
+  const alt = String(key.remoteJidAlt || key.senderPn || "").trim();
+  if (alt.includes("@s.whatsapp.net") || alt.includes("@c.us")) {
+    return alt;
+  }
+  return remote;
+}
 
-  if (message.message?.conversation) {
-    messageText = message.message.conversation;
-  } else if (message.message?.extendedTextMessage?.text) {
-    messageText = message.message.extendedTextMessage.text;
-  } else if (message.message?.imageMessage?.caption) {
-    messageText = `[User sent image] ${message.message.imageMessage.caption}`;
+/** Baileys v7 chats often use @lid — never rewrite those to @s.whatsapp.net. */
+function toSendJid(to) {
+  const raw = String(to || "").trim();
+  if (!raw) {
+    throw new Error("empty recipient");
+  }
+  if (raw.includes("@")) {
+    return raw;
+  }
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) {
+    throw new Error("invalid recipient");
+  }
+  return `${digits}@s.whatsapp.net`;
+}
+
+async function forwardInboundToFastAPI(botId, message, pushName) {
+  const chatJid = chatJidFromMessage(message);
+  const from = jidToPhone(chatJid);
+  let messageText = "";
+  const inner =
+    message.message?.ephemeralMessage?.message ||
+    message.message?.viewOnceMessage?.message ||
+    message.message?.viewOnceMessageV2?.message ||
+    message.message ||
+    {};
+  const contentType = Object.keys(inner)[0] || "unknown";
+
+  if (inner.conversation) {
+    messageText = inner.conversation;
+  } else if (inner.extendedTextMessage?.text) {
+    messageText = inner.extendedTextMessage.text;
+  } else if (inner.imageMessage?.caption) {
+    messageText = `[User sent image] ${inner.imageMessage.caption}`;
   } else {
     messageText = `[User sent ${contentType}]`;
   }
@@ -200,7 +233,7 @@ async function forwardInboundToFastAPI(botId, message, pushName) {
     message_id: message.key?.id || null,
     push_name: pushName || from,
     content_type: contentType,
-    remote_jid: message.key?.remoteJid || null,
+    remote_jid: chatJid || null,
   };
 
   try {
@@ -209,7 +242,7 @@ async function forwardInboundToFastAPI(botId, message, pushName) {
       headers["X-Internal-Api-Key"] = INTERNAL_SERVICE_API_KEY;
     }
     await axios.post(FASTAPI_WEBHOOK_URL, body, { timeout: 15000, headers });
-    logger.info({ botId, from }, "forwarded inbound message to FastAPI");
+    logger.info({ botId, from, remoteJid: chatJid }, "forwarded inbound message to FastAPI");
   } catch (err) {
     logger.error(
       { botId, from, err: err?.message || String(err) },
@@ -413,6 +446,10 @@ async function startSession(botId, options = {}) {
       }
 
       if (loggedOut || badSession) {
+        if (state.stopping) {
+          state.sock = null;
+          return;
+        }
         state.status = "disconnected";
         emitSession(key, loggedOut ? "DISCONNECTED" : "AUTH_FAILURE", {
           status: "failed",
@@ -472,6 +509,9 @@ async function startSession(botId, options = {}) {
 async function stopSession(botId) {
   const key = String(botId);
   const existing = sessions.get(key);
+  if (existing) {
+    existing.stopping = true;
+  }
   if (existing?.reconnectTimer) {
     clearTimeout(existing.reconnectTimer);
   }
@@ -513,10 +553,10 @@ async function sendTextMessage(botId, to, text) {
     throw new Error("WhatsApp session is not connected for this bot.");
   }
 
-  const phone = String(to).replace(/[^\d]/g, "");
-  const jid = `${phone}@s.whatsapp.net`;
+  const jid = toSendJid(to);
   await live.sock.sendMessage(jid, { text: String(text).slice(0, 4096) });
-  return { ok: true, to: phone };
+  logger.info({ botId: key, jid }, "sent outbound WhatsApp text");
+  return { ok: true, to: jid };
 }
 
 async function sendMediaMessage(botId, to, payload = {}) {
@@ -530,8 +570,7 @@ async function sendMediaMessage(botId, to, payload = {}) {
     throw new Error("WhatsApp session is not connected for this bot.");
   }
 
-  const phone = String(to).replace(/[^\d]/g, "");
-  const jid = `${phone}@s.whatsapp.net`;
+  const jid = toSendJid(to);
   const mediaUrl = String(payload.media_url || "").trim();
   const mediaType = String(payload.media_type || "document").toLowerCase();
   const caption = payload.caption ? String(payload.caption).slice(0, 1024) : undefined;
@@ -559,7 +598,7 @@ async function sendMediaMessage(botId, to, payload = {}) {
   }
 
   await live.sock.sendMessage(jid, content);
-  return { ok: true, to: phone, media_type: mediaType };
+  return { ok: true, to: jid, media_type: mediaType };
 }
 
 const app = express();
@@ -761,8 +800,27 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
+function restoreSessionsFromDisk() {
+  let names = [];
+  try {
+    names = fs.readdirSync(SESSIONS_DIR);
+  } catch (err) {
+    logger.warn({ err: err?.message }, "cannot list WhatsApp sessions dir");
+    return;
+  }
+  for (const name of names) {
+    const creds = path.join(SESSIONS_DIR, name, "creds.json");
+    if (!fs.existsSync(creds)) continue;
+    logger.info({ botId: name }, "Restoring WhatsApp session from disk");
+    startSession(name, { force: false }).catch((err) =>
+      logger.error({ err: err?.message, botId: name }, "session restore failed"),
+    );
+  }
+}
+
 server.listen(PORT, HOST, () => {
   logger.info({ host: HOST, port: PORT, sessionsDir: SESSIONS_DIR }, "whatsapp-service listening");
+  restoreSessionsFromDisk();
 });
 
 process.on("SIGINT", () => {

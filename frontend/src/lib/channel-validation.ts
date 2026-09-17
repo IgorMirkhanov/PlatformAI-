@@ -75,8 +75,15 @@ export function validateHubGreenApiForm(values: {
   instance_id: string;
   api_token: string;
 }): string | null {
-  if (!values.instance_id.trim()) {
-    return "Укажите Instance ID.";
+  const instance = values.instance_id.trim();
+  if (!instance) {
+    return "Укажите Instance ID из кабинета Green API.";
+  }
+  if (/^1101234567$/.test(instance) || /x{2,}/i.test(instance)) {
+    return "Это пример из подсказки. Вставьте свой Instance ID из кабинета green-api.com.";
+  }
+  if (!/^\d{5,}$/.test(instance)) {
+    return "Instance ID — только цифры из кабинета green-api.com, не email и не ссылка на профиль.";
   }
   if (!values.api_token.trim()) {
     return "Укажите API Token.";

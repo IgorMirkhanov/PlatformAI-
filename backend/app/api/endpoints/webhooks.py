@@ -40,8 +40,14 @@ async def provider_webhook_receiver(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> WebhookQueuedResponse | Response:
-    """POST /api/v1/webhooks/{telegram|wazzup|greenapi|widget} without organization_id."""
+    """POST /api/v1/webhooks/{telegram|wazzup|greenapi|widget} without organization_id.
+
+    ``/webhooks/{provider}`` is registered before static paths, so Baileys
+    ``/webhooks/whatsapp-qr`` would otherwise 404 as an unknown provider.
+    """
     key = (provider or "").strip().lower()
+    if key in {"whatsapp-qr", "whatsapp_qr"}:
+        return await whatsapp_qr_webhook(request)
     if key not in _BYOK_PROVIDERS:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Unknown webhook provider.")
     if key == "wazzup":
@@ -561,7 +567,7 @@ async def whatsapp_qr_webhook(
     try:
         require_internal_service_key(request)
     except HTTPException:
-        return {"status": "forbidden", "reason": "auth_required"}
+        return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     raw_body: Any = await request.json()
     if not isinstance(raw_body, dict):

@@ -1212,6 +1212,9 @@ class BotManagementService:
             set_workspace(bot, workspace)
         await db.flush()
         await db.refresh(bot)
+        # Function tools are not part of the exact-match cache key — bump version
+        # so old completions (pre-tool-edit) cannot be replayed.
+        await llm_response_cache.invalidate_bot_cache(bot_id)
         logger.info(
             "BotManagement.functions_updated | bot_id={bot_id} snippet_len={length}",
             bot_id=bot_id,

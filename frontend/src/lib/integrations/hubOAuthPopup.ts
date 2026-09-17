@@ -26,6 +26,32 @@ export function isHubOAuthMessage(data: unknown): data is HubOAuthMessage {
   return row.type === HUB_OAUTH_MESSAGE_TYPE && typeof row.provider === "string";
 }
 
+const IG_OAUTH_RETURN_KEY = "mpai_ig_oauth_return";
+
+export function rememberInstagramOAuthReturn(botId: string): void {
+  try {
+    sessionStorage.setItem(
+      IG_OAUTH_RETURN_KEY,
+      `/dashboard/channels-agent/${botId}/instagram`,
+    );
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+export function consumeOAuthReturnPath(fallback = "/dashboard/channels"): string {
+  try {
+    const stored = sessionStorage.getItem(IG_OAUTH_RETURN_KEY);
+    if (stored) {
+      sessionStorage.removeItem(IG_OAUTH_RETURN_KEY);
+      return stored;
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
 export function openHubOAuthPopup(authorizeUrl: string): Promise<HubOAuthMessage> {
   return new Promise((resolve, reject) => {
     const width = 620;

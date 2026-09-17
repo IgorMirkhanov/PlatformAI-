@@ -99,22 +99,34 @@ class InstagramService:
         recipient_id: str,
         text: str,
     ) -> None:
-        url = "https://graph.facebook.com/v19.0/me/messages"
+        url = "https://graph.instagram.com/v21.0/me/messages"
         payload = {
             "recipient": {"id": recipient_id},
             "message": {"text": text[:2000]},
-            "messaging_type": "RESPONSE",
         }
-        params = {"access_token": access_token}
+        headers = {"Authorization": f"Bearer {access_token}"}
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, params=params, json=payload)
+            response = await client.post(url, headers=headers, json=payload)
             if response.status_code >= 400:
-                logger.error(
-                    "InstagramService.send_failed | status={status} body={body}",
-                    status=response.status_code,
-                    body=response.text[:500],
+                # Page tokens from the legacy Graph path still use facebook.com.
+                fallback = await client.post(
+                    "https://graph.facebook.com/v19.0/me/messages",
+                    params={"access_token": access_token},
+                    json={
+                        "recipient": {"id": recipient_id},
+                        "message": {"text": text[:2000]},
+                        "messaging_type": "RESPONSE",
+                    },
                 )
-                response.raise_for_status()
+                if fallback.status_code >= 400:
+                    logger.error(
+                        "InstagramService.send_failed | status={status} body={body}",
+                        status=fallback.status_code,
+                        body=fallback.text[:500],
+                    )
+                    fallback.raise_for_status()
+                return
+            return
 
 
 instagram_service = InstagramService()

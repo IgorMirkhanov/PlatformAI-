@@ -103,6 +103,8 @@ def e2e_bot_stack() -> dict[str, Any]:
         name="E2E Telegram Bot",
         platform_type=PlatformType.TELEGRAM,
         is_active=True,
+        subscription_active=True,
+        wallet_balance=50_000,
         credentials={
             "token_hash": hash_bot_token(token),
             "telegram_bot_token": encrypt_credential(token),
@@ -205,14 +207,14 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
         def scalar_one(self) -> Any:
             return bot
 
-    async def _db_execute(stmt: Any) -> Any:
+    async def _db_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
         # bot_billing_service.get_bot() does select(Bot).where(...) to check
         # subscription/wallet state; everything else keeps the graceful empty result.
-        try:
-            entity = stmt.column_descriptions[0]["entity"]
-        except Exception:
-            entity = None
-        return _BotResult() if entity is Bot else _EmptyResult()
+        froms = getattr(stmt, "froms", None) or ()
+        names = " ".join(str(getattr(item, "name", item)) for item in froms).lower()
+        if "bots" in names:
+            return _BotResult()
+        return _EmptyResult()
 
     db.execute = AsyncMock(side_effect=_db_execute)
 
@@ -336,8 +338,8 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     assert provider.complete_calls == 1
     # LLM spend is billed to the bot's own wallet (bot_billing_service), not the
     # org-level wallet mock, since bots gained their own subscription + credit wallet.
-    assert wallet.deduct_credits.await_count == 0
     assert bot.wallet_balance == 50_000 - expected_credits
+    assert wallet.deduct_credits.await_count == 0
 
     assert len(outbound_messages) == 1
     outbound = outbound_messages[0]

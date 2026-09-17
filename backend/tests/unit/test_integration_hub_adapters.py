@@ -154,6 +154,55 @@ async def test_bitrix24_oauth_connect_and_webhook() -> None:
     assert "oauth.bitrix.info" in hosts
 
 
+def test_normalize_bitrix_incoming_webhook_rejects_kanban() -> None:
+    from app.services.integration_hub.adapters.bitrix24 import normalize_bitrix_incoming_webhook
+
+    with pytest.raises(ValueError, match="страница CRM"):
+        normalize_bitrix_incoming_webhook("https://b24-8tw1xx.bitrix24.ru/crm/deal/kanban/")
+
+
+def test_normalize_bitrix_incoming_webhook_extracts_rest_prefix() -> None:
+    from app.services.integration_hub.adapters.bitrix24 import normalize_bitrix_incoming_webhook
+
+    url = normalize_bitrix_incoming_webhook(
+        "https://acme.bitrix24.ru/rest/1/hooktoken/profile.json"
+    )
+    assert url == "https://acme.bitrix24.ru/rest/1/hooktoken/"
+
+
+def test_bitrix_decrypt_failure_does_not_look_connected() -> None:
+    from types import SimpleNamespace
+
+    from app.models.integrations.credentials import get_bitrix_webhook_url
+
+    bot = SimpleNamespace(
+        credentials={
+            "crm": {
+                "bitrix24": {
+                    "connected": True,
+                    "webhook_url": "aesgcm:not-a-real-payload",
+                }
+            }
+        }
+    )
+    assert get_bitrix_webhook_url(bot) is None
+
+
+@pytest.mark.asyncio
+async def test_bitrix_webhook_rejects_html_profile() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>login</html>")
+
+    adapter = Bitrix24HubAdapter()
+    async with _mock_client(handler) as http:
+        with pytest.raises(ValueError, match="страницу входа"):
+            await adapter.connect(
+                platform_app=None,
+                payload={"webhook_url": "https://acme.bitrix24.ru/rest/1/hooktoken"},
+                http=http,
+            )
+
+
 @pytest.mark.asyncio
 async def test_wazzup_and_kaspi_connect() -> None:
     def handler(request: httpx.Request) -> httpx.Response:

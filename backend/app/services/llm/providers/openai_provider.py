@@ -20,6 +20,45 @@ from app.services.llm.base import (
 from app.services.llm.factory import LLMProviderFactory
 
 
+def gemini_compatible_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Gemini's OpenAI shim maps ``system`` to systemInstruction and drops empty turns.
+
+    A request that ends up with no non-system contents returns
+    ``GenerateContentRequest.contents: contents is not specified``.
+    Fold system text into the first user turn and skip blank messages.
+    """
+    system_chunks: list[str] = []
+    rest: list[dict[str, Any]] = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            content = content.strip()
+        if not content:
+            continue
+        role = str(message.get("role") or "user").strip().lower() or "user"
+        if role == "system":
+            system_chunks.append(str(content))
+            continue
+        rest.append({**message, "role": role, "content": content})
+    if not rest:
+        rest = [{"role": "user", "content": "Hello"}]
+    if system_chunks:
+        prefix = "\n\n".join(system_chunks)
+        first = rest[0]
+        if str(first.get("role") or "") == "user" and isinstance(first.get("content"), str):
+            rest[0] = {**first, "content": f"{prefix}\n\n{first['content']}"}
+        else:
+            rest.insert(0, {"role": "user", "content": prefix})
+    return rest
+
+
+def _is_gemini_contents_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "contents is not specified" in text or "contents: contents" in text
+
+
 def _map_openai_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
     """Normalize tool schemas into OpenAI Chat Completions ``tools`` format."""
     if not tools:
@@ -230,13 +269,18 @@ class OpenAIProvider(BaseLLMProvider):
         **kwargs: Any,
     ) -> LLMResponse:
         model = str(kwargs.pop("model", None) or self.model)
+        if self.provider_id == "gemini":
+            messages = gemini_compatible_messages(messages)
         openai_tools = _map_openai_tools(tools)
         request: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        model_lower = model.lower()
+        omit_temperature = self.provider_id == "gemini" and model_lower.startswith("gemini-3")
+        if not omit_temperature:
+            request["temperature"] = temperature
         if openai_tools is not None:
             request["tools"] = openai_tools
             if "tool_choice" in kwargs:
@@ -261,9 +305,33 @@ class OpenAIProvider(BaseLLMProvider):
         except LLMProviderError:
             raise
         except Exception as exc:
-            raise _translate_openai_error(
+            translated = _translate_openai_error(
                 exc, model=model, provider_id=self.provider_id
-            ) from exc
+            )
+            if (
+                self.provider_id == "gemini"
+                and openai_tools
+                and _is_gemini_contents_error(translated)
+            ):
+                logger.warning(
+                    "OpenAIProvider.gemini_retry_without_tools | model={model}",
+                    model=model,
+                )
+                request.pop("tools", None)
+                request.pop("tool_choice", None)
+                try:
+                    response = await client.chat.completions.create(
+                        **request,
+                        timeout=self.timeout_seconds,
+                    )
+                except LLMProviderError:
+                    raise
+                except Exception as retry_exc:
+                    raise _translate_openai_error(
+                        retry_exc, model=model, provider_id=self.provider_id
+                    ) from retry_exc
+            else:
+                raise translated from exc
 
         try:
             choices = getattr(response, "choices", None) or []
@@ -283,6 +351,13 @@ class OpenAIProvider(BaseLLMProvider):
                     status_code=502,
                 )
             content = (getattr(message, "content", None) or "").strip()
+            tool_calls = _tool_calls_from_message(message)
+            if not content and not tool_calls:
+                raise LLMInvalidResponseError(
+                    f"{self.provider_id} returned empty message content.",
+                    provider=self.provider_id,
+                    status_code=502,
+                )
             usage = getattr(response, "usage", None)
             prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
             completion_tokens = (
@@ -301,7 +376,7 @@ class OpenAIProvider(BaseLLMProvider):
 
         return LLMResponse(
             content=content,
-            tool_calls=_tool_calls_from_message(message),
+            tool_calls=tool_calls,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             model_name=str(resolved_model),

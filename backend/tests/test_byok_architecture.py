@@ -65,6 +65,76 @@ def test_parsers_extract_reference_and_message_ids() -> None:
     assert widget.reference_id == "wgt_1"
 
 
+@pytest.mark.asyncio
+async def test_greenapi_rejects_email_instance_id() -> None:
+    from app.services.greenapi_service import GreenApiError, greenapi_service
+
+    with pytest.raises(GreenApiError, match="idInstance"):
+        await greenapi_service.assert_authorized("igor.mirkhanov@email.ru", "token-token-token")
+
+
+@pytest.mark.asyncio
+async def test_greenapi_rejects_placeholder_instance_id() -> None:
+    from app.services.greenapi_service import GreenApiError, greenapi_service
+
+    with pytest.raises(GreenApiError, match="idInstance"):
+        await greenapi_service.assert_authorized("1101234567", "token-token-token")
+
+
+def test_normalize_greenapi_chat_id_appends_c_us() -> None:
+    from app.services.greenapi_service import normalize_greenapi_chat_id
+
+    assert normalize_greenapi_chat_id("79001234567") == "79001234567@c.us"
+    assert normalize_greenapi_chat_id("user@instagram") == "user@instagram"
+
+
+def test_whatsapp_qr_keeps_lid_jid_for_replies() -> None:
+    import uuid
+
+    from app.services.inbound.normalizer import normalize_whatsapp_qr, whatsapp_qr_reply_target
+
+    lid = "135450551414931@lid"
+    assert whatsapp_qr_reply_target("135450551414931", {"remote_jid": lid}) == lid
+    assert whatsapp_qr_reply_target("77017940910", {"remote_jid": "77017940910@s.whatsapp.net"}) == (
+        "77017940910@s.whatsapp.net"
+    )
+    normalized = normalize_whatsapp_qr(
+        bot_id=uuid.uuid4(),
+        from_phone="135450551414931",
+        message_text="Здравствуйте",
+        raw_payload={"remote_jid": lid},
+    )
+    assert normalized.channel_user_id == lid
+
+
+def test_whatsapp_qr_is_dispatched_from_provider_catch_all() -> None:
+    from app.api.endpoints import webhooks as webhooks_mod
+
+    assert "whatsapp-qr" not in webhooks_mod._BYOK_PROVIDERS
+    source = open(webhooks_mod.__file__, encoding="utf-8").read()
+    assert 'if key in {"whatsapp-qr", "whatsapp_qr"}' in source
+
+
+def test_instagram_oauth_url_opens_instagram(monkeypatch: pytest.MonkeyPatch) -> None:
+    import uuid
+
+    from app.core import config as config_mod
+
+    monkeypatch.setattr(config_mod.settings, "INSTAGRAM_APP_ID", "990602627938098")
+    monkeypatch.setattr(config_mod.settings, "INSTAGRAM_APP_SECRET", "ig-app-secret")
+    monkeypatch.setattr(config_mod.settings, "META_APP_ID", "990602627938098")
+    monkeypatch.setattr(config_mod.settings, "META_APP_SECRET", "ig-app-secret")
+    monkeypatch.setattr(config_mod.settings, "WEBHOOK_BASE_URL", "http://127.0.0.1")
+    monkeypatch.setattr(config_mod.settings, "JWT_SECRET_KEY", "test-jwt-secret-key-for-pytest-suite")
+
+    from app.services.instagram_oauth import build_instagram_authorize_url
+
+    url = build_instagram_authorize_url(bot_id=uuid.uuid4(), user_id=uuid.uuid4())
+    assert url.startswith("https://www.instagram.com/oauth/authorize")
+    assert "instagram_business_manage_messages" in url
+    assert "response_type=code" in url
+
+
 def test_crm_adapter_factory() -> None:
     amo = get_crm_adapter("amocrm")
     bitrix = get_crm_adapter("bitrix24", webhook_url="https://example.bitrix24.ru/rest/1/token/")

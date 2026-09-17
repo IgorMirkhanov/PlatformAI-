@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import suppress
 from typing import Any
@@ -124,23 +125,53 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
         raise
 
 
+# Persistent loop per Celery prefork process. ``asyncio.run`` closes the loop
+# after every task, which poisons Redis/httpx clients and SQLAlchemy pools
+# ("Event loop is closed" / "Future attached to a different loop").
+_celery_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def _dispose_loop_bound_resources() -> None:
+    """Drop engine pools and cached async clients bound to a dead loop."""
+    with suppress(Exception):
+        await engine.dispose()
+    with suppress(Exception):
+        from app.core.llm_cache import llm_response_cache
+
+        await llm_response_cache.aclose()
+    with suppress(Exception):
+        from app.services.llm.client import aclose_cached_openai_clients
+
+        await aclose_cached_openai_clients()
+
+
+def reset_celery_async_state() -> None:
+    """Reset loop-bound state after Celery fork (or a poisoned loop)."""
+    global _celery_loop
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_dispose_loop_bound_resources())
+    except Exception:
+        pass
+    finally:
+        with suppress(Exception):
+            loop.close()
+    if _celery_loop is not None and not _celery_loop.is_closed():
+        with suppress(Exception):
+            _celery_loop.close()
+    _celery_loop = None
+    with suppress(Exception):
+        asyncio.set_event_loop(None)
+
+
 def run_celery_async(coro: Any) -> Any:
-    """
-    Run an async coroutine from a Celery prefork worker safely.
+    """Run an async coroutine from a Celery prefork worker on a reused loop."""
+    global _celery_loop
 
-    SQLAlchemy/asyncpg connections are bound to the event loop that created
-    them. ``asyncio.run`` closes that loop after each call, so the next
-    ``asyncio.run`` must not reuse pooled connections from the previous loop.
-    Disposing the shared engine after each run keeps Celery pollers healthy.
-    """
-    import asyncio
-    from typing import Any as TypingAny
+    loop = _celery_loop
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _celery_loop = loop
 
-    async def _runner() -> TypingAny:
-        try:
-            return await coro
-        finally:
-            with suppress(Exception):
-                await engine.dispose()
-
-    return asyncio.run(_runner())
+    return loop.run_until_complete(coro)

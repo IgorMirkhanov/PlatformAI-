@@ -178,6 +178,11 @@ def build_gateway_providers(
         rest = tuple(pid for pid in preferred_order if pid != fallback_provider)
         preferred_order = rest[:1] + (fallback_provider,) + rest[1:]
 
+    # Free Groq/Gemini/Ollama chat must not cascade onto paid OpenRouter / vLLM.
+    if bool(getattr(settings, "is_free_llm_route", False)):
+        allowed = {"gemini", "groq", "ollama"}
+        preferred_order = tuple(pid for pid in preferred_order if pid in allowed)
+
     fallback_model = str(getattr(settings, "FALLBACK_LLM_MODEL", "") or "").strip()
     configured: list[BaseLLMProvider] = []
     stubs: list[BaseLLMProvider] = []
@@ -235,6 +240,13 @@ async def build_gateway_providers_for_organization(
     org_keys = await ai_keys_service.get_active_keys_map(db, organization_id)
     models = await ensure_model_cache(db)
     dynamic_providers = llm_model_service.build_dynamic_providers(models, org_api_keys=org_keys)
+    if bool(getattr(settings, "is_free_llm_route", False)):
+        dynamic_providers = [
+            provider
+            for provider in dynamic_providers
+            if str(getattr(provider, "provider_id", "") or "").strip().lower()
+            in {"gemini", "groq", "ollama"}
+        ]
     base_providers = build_gateway_providers(
         include_unconfigured=include_unconfigured,
         org_api_keys=org_keys,

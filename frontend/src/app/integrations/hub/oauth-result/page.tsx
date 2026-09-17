@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
+import { consumeOAuthReturnPath } from "@/lib/integrations/hubOAuthPopup";
 import { HUB_OAUTH_MESSAGE_TYPE } from "@/types/integration-hub";
 
 function OAuthResultInner() {
@@ -26,15 +27,22 @@ function OAuthResultInner() {
       window.setTimeout(() => window.close(), 250);
       return;
     }
+    const botId = params.get("bot_id");
+    const instagramReturn =
+      provider === "instagram" && botId
+        ? `/dashboard/channels-agent/${botId}/instagram`
+        : "/dashboard/channels";
     window.setTimeout(() => {
-      window.location.replace("/dashboard/integrations");
+      window.location.replace(consumeOAuthReturnPath(instagramReturn));
     }, 800);
   }, [connectionId, message, provider, status]);
 
   return (
     <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-sm text-zinc-400">
       <Loader2 className="h-5 w-5 animate-spin text-violet-400" />
-      {status === "connected" ? "Интеграция подключена. Можно закрыть окно." : "Завершение авторизации…"}
+      {status === "connected"
+        ? "Instagram подключён. Возвращаем в кабинет…"
+        : "Завершение авторизации…"}
     </div>
   );
 }

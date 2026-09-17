@@ -77,14 +77,20 @@ class ChannelsHubService:
         if channel_type == HubChannelType.WABA:
             return await self._connect_waba(db, bot, row, payload)
         if channel_type == HubChannelType.INSTAGRAM:
-            return await self._connect_token_channel(
-                db,
-                bot,
-                row,
-                payload,
-                token=payload.access_token or payload.api_key or payload.token,
-                reference=payload.reference_id or payload.page_id,
-                label="Instagram",
+            instance = (payload.reference_id or payload.page_id or "").strip()
+            token = (payload.access_token or payload.api_key or payload.token or "").strip()
+            if instance.isdigit() and len(token) >= 8:
+                return await self._connect_token_channel(
+                    db,
+                    bot,
+                    row,
+                    payload,
+                    token=token,
+                    reference=instance,
+                    label="Instagram",
+                )
+            raise ValueError(
+                "Нажмите «Войти через Instagram» — откроется страница входа Instagram."
             )
         if channel_type == HubChannelType.WAZZUP:
             return await self._connect_token_channel(
@@ -566,31 +572,58 @@ class ChannelsHubService:
         row.status = HubChannelStatus.CONNECTED
         webhook_url: str | None = None
         origin = resolve_webhook_base_url()
-        if row.channel_type in {
+        is_greenapi = row.channel_type in {
             HubChannelType.GREENAPI,
             HubChannelType.WHATSAPP_QR,
             HubChannelType.INSTAGRAM,
-        }:
+        }
+        delivery_mode = "webhook"
+        if is_greenapi:
+            from app.core.config import is_public_https_webhook_url
+            from app.services.greenapi_service import greenapi_service
+
+            instance = str(row.reference_id or "")
+            await greenapi_service.assert_authorized(instance, secret)
             webhook_url = f"{origin}/api/v1/webhooks/greenapi"
+            if is_public_https_webhook_url(webhook_url):
+                try:
+                    await greenapi_service.set_webhook_url(instance, secret, webhook_url)
+                except Exception as exc:
+                    logger.warning(
+                        "ChannelsHub.greenapi_webhook_register_failed | error={error}",
+                        error=str(exc),
+                    )
+                    delivery_mode = "polling"
+            else:
+                delivery_mode = "polling"
         elif row.channel_type == HubChannelType.WAZZUP:
             webhook_url = f"{origin}/api/v1/webhooks/wazzup"
 
         row.meta_data = {
             **(payload.meta_data or {}),
-            "provider": (
-                "greenapi"
-                if row.channel_type
-                in {
-                    HubChannelType.GREENAPI,
-                    HubChannelType.WHATSAPP_QR,
-                    HubChannelType.INSTAGRAM,
-                }
-                else label.lower()
-            ),
+            "provider": "greenapi" if is_greenapi else label.lower(),
             **({"webhook_url": webhook_url} if webhook_url else {}),
+            **({"delivery_mode": delivery_mode} if is_greenapi else {}),
         }
         row.updated_at = datetime.now(timezone.utc)
         await db.flush()
+
+        if is_greenapi and delivery_mode == "polling":
+            try:
+                from app.tasks.greenapi_poll_task import poll_greenapi_notifications
+
+                poll_greenapi_notifications.apply_async()
+            except Exception as exc:
+                logger.warning(
+                    "ChannelsHub.greenapi_poll_kick_failed | error={error}",
+                    error=str(exc),
+                )
+
+        hint = ""
+        if is_greenapi and delivery_mode == "polling":
+            hint = " Сообщения забираем опросом Green API (localhost без публичного HTTPS)."
+        elif webhook_url:
+            hint = f" Webhook: {webhook_url}"
 
         return ChannelConnectResponse(
             bot_id=bot.id,
@@ -599,8 +632,42 @@ class ChannelsHubService:
             connected=True,
             reference_id=row.reference_id,
             webhook_url=webhook_url,
-            message=f"{label} подключён."
-            + (f" Webhook: {webhook_url}" if webhook_url else ""),
+            message=f"{label} подключён.{hint}",
+        )
+
+    async def complete_instagram_oauth(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        *,
+        access_token: str,
+        ig_user_id: str,
+        username: str = "",
+    ) -> ChannelConnectResponse:
+        bot = await self._require_bot(db, bot_id)
+        row = await self._get_or_create_row(db, bot_id, HubChannelType.INSTAGRAM)
+        row.encrypted_token = encrypt_credential(access_token)
+        row.reference_id = (ig_user_id or "").strip() or None
+        row.status = HubChannelStatus.CONNECTED
+        origin = resolve_webhook_base_url()
+        webhook_url = f"{origin}/api/v1/webhooks/instagram/{bot.id}"
+        row.meta_data = {
+            "provider": "instagram_login",
+            "username": username,
+            "verify_token": secrets.token_urlsafe(18),
+            "webhook_url": webhook_url,
+        }
+        row.updated_at = datetime.now(timezone.utc)
+        await db.flush()
+        handle = f" @{username}" if username else ""
+        return ChannelConnectResponse(
+            bot_id=bot.id,
+            channel_type=HubChannelType.INSTAGRAM,
+            status=HubChannelStatus.CONNECTED,
+            connected=True,
+            reference_id=row.reference_id,
+            webhook_url=webhook_url,
+            message=f"Instagram{handle} подключён через вход в Instagram.",
         )
 
     async def _connect_web_widget(

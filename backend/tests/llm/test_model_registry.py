@@ -37,6 +37,8 @@ REQUIRED_MODELS = (
     "claude-4.5-haiku",
     "claude-4.1-opus",
     # Gemini
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -57,6 +59,7 @@ EXPECTED_ROUTING = {
     "o3-mini": "openai",
     "claude-4.6-sonnet": "anthropic",
     "claude-4.5-haiku": "anthropic",
+    "gemini-3.6-flash": "gemini",
     "gemini-2.5-flash": "gemini",
     "deepseek-reasoner": "deepseek",
     "glm-5-turbo": "glm",
