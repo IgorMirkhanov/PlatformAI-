@@ -132,6 +132,55 @@ local `.next` and rebuild so Next regenerates them.
 
 See [SECRETS_ROTATION.md](./SECRETS_ROTATION.md). Snapshot env + `./deploy.sh backup` first. Do not rotate `CREDENTIALS_ENCRYPTION_KEY` / `ENCRYPTION_KEY` without a restore plan.
 
+## 8a. chromadb CVEs — accepted risk, re-checked 2026-09-30
+
+`pip-audit` flags three CVEs against the pinned `chromadb==0.5.23`
+(`PYSEC-2026-3813`/`3814`/`3815`, aka `CVE-2026-45830`/`-45831`/`-45833`):
+authorization bypass and cross-tenant access in ChromaDB's own
+authn/RBAC layer, plus a `trust_remote_code` code-injection path.
+Checked upstream again just now — **`fix_versions` is still empty for
+all three**; the only versions ahead of 0.5.23 are 0.6.x/1.x, which
+change the client API enough that bumping blind (not tested here) risks
+breaking every RAG/knowledge-base code path for a same-day "fix" that
+isn't actually available yet.
+
+Why this is an accepted risk rather than an open gap, not just a
+deferred one — verified against this app's actual deployment, not
+assumed:
+
+- **All three CVEs are in ChromaDB's own authn/authz layer.** This app
+  never lets an end user's credentials reach ChromaDB directly — every
+  request is authorized by the FastAPI backend's own JWT + RBAC +
+  tenant scoping first, and only the backend's single internal service
+  credential ever talks to ChromaDB (`app/core/vector_db.py`). Tenant
+  isolation between organizations' knowledge bases is enforced by the
+  app itself (`org_{org_id}` collection naming + an `organization_id`
+  metadata filter on every query,
+  `app/services/rag/collections.py:org_collection_name`/
+  `build_org_where_filter`), not by ChromaDB's per-tenant RBAC — so a
+  bypass of ChromaDB's own RBAC doesn't give an external caller
+  anything they don't already have another, unrelated wall to get
+  through first.
+- **The ChromaDB container is not network-reachable from outside the
+  compose stack.** `docker-compose.prod.yml`'s `chromadb` service uses
+  `expose: ["8000"]`, not `ports:` — reachable only from sibling
+  containers on the internal `mpai_net` network, never from the host or
+  the internet. Exploiting any of these three CVEs requires code
+  execution on another container on that same internal network first,
+  at which point ChromaDB's RBAC is not the weak link.
+- The `trust_remote_code` code-injection path (`PYSEC-2026-3814`)
+  requires the `UPDATE_COLLECTION` permission on a networked-mode
+  ChromaDB *and* a caller able to point it at an attacker-controlled
+  model repo — this app's ingestion pipeline never does that.
+
+Action item, not closed forever: revisit at the next dependency sweep
+(`pip-audit` in CI, or manually every deploy) — either a 0.5.x patch
+ships, or budget real testing time for the 0.6.x/1.x API migration.
+Until then, keep `chromadb`'s `expose:`-only (never `ports:`) and set
+`CHROMA_AUTHN_PROVIDER`/`CHROMA_AUTH_TOKEN` in `.env.production` so a
+compromised sibling container at least needs a credential, not just
+network reach.
+
 ## 9. Test checklist
 
 See section “Checklist” in the ops summary / PR description, or run:
