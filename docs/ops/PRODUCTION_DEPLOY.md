@@ -390,6 +390,94 @@ keyless stub that can never serve traffic, so a single vendor outage takes
 configured — check for that line in the boot log before commercial launch,
 and set at least the primary + `FALLBACK_LLM_PROVIDER`'s key.
 
+## 14. Single-server runbook (one VPS, disk-constrained)
+
+For a single production server (no horizontal scale-out, no PgBouncer, no
+monitoring profile — see §13's disk math). Run as the deploy user, not root,
+once that user is in the `docker` group.
+
+**A. One-time server setup**
+
+```bash
+# Docker + Compose plugin (Debian/Ubuntu; adjust for your distro)
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER" && newgrp docker
+
+# Shallow clone — deploy.sh only needs the working tree, not full history
+git clone --depth 1 --branch main <repo-url> /opt/mpai
+cd /opt/mpai
+
+cp .env.production.example .env.production
+# Fill every CHANGE_ME_* (see §1) — JWT_SECRET_KEY / ENCRYPTION_KEY via:
+openssl rand -base64 32
+```
+
+**B. Point at pre-built images (§13) instead of building on this host**
+
+In `.env.production`, uncomment and set (lowercase GitHub owner):
+
+```bash
+BACKEND_IMAGE=ghcr.io/<owner>/mpai-backend
+FRONTEND_IMAGE=ghcr.io/<owner>/mpai-frontend
+WHATSAPP_IMAGE=ghcr.io/<owner>/mpai-whatsapp
+```
+
+```bash
+# GitHub PAT (classic or fine-grained) with read:packages, once:
+echo "$GHCR_PAT" | docker login ghcr.io -u <github-username> --password-stdin
+```
+
+**C. First deploy**
+
+```bash
+DEPLOY_MODE=pull ./deploy.sh
+./deploy.sh verify
+```
+
+Leave `ENABLE_MONITORING` unset — Prometheus/Grafana/cAdvisor stay off on
+this box (§13's disk math already assumes that).
+
+**D. Wire up CI auto-build → manual deploy (§13)**
+
+On GitHub, generate a dedicated deploy keypair **on your own machine**, not
+in any AI session — a production SSH private key shouldn't pass through
+chat history:
+
+```bash
+ssh-keygen -t ed25519 -C "mpai-deploy-ci" -f ./mpai_deploy_ed25519 -N ""
+```
+
+- Append `mpai_deploy_ed25519.pub`'s contents to the deploy user's
+  `~/.ssh/authorized_keys` **on the server**.
+- In the GitHub repo → Settings → Secrets and variables → Actions, add:
+  - `DEPLOY_HOST` — the server's IP/hostname
+  - `DEPLOY_USER` — the deploy user (not root)
+  - `DEPLOY_SSH_KEY` — `mpai_deploy_ed25519`'s **private** key, whole file
+  - `DEPLOY_PATH` — `/opt/mpai` (or wherever you cloned it)
+  - `NEXT_PUBLIC_OPERATOR_WS_TOKEN` — must match `.env.production`'s value
+    (§7, §13 — baked into the frontend image at build time)
+- Delete the local private key file once it's pasted into GitHub Secrets.
+
+Then: push to `main` → CI builds + pushes images automatically; when ready
+to ship, trigger the workflow manually (Actions → *Build & publish images* →
+*Run workflow* → `deploy: true`) — it SSHes in and runs
+`DEPLOY_MODE=pull ./deploy.sh` for you. Until secrets are added, the
+`deploy` job just doesn't run; build-and-push still works standalone.
+
+**E. Keep the disk from filling up (cron, as the deploy user)**
+
+```cron
+# crontab -e
+0 3 * * * cd /opt/mpai && DEPLOY_MODE=pull ./deploy.sh backup >> /var/log/mpai-backup.log 2>&1
+30 3 * * 0 docker system prune -af --filter "until=72h" >> /var/log/mpai-prune.log 2>&1
+```
+
+`deploy.sh` already prunes builder cache/dangling images after every deploy
+(`SKIP_PRUNE=1` to disable); this cron adds a weekly sweep independent of
+deploy frequency, and a nightly backup so a bad deploy is always recoverable
+from `./backups/<timestamp>/` (`BACKUP_RETENTION_DAYS`, default 14, caps its
+own growth).
+
 ## 13. CI build + registry pull (disk-constrained servers)
 
 By default `./deploy.sh` runs `docker compose build` **on the production
