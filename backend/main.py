@@ -323,6 +323,14 @@ app.add_middleware(
         "X-Tenant-ID",
         "X-Correlation-ID",
         "X-Impersonation-Token",
+        # Multi-tenant identity headers actually sent by the frontend
+        # (src/lib/api.ts buildAuthHeaders) on almost every authenticated
+        # request — missing these makes the browser's CORS preflight fail
+        # with 400 "Disallowed CORS headers" for the whole dashboard the
+        # moment frontend and backend are on different origins.
+        "X-User-Id",
+        "X-Company-Id",
+        "X-Organization-Id",
     ],
 )
 # Allow ngrok tunnel hosts (*.ngrok-free.dev / *.ngrok-free.app) alongside ALLOWED_HOSTS.

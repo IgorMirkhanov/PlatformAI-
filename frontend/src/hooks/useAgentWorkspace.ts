@@ -23,6 +23,9 @@ export function useAgentWorkspace(botId: string): UseAgentWorkspaceResult {
   const setActiveBotId = useBotStore((state) => state.setActiveBotId);
 
   useEffect(() => {
+    if (!botId) {
+      return;
+    }
     setActiveBotId(botId);
     if (!profile && !loading) {
       void loadAgentProfile(botId);
