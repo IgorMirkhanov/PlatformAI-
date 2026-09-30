@@ -205,7 +205,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
-    image: mpai-backend:${IMAGE_TAG:-latest}
+    # BACKEND_IMAGE defaults to a local tag (built on this host via `deploy.sh`).
+    # Set it to a registry path (e.g. ghcr.io/<owner>/mpai-backend) in
+    # .env.production to `docker compose pull` a pre-built image instead —
+    # see "CI build + registry pull" in docs/ops/PRODUCTION_DEPLOY.md.
+    image: ${BACKEND_IMAGE:-mpai-backend}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: [.env.production]
     environment:
@@ -244,7 +248,7 @@ services:
     build:
       context: ./whatsapp-service
       dockerfile: Dockerfile
-    image: mpai-whatsapp:${IMAGE_TAG:-latest}
+    image: ${WHATSAPP_IMAGE:-mpai-whatsapp}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: [.env.production]
     environment:
@@ -280,7 +284,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.prod
-    image: mpai-backend:${IMAGE_TAG:-latest}
+    image: ${BACKEND_IMAGE:-mpai-backend}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: [.env.production]
     environment:
@@ -325,7 +329,7 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
         NEXT_PUBLIC_OPERATOR_WS_TOKEN: ${NEXT_PUBLIC_OPERATOR_WS_TOKEN}
         API_INTERNAL_URL: ${API_INTERNAL_URL:-http://backend_api:8000}
-    image: mpai-frontend:${IMAGE_TAG:-latest}
+    image: ${FRONTEND_IMAGE:-mpai-frontend}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     env_file: [.env.production]
     environment:

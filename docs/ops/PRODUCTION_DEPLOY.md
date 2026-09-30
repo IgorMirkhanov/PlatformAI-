@@ -321,16 +321,18 @@ absolute numbers as directional, not a clean pooled-vs-direct comparison).
 
 ### LLM response cache hit-rate
 
-`app/core/llm_cache.py` only implements **exact-match** caching today —
-`get_semantic_cached_response` / `register_semantic_turn` are unimplemented
-stubs that always miss (no embedding index wired up yet). Don't tune a
-"semantic similarity threshold" that doesn't exist; if semantic caching gets
-built later, wire its hit/miss into the same `mpai_llm_cache_lookups_total`
-counter with `cache_type="semantic"`.
+`app/core/llm_cache.py` implements two tiers: **exact-match** (Redis) and
+**semantic** (`get_semantic_cached_response` / `register_semantic_turn`,
+embedding-based nearest-neighbor lookup in a per-bot ChromaDB collection,
+scoped by `prompt_version` + `cache_ver` + `model_name` so a prompt edit,
+cache invalidation, or model switch can never surface a stale/wrong-context
+answer). `LLM_SEMANTIC_CACHE_THRESHOLD` (default `0.92`) is the cosine-
+similarity floor for a semantic hit — tune it from the hit-rate query below,
+not by feel.
 
-Every exact-match lookup now increments
-`mpai_llm_cache_lookups_total{cache_type="exact",result="hit"|"miss"}`.
-Hit-rate query:
+Both tiers increment `mpai_llm_cache_lookups_total{cache_type,result}` with
+`cache_type` = `"exact"` or `"semantic"`. Hit-rate query (swap the label to
+check the other tier):
 
 ```promql
 sum(rate(mpai_llm_cache_lookups_total{cache_type="exact",result="hit"}[1h]))
@@ -387,4 +389,55 @@ keyless stub that can never serve traffic, so a single vendor outage takes
 2 of `{OPENAI,ANTHROPIC,GROQ,GEMINI,DEEPSEEK,OPENROUTER}_API_KEY` are
 configured — check for that line in the boot log before commercial launch,
 and set at least the primary + `FALLBACK_LLM_PROVIDER`'s key.
+
+## 13. CI build + registry pull (disk-constrained servers)
+
+By default `./deploy.sh` runs `docker compose build` **on the production
+host** — it needs the full source tree, `node_modules`, and pip/npm build
+caches on disk during the build, on top of the final images. On a small
+server (e.g. ~20 GB total) that build-time spike is the main disk risk.
+
+`.github/workflows/docker-publish.yml` builds the three custom images
+(`mpai-backend` — shared by `backend_api` and `celery_worker` —
+`mpai-frontend`, `mpai-whatsapp`) on GitHub's runners and pushes them to
+GHCR (`ghcr.io/<owner>/mpai-*`) on every push to `main` and on `v*` tags.
+The server then only ever pulls finished images — no source tree, no build
+toolchain, no build-cache spike there.
+
+**One-time server setup:**
+
+```bash
+# A GitHub PAT (classic or fine-grained) with `read:packages`, for a
+# machine/service account if you have one — not your personal password.
+echo "$GHCR_PAT" | docker login ghcr.io -u <github-username> --password-stdin
+```
+
+**In `.env.production`**, uncomment and set the three `*_IMAGE` vars (see the
+"Image source" block near `IMAGE_TAG`) to `ghcr.io/<owner>/mpai-backend` /
+`mpai-frontend` / `mpai-whatsapp`.
+
+**Each deploy** then becomes:
+
+```bash
+DEPLOY_MODE=pull ./deploy.sh
+```
+
+which runs `docker compose pull` instead of `build`, then the same
+backup → migrate → rolling-restart → verify sequence as a normal deploy.
+
+**Caveat — frontend build-args are baked in (§7 above):** if
+`NEXT_PUBLIC_OPERATOR_WS_TOKEN` or the API URL ever changes, the CI workflow's
+`build-args` must be updated (via the `NEXT_PUBLIC_OPERATOR_WS_TOKEN` repo
+secret) to match `.env.production`, and a new image built — pulling an old
+image after only rotating the value in `.env.production` silently keeps the
+stale token baked into the JS bundle.
+
+**Automatic deploy on push is deliberately not wired up.** The workflow's
+`deploy` job only runs when manually triggered (`workflow_dispatch` with
+`deploy: true`) and needs `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` /
+`DEPLOY_PATH` repository secrets — giving CI a standing SSH key into
+production is a real risk on a corporate box, so review before adding those
+secrets. Until then, deploy by hand after a build finishes:
+`docker login` once (above), then `DEPLOY_MODE=pull ./deploy.sh` on the
+server whenever you're ready to ship what CI built.
 
