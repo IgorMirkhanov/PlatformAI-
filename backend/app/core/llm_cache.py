@@ -1,7 +1,10 @@
-"""High-performance LLM response cache backed by Redis.
+"""LLM response cache — Redis exact-match plus a Chroma semantic fallback.
 
 Exact-match keys combine ``bot_id``, a prompt-version stamp, and a SHA-256 of the
-normalized user utterance. Semantic hooks are stubbed for a future embedding index.
+normalized user utterance. The semantic cache (below) catches near-duplicate
+phrasing exact-match misses on — embedding nearest-neighbor search in a
+per-bot Chroma collection, gated by the same prompt_version/cache_ver so it
+can never surface an answer from before the last prompt edit or invalidation.
 """
 
 from __future__ import annotations
@@ -22,7 +25,6 @@ from app.core.config import settings
 DEFAULT_LLM_CACHE_TTL_SECONDS: Final[int] = 24 * 60 * 60  # 24 hours
 _KEY_PREFIX: Final[str] = "llm:exact"
 _VERSION_PREFIX: Final[str] = "llm:ver"
-_SEMANTIC_PREFIX: Final[str] = "llm:semantic"
 
 
 @dataclass(frozen=True)
@@ -304,15 +306,6 @@ class LLMResponseCacheManager:
                     deleted += int(await client.delete(*keys))
                 if cursor == 0:
                     break
-            # Semantic registry stubs (future embeddings).
-            sem_pattern = f"{_SEMANTIC_PREFIX}:{bot_id}:*"
-            cursor = 0
-            while True:
-                cursor, keys = await client.scan(cursor=cursor, match=sem_pattern, count=200)
-                if keys:
-                    deleted += int(await client.delete(*keys))
-                if cursor == 0:
-                    break
             logger.info(
                 "LLMCache.invalidate_bot | bot_id={bot_id} deleted={deleted}",
                 bot_id=bot_id,
@@ -324,35 +317,169 @@ class LLMResponseCacheManager:
                 bot_id=bot_id,
                 error=str(exc),
             )
+
+        try:
+            from app.core.vector_db import purge_semantic_cache
+
+            await purge_semantic_cache(bot_id)
+        except Exception as exc:
+            # The bumped cache_ver already makes old semantic entries
+            # unreachable (queries filter on it) even if this best-effort
+            # cleanup fails — never let a Chroma outage break invalidation.
+            logger.warning(
+                "LLMCache.semantic_purge_failed | bot_id={bot_id} error={error}",
+                bot_id=bot_id,
+                error=str(exc),
+            )
         return deleted
 
     # ------------------------------------------------------------------
-    # Semantic match stubs (optional future embedding short-circuit)
+    # Semantic cache — Chroma nearest-neighbor lookup against past turns,
+    # scoped to the bot's current prompt_version + cache_ver so a prompt
+    # edit or invalidate_bot_cache() call can never surface a stale answer.
     # ------------------------------------------------------------------
 
     async def get_semantic_cached_response(
         self,
         *,
         bot_id: uuid.UUID | str | None,
+        system_prompt: str,
         incoming_text: str,
-        similarity_threshold: float = 0.92,
+        model_name: str | None = None,
+        similarity_threshold: float | None = None,
     ) -> CachedLLMResponse | None:
-        """Stub: semantic nearest-neighbor lookup against recent turn embeddings."""
-        _ = (bot_id, incoming_text, similarity_threshold)
-        logger.debug("LLMCache.semantic_stub_miss | reason=not_implemented")
-        return None
+        """Nearest-neighbor lookup against this bot's past turns.
+
+        Filtered to the bot's current ``cache_ver`` + ``prompt_version`` +
+        ``model_name`` so a prompt edit, an ``invalidate_bot_cache()`` call,
+        or a model switch can never surface a stale or cross-model answer —
+        only the similarity match itself is fuzzy. Never raises; a Chroma or
+        embedding-provider failure degrades to a miss, same as a Redis outage
+        does for the exact-match cache.
+        """
+        if not self._enabled or bot_id is None:
+            return None
+        text = normalize_incoming_text(incoming_text)
+        if not text:
+            return None
+
+        threshold = (
+            similarity_threshold
+            if similarity_threshold is not None
+            else float(getattr(settings, "LLM_SEMANTIC_CACHE_THRESHOLD", 0.92))
+        )
+        prompt_version = compute_prompt_version(system_prompt)
+        cache_ver = await self.get_bot_cache_version(bot_id)
+        resolved_model = (model_name or "").strip().lower()
+
+        try:
+            from app.core.embeddings import embed_text
+            from app.core.vector_db import query_semantic_cache
+
+            embedding = await embed_text(text)
+            hit = await query_semantic_cache(
+                str(bot_id),
+                embedding,
+                prompt_version=prompt_version,
+                cache_ver=cache_ver,
+                model_name=resolved_model,
+            )
+        except Exception as exc:
+            logger.warning(
+                "LLMCache.semantic_get_failed | bot_id={bot_id} error={error}",
+                bot_id=bot_id,
+                error=str(exc),
+            )
+            self._record_lookup("semantic", hit=False)
+            return None
+
+        if hit is None or hit["similarity"] < threshold:
+            self._record_lookup("semantic", hit=False)
+            return None
+
+        meta = hit["metadata"]
+        response_text = str(meta.get("response_text") or "").strip()
+        if not response_text:
+            self._record_lookup("semantic", hit=False)
+            return None
+
+        self._record_lookup("semantic", hit=True)
+        logger.debug(
+            "LLMCache.semantic_hit | bot_id={bot_id} similarity={similarity}",
+            bot_id=bot_id,
+            similarity=round(hit["similarity"], 4),
+        )
+        return CachedLLMResponse(
+            text=response_text,
+            cache_hit=True,
+            bot_id=str(bot_id),
+            model_name=str(meta.get("model_name") or "") or None,
+            prompt_version=str(meta.get("prompt_version") or "") or None,
+            input_tokens=int(meta.get("input_tokens") or 0),
+            output_tokens=int(meta.get("output_tokens") or 0),
+            total_tokens=int(meta.get("total_tokens") or 0),
+        )
 
     async def register_semantic_turn(
         self,
         *,
         bot_id: uuid.UUID | str | None,
+        system_prompt: str,
         incoming_text: str,
         response_text: str,
+        model_name: str | None = None,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
         embedding: list[float] | None = None,
     ) -> bool:
-        """Stub: register a conversational turn embedding for semantic short-circuit."""
-        _ = (bot_id, incoming_text, response_text, embedding)
-        return False
+        """Store a conversational turn for future semantic short-circuit."""
+        if not self._enabled or bot_id is None:
+            return False
+        text = normalize_incoming_text(incoming_text)
+        response = (response_text or "").strip()
+        if not text or not response:
+            return False
+
+        prompt_version = compute_prompt_version(system_prompt)
+        cache_ver = await self.get_bot_cache_version(bot_id)
+        resolved_model = (model_name or "").strip().lower()
+
+        try:
+            if embedding is None:
+                from app.core.embeddings import embed_text
+
+                embedding = await embed_text(text)
+            from app.core.vector_db import upsert_semantic_cache_entry
+
+            entry_id = hashlib.sha256(
+                "|".join([str(bot_id), cache_ver, prompt_version, resolved_model, text]).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            await upsert_semantic_cache_entry(
+                str(bot_id),
+                entry_id,
+                embedding,
+                text,
+                {
+                    "response_text": response,
+                    "model_name": resolved_model,
+                    "prompt_version": prompt_version,
+                    "cache_ver": cache_ver,
+                    "input_tokens": int(input_tokens or 0),
+                    "output_tokens": int(output_tokens or 0),
+                    "total_tokens": int(total_tokens or 0),
+                },
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "LLMCache.semantic_register_failed | bot_id={bot_id} error={error}",
+                bot_id=bot_id,
+                error=str(exc),
+            )
+            return False
 
 
 llm_response_cache = LLMResponseCacheManager()

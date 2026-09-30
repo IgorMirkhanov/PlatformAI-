@@ -624,6 +624,13 @@ class Settings:
     # LLM response cache (Redis exact-match, 24h default TTL)
     LLM_CACHE_ENABLED: bool = os.getenv("LLM_CACHE_ENABLED", "true").lower() == "true"
     LLM_CACHE_TTL_SECONDS: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", str(24 * 60 * 60)))
+    # Semantic cache (Chroma nearest-neighbor, exact-match miss only) — tune
+    # via mpai_llm_cache_lookups_total{cache_type="semantic"} hit-rate before
+    # widening; too low and near-duplicate greetings still cost a real LLM
+    # call, too high and unrelated questions get answered from a stale cache.
+    LLM_SEMANTIC_CACHE_THRESHOLD: float = float(
+        os.getenv("LLM_SEMANTIC_CACHE_THRESHOLD", "0.92")
+    )
 
     # Production vector store (optional dedicated Chroma server)
     # CHROMADB_* aliases accepted for ops naming consistency.
