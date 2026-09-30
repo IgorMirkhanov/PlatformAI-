@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -98,7 +99,8 @@ async def sandbox_websocket(websocket: WebSocket, bot_id: uuid.UUID) -> None:
             bot = await db.get(Bot, bot_id)
             if (
                 not shared
-                or presented != shared
+                or not presented
+                or not secrets.compare_digest(presented, shared)
                 or bot is None
                 or getattr(bot, "deleted_at", None) is not None
             ):

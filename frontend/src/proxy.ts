@@ -132,7 +132,7 @@ function redirectAuthenticatedAwayFromAuthPages(request: NextRequest): NextRespo
   return null;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (

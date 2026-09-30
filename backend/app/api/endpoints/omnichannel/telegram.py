@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from typing import Any
 
@@ -43,7 +44,7 @@ def _resolve_bot_token(bot_token_hash: str) -> str | None:
         return None
     expected = hash_bot_token(str(token))
     incoming = bot_token_hash.strip().lower()
-    if incoming != expected.lower():
+    if not secrets.compare_digest(incoming, expected.lower()):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Telegram webhook token hash mismatch.",
