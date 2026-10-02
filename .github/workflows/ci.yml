@@ -17,6 +17,20 @@ jobs:
   backend:
     name: Backend lint & test
     runs-on: ubuntu-latest
+    # The full suite (no path filter on "Pytest with coverage" below) includes rate
+    # limiting / impersonation / CRM tests that hard-depend on REDIS_URL's default
+    # (redis://localhost:6379/0, app/core/config.py) being reachable — unlike the
+    # Postgres-via-testcontainers tests, these have no skip-if-unavailable guard.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
