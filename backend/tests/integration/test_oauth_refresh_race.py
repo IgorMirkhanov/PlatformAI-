@@ -87,6 +87,12 @@ async def test_two_parallel_refresh_tasks_one_amocrm_http_call(
 
     monkeypatch.setattr("app.core.database.async_session_factory", real_session_factory)
     monkeypatch.setattr("app.db.session.async_session_factory", real_session_factory)
+    # oauth_refresh_task does `from app.core.database import async_session_factory` at
+    # module load, so it holds its own bound reference — patching app.core.database's
+    # attribute doesn't reach it. Without this, _refresh_expiring_oauth_tokens() falls
+    # through to the real default DATABASE_URL (localhost:5432), which doesn't exist in
+    # CI, instead of the testcontainers-backed real_session_factory under test.
+    monkeypatch.setattr("app.tasks.oauth_refresh_task.async_session_factory", real_session_factory)
     monkeypatch.setattr(CRMOrchestrator, "_amocrm_token_request", slow_token_request)
 
     results = await asyncio.gather(
