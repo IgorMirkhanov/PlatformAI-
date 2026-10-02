@@ -964,3 +964,131 @@ async def similarity_search_detailed(
             error=str(exc),
         )
         return []
+
+
+# ---------------------------------------------------------------------------
+# Semantic LLM response cache — near-duplicate user turns short-circuit the
+# LLM call. Separate per-bot collection from the knowledge-base one above
+# (``semcache_bot_{bot_id}`` vs ``bot_{bot_id}``) so purging cached turns
+# never touches uploaded documents, and vice versa.
+# ---------------------------------------------------------------------------
+
+
+def semantic_cache_collection_name(bot_id: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", str(bot_id).strip())
+    return f"semcache_bot_{cleaned}"[:128]
+
+
+def _get_semantic_cache_collection(bot_id: str) -> Collection:
+    client = _get_chroma_client()
+    name = semantic_cache_collection_name(bot_id)
+    return client.get_or_create_collection(
+        name=name,
+        metadata={"hnsw:space": "cosine", "bot_id": str(bot_id)},
+    )
+
+
+def _sync_query_semantic_cache(
+    bot_id: str,
+    embedding: list[float],
+    *,
+    prompt_version: str,
+    cache_ver: str,
+    model_name: str,
+) -> dict[str, Any] | None:
+    collection = _get_semantic_cache_collection(bot_id)
+    if collection.count() == 0:
+        return None
+    results = collection.query(
+        query_embeddings=[embedding],
+        n_results=1,
+        where={
+            "$and": [
+                {"prompt_version": prompt_version},
+                {"cache_ver": cache_ver},
+                {"model_name": model_name},
+            ]
+        },
+    )
+    documents = (results.get("documents") or [[]])[0]
+    if not documents:
+        return None
+    distances = (results.get("distances") or [[]])[0]
+    metadatas = (results.get("metadatas") or [[]])[0]
+    distance = float(distances[0]) if distances else 1.0
+    similarity = max(0.0, min(1.0, 1.0 - distance))
+    return {
+        "similarity": similarity,
+        "text": str(documents[0]),
+        "metadata": dict(metadatas[0] or {}),
+    }
+
+
+async def query_semantic_cache(
+    bot_id: str,
+    embedding: list[float],
+    *,
+    prompt_version: str,
+    cache_ver: str,
+    model_name: str,
+) -> dict[str, Any] | None:
+    """Nearest-neighbor lookup in the bot's semantic cache; ``None`` on miss."""
+    return await asyncio.to_thread(
+        _sync_query_semantic_cache,
+        str(bot_id),
+        embedding,
+        prompt_version=prompt_version,
+        cache_ver=cache_ver,
+        model_name=model_name,
+    )
+
+
+def _sync_upsert_semantic_cache_entry(
+    bot_id: str,
+    entry_id: str,
+    embedding: list[float],
+    document_text: str,
+    metadata: dict[str, Any],
+) -> None:
+    collection = _get_semantic_cache_collection(bot_id)
+    collection.upsert(
+        ids=[entry_id],
+        embeddings=[embedding],
+        documents=[document_text],
+        metadatas=[metadata],
+    )
+
+
+async def upsert_semantic_cache_entry(
+    bot_id: str,
+    entry_id: str,
+    embedding: list[float],
+    document_text: str,
+    metadata: dict[str, Any],
+) -> None:
+    await asyncio.to_thread(
+        _sync_upsert_semantic_cache_entry,
+        str(bot_id),
+        entry_id,
+        embedding,
+        document_text,
+        metadata,
+    )
+
+
+def _sync_purge_semantic_cache(bot_id: str) -> None:
+    client = _get_chroma_client()
+    try:
+        client.delete_collection(name=semantic_cache_collection_name(bot_id))
+    except Exception as exc:
+        # Collection may not exist yet — treat as success (nothing to purge).
+        logger.debug(
+            "VectorDB.semantic_cache_purge_skipped | bot_id={bot_id} error={error}",
+            bot_id=bot_id,
+            error=str(exc),
+        )
+
+
+async def purge_semantic_cache(bot_id: str) -> None:
+    """Drop every cached turn for this bot (called on prompt/knowledge changes)."""
+    await asyncio.to_thread(_sync_purge_semantic_cache, str(bot_id))

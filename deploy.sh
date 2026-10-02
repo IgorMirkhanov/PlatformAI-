@@ -348,10 +348,15 @@ run_migrations() {
 }
 
 rolling_restart_apps() {
-  log "Parallel image build (backend shared by API+Celery, frontend, whatsapp)..."
-  compose build --parallel backend_api frontend_app whatsapp_service
-  # Ensure celery image tag matches backend_api (same Dockerfile context).
-  compose build celery_worker
+  if [[ "${DEPLOY_MODE:-build}" == "pull" ]]; then
+    log "Pulling pre-built images (BACKEND_IMAGE/FRONTEND_IMAGE/WHATSAPP_IMAGE)..."
+    compose pull backend_api frontend_app whatsapp_service celery_worker
+  else
+    log "Parallel image build (backend shared by API+Celery, frontend, whatsapp)..."
+    compose build --parallel backend_api frontend_app whatsapp_service
+    # Ensure celery image tag matches backend_api (same Dockerfile context).
+    compose build celery_worker
+  fi
 
   log "Starting / refreshing data plane..."
   compose up -d postgres redis chromadb
@@ -459,6 +464,9 @@ Usage: ./deploy.sh [command]
   help               Show this message
 
 Env flags:
+  DEPLOY_MODE=pull              Pull BACKEND_IMAGE/FRONTEND_IMAGE/WHATSAPP_IMAGE
+                                 from a registry instead of building locally
+                                 (default: build) — see docs/ops/PRODUCTION_DEPLOY.md
   SKIP_PRUNE=1
   SKIP_SQL_MIGRATIONS=1
   ALLOW_SELF_SIGNED=0          (default; set 1 only for TLS bootstrap)

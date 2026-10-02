@@ -22,6 +22,9 @@ from app.core import vector_db
         vector_db.list_document_chunks,
         vector_db.similarity_search,
         vector_db.similarity_search_detailed,
+        vector_db.query_semantic_cache,
+        vector_db.upsert_semantic_cache_entry,
+        vector_db.purge_semantic_cache,
     ],
 )
 def test_public_vector_apis_are_async(async_fn: Any) -> None:
@@ -198,3 +201,93 @@ async def test_event_loop_stays_responsive_during_to_thread(
 
     assert removed == 1
     assert ticks >= 3, "event loop should keep ticking while Chroma work is offloaded"
+
+
+# ---------------------------------------------------------------------------
+# Semantic LLM cache — separate per-bot collection from the KB one above.
+# ---------------------------------------------------------------------------
+
+
+def test_semantic_cache_collection_name_is_isolated_from_kb_collection() -> None:
+    bot_id = "bot-1"
+    assert vector_db.semantic_cache_collection_name(bot_id) != vector_db.bot_collection_name(
+        bot_id
+    )
+    assert vector_db.semantic_cache_collection_name(bot_id) == "semcache_bot_bot-1"
+
+
+def test_sync_query_semantic_cache_short_circuits_empty_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = MagicMock()
+    collection.count.return_value = 0
+    monkeypatch.setattr(vector_db, "_get_semantic_cache_collection", lambda _bot_id: collection)
+
+    result = vector_db._sync_query_semantic_cache(
+        "bot-1", [0.1, 0.2], prompt_version="pv1", cache_ver="0", model_name="gpt-4o-mini"
+    )
+
+    assert result is None
+    collection.query.assert_not_called()
+
+
+def test_sync_query_semantic_cache_filters_by_prompt_cache_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = MagicMock()
+    collection.count.return_value = 1
+    collection.query.return_value = {
+        "documents": [["здравствуйте какой у вас режим работы"]],
+        "distances": [[0.1]],
+        "metadatas": [[{"response_text": "Мы работаем с 9 до 18.", "model_name": "gpt-4o-mini"}]],
+    }
+    monkeypatch.setattr(vector_db, "_get_semantic_cache_collection", lambda _bot_id: collection)
+
+    result = vector_db._sync_query_semantic_cache(
+        "bot-1",
+        [0.1, 0.2],
+        prompt_version="pv1",
+        cache_ver="3",
+        model_name="gpt-4o-mini",
+    )
+
+    assert result is not None
+    assert result["similarity"] == pytest.approx(0.9)
+    assert result["metadata"]["response_text"] == "Мы работаем с 9 до 18."
+
+    where = collection.query.call_args.kwargs["where"]
+    assert {"prompt_version": "pv1"} in where["$and"]
+    assert {"cache_ver": "3"} in where["$and"]
+    assert {"model_name": "gpt-4o-mini"} in where["$and"]
+
+
+def test_sync_upsert_semantic_cache_entry_writes_document_and_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = MagicMock()
+    monkeypatch.setattr(vector_db, "_get_semantic_cache_collection", lambda _bot_id: collection)
+
+    vector_db._sync_upsert_semantic_cache_entry(
+        "bot-1",
+        "entry-1",
+        [0.1, 0.2],
+        "normalized text",
+        {"response_text": "answer", "model_name": "gpt-4o-mini"},
+    )
+
+    collection.upsert.assert_called_once_with(
+        ids=["entry-1"],
+        embeddings=[[0.1, 0.2]],
+        documents=["normalized text"],
+        metadatas=[{"response_text": "answer", "model_name": "gpt-4o-mini"}],
+    )
+
+
+def test_sync_purge_semantic_cache_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MagicMock()
+    client.delete_collection.side_effect = Exception("collection does not exist")
+    monkeypatch.setattr(vector_db, "_get_chroma_client", lambda: client)
+
+    vector_db._sync_purge_semantic_cache("bot-1")  # must not raise
+
+    client.delete_collection.assert_called_once_with(name="semcache_bot_bot-1")

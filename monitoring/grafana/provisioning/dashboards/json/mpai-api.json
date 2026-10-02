@@ -65,6 +65,66 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "title": "LLM completion result (real traffic)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(mpai_llm_completions_total[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "title": "LLM provider latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ai_provider_latency_seconds_bucket[5m])) by (le, provider))",
+          "legendFormat": "{{provider}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "id": 7,
+      "title": "LLM exact-match cache hit rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(mpai_llm_cache_lookups_total{cache_type=\"exact\",result=\"hit\"}[15m])) / clamp_min(sum(rate(mpai_llm_cache_lookups_total{cache_type=\"exact\"}[15m])), 0.001)",
+          "legendFormat": "hit rate",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 8,
+      "title": "Rate-limit rejections (429) by scope",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum by (scope) (increase(mpai_rate_limit_exceeded_total[5m]))",
+          "legendFormat": "{{scope}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
@@ -74,5 +134,5 @@
   "timezone": "browser",
   "title": "MP.AI API",
   "uid": "mpai-api",
-  "version": 1
+  "version": 2
 }

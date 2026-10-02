@@ -19,7 +19,52 @@ from app.services.webhook_service import process_inbound_message
 WAZZUP_API_BASE = (settings.WAZZUP_API_BASE_URL or "https://api.wazzup24.com/v3").rstrip("/")
 
 
+class WazzupError(ValueError):
+    """Tenant-visible Wazzup failure."""
+
+
 class WazzupService:
+    async def assert_authorized(self, api_key: str, channel_id: str | None = None) -> None:
+        """Validate a tenant API key (and optional channelId) against Wazzup before connecting.
+
+        Mirrors ``greenapi_service.assert_authorized`` so every channel connect
+        path performs a real, live credential check instead of trusting whatever
+        was pasted into the form.
+        """
+        secret = (api_key or "").strip()
+        if len(secret) < 8:
+            raise WazzupError("API Key Wazzup слишком короткий.")
+        url = f"{WAZZUP_API_BASE}/channels"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {secret}"},
+                )
+        except httpx.RequestError as exc:
+            raise WazzupError(f"Wazzup недоступен: {exc}") from exc
+        if response.status_code in {401, 403}:
+            raise WazzupError("API-ключ Wazzup отклонён. Проверьте данные в кабинете Wazzup24.")
+        if response.status_code >= 400:
+            raise WazzupError("Wazzup отклонил запрос при проверке ключа.")
+        try:
+            raw_channels = response.json()
+        except Exception as exc:
+            raise WazzupError("Wazzup вернул не-JSON при проверке ключа.") from exc
+        items = raw_channels if isinstance(raw_channels, list) else []
+        if isinstance(raw_channels, dict):
+            inner = raw_channels.get("channels") or raw_channels.get("data") or []
+            items = inner if isinstance(inner, list) else []
+        cid = (channel_id or "").strip()
+        if cid and items:
+            known = {
+                str(item.get("channelId") or item.get("id") or "").strip()
+                for item in items
+                if isinstance(item, dict)
+            }
+            if cid not in known:
+                raise WazzupError("Указанный Channel ID не найден в аккаунте Wazzup.")
+
     def extract_channel_id(self, body: dict[str, Any]) -> str | None:
         """Pull Wazzup ``channelId`` from a webhook payload (top-level or messages)."""
         top = body.get("channelId") or body.get("channel_id")

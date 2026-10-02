@@ -1,0 +1,108 @@
+# Builds the three custom images (backend/Celery share one image, frontend,
+# whatsapp-service) off the production host and pushes them to GHCR, so a
+# disk-constrained server only ever runs `docker compose pull` — see
+# docs/ops/PRODUCTION_DEPLOY.md "CI build + registry pull".
+
+name: Build & publish images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: "Also deploy to the production server over SSH after pushing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    name: Build & push
+    runs-on: ubuntu-latest
+    outputs:
+      owner: ${{ steps.owner.outputs.lc }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase image owner (GHCR requires lowercase repo paths)
+        id: owner
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push backend (shared by backend_api + celery_worker)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile.prod
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-backend:latest
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-backend:${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build & push frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile.prod
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-frontend:latest
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-frontend:${{ github.sha }}
+          # NEXT_PUBLIC_* and API_INTERNAL_URL are baked in at build time (see
+          # docs/ops/PRODUCTION_DEPLOY.md §7) — these MUST match .env.production
+          # on the server, or the deployed frontend calls the wrong API / carries
+          # a stale operator WS token.
+          build-args: |
+            NEXT_PUBLIC_API_URL=/api
+            NEXT_PUBLIC_OPERATOR_WS_TOKEN=${{ secrets.NEXT_PUBLIC_OPERATOR_WS_TOKEN }}
+            API_INTERNAL_URL=http://backend_api:8000
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Build & push whatsapp-service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./whatsapp-service
+          file: ./whatsapp-service/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-whatsapp:latest
+            ghcr.io/${{ steps.owner.outputs.lc }}/mpai-whatsapp:${{ github.sha }}
+          cache-from: type=gha,scope=whatsapp
+          cache-to: type=gha,mode=max,scope=whatsapp
+
+  deploy:
+    name: Deploy to production
+    needs: build-and-push
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Pull + rolling restart over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            IMAGE_TAG=${{ github.sha }} DEPLOY_MODE=pull ./deploy.sh

@@ -6,10 +6,12 @@ import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import sys
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import Update
 
 from app.core.security import encrypt_credential, hash_bot_token
 from app.models.core_models import Bot, BotFlow, Client, Company, PlatformType, UserRole
@@ -203,7 +205,27 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
         def scalar_one(self) -> Any:
             return bot
 
+    class _BotUpdateResult:
+        def __init__(self, new_balance: int) -> None:
+            self._new_balance = new_balance
+
+        def one_or_none(self) -> Any:
+            return (self._new_balance,)
+
     async def _db_execute(stmt: Any, *args: Any, **kwargs: Any) -> Any:
+        # bot_billing_service.debit_credits() now does an atomic
+        # UPDATE bots ... RETURNING wallet_balance (populate_existing fix for
+        # SELECT FOR UPDATE + identity-map staleness under concurrency).
+        if isinstance(stmt, Update) and getattr(stmt.table, "name", "") == "bots":
+            params = stmt.compile().params
+            debit = next(
+                (v for k, v in params.items() if k.startswith("wallet_balance") and isinstance(v, int)),
+                0,
+            )
+            bot.wallet_balance = int(bot.wallet_balance or 0) - int(debit)
+            return _BotUpdateResult(bot.wallet_balance)
+        # bot_billing_service.get_bot() does select(Bot).where(...) to check
+        # subscription/wallet state; everything else keeps the graceful empty result.
         froms = getattr(stmt, "froms", None) or ()
         names = " ".join(str(getattr(item, "name", item)) for item in froms).lower()
         if "bots" in names:
@@ -330,6 +352,8 @@ async def test_e2e_telegram_webhook_flow_engine_llm_gateway_billing(e2e_bot_stac
     assert result["status"] == "processed"
     assert result.get("bot_silent") is not True
     assert provider.complete_calls == 1
+    # LLM spend is billed to the bot's own wallet (bot_billing_service), not the
+    # org-level wallet mock, since bots gained their own subscription + credit wallet.
     assert bot.wallet_balance == 50_000 - expected_credits
     assert wallet.deduct_credits.await_count == 0
 

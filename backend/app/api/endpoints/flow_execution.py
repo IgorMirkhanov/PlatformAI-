@@ -5,13 +5,23 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_bot_access
+from app.core.config import settings
 from app.core.database import async_session_factory, get_db
+from app.core.rate_limit import limiter, rate_limit_key_bot
 from app.core.rbac import Permission
 from app.core.ws_auth import require_ws_bot_access
 from app.models.core_models import Bot
@@ -44,7 +54,9 @@ class ExecuteResponse(BaseModel):
     response_model=ExecuteResponse,
     summary="Execute one turn of the published (or draft) flow graph",
 )
+@limiter.limit(settings.RATE_LIMIT_EXECUTE, key_func=rate_limit_key_bot)
 async def execute_bot_flow(
+    request: Request,
     bot_id: uuid.UUID,
     payload: ExecuteRequest,
     db: AsyncSession = Depends(get_db),

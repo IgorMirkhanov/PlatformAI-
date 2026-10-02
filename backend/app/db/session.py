@@ -19,6 +19,16 @@ from starlette.responses import Response
 from app.core.config import settings
 
 # Shared async engine — pool sized for concurrent tenant traffic.
+#
+# statement_timeout/lock_timeout/idle_in_transaction_session_timeout are NOT
+# set here via asyncpg's server_settings (Postgres startup-packet params)
+# anymore — PgBouncer in transaction-pooling mode only forwards a fixed
+# whitelist of startup parameters and rejects the rest with "unsupported
+# startup parameter" (confirmed against a real PgBouncer instance), which
+# broke every request the moment PgBouncer went in front of the API. They are
+# instead set as ALTER DATABASE defaults (migration 067_db_session_timeouts)
+# — Postgres applies them to every new backend session either way, pooled or
+# not.
 engine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
@@ -27,13 +37,7 @@ engine = create_async_engine(
     pool_timeout=settings.DB_POOL_TIMEOUT,
     pool_pre_ping=True,
     pool_recycle=settings.DB_POOL_RECYCLE,
-    connect_args={
-        "server_settings": {
-            "statement_timeout": "30000",
-            "lock_timeout": "10000",
-            "idle_in_transaction_session_timeout": "60000",
-        }
-    },
+    connect_args={"statement_cache_size": 0} if settings.DB_PGBOUNCER_COMPAT else {},
 )
 
 async_session_factory = async_sessionmaker(

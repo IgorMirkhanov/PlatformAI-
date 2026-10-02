@@ -1603,10 +1603,11 @@ class AIOrchestrator:
                 temperature=resolved_temperature,
             )
             if cached is None:
-                # Optional semantic stub — no-op until embedding registry is enabled.
                 cached = await llm_response_cache.get_semantic_cached_response(
                     bot_id=bot_id,
+                    system_prompt=system_prompt,
                     incoming_text=incoming_text,
+                    model_name=resolved_model,
                 )
 
         if cached is not None:
@@ -1865,8 +1866,13 @@ class AIOrchestrator:
             )
             await llm_response_cache.register_semantic_turn(
                 bot_id=bot_id,
+                system_prompt=system_prompt,
                 incoming_text=incoming_text,
                 response_text=completion.text,
+                model_name=completion.model_name or resolved_model,
+                input_tokens=completion.input_tokens,
+                output_tokens=completion.output_tokens,
+                total_tokens=completion.total_tokens,
             )
         return completion
 

@@ -597,6 +597,9 @@ class ChannelsHubService:
             else:
                 delivery_mode = "polling"
         elif row.channel_type == HubChannelType.WAZZUP:
+            from app.services.wazzup_service import wazzup_service
+
+            await wazzup_service.assert_authorized(secret, row.reference_id)
             webhook_url = f"{origin}/api/v1/webhooks/wazzup"
 
         row.meta_data = {

@@ -29,9 +29,10 @@ class Settings:
         os.getenv("INTERNAL_SERVICE_API_KEY") or os.getenv("SERVICE_API_KEY") or None
     )
 
-    # Rate limiting (slowapi)
+    # Rate limiting (slowapi, Redis-backed — see app/core/rate_limit.py)
     RATE_LIMIT_ENABLED: bool = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "120/minute")
+    RATE_LIMIT_EXECUTE: str = os.getenv("RATE_LIMIT_EXECUTE", "60/minute")
 
     # Sentry (optional)
     SENTRY_DSN: str | None = os.getenv("SENTRY_DSN") or None
@@ -572,6 +573,14 @@ class Settings:
     DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", "10"))
     DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    # Set to true when DATABASE_URL points at PgBouncer in transaction-pooling
+    # mode: asyncpg's client-side prepared-statement cache assumes a stable
+    # backend connection, but PgBouncer can hand a query to a different
+    # Postgres backend on every transaction, causing
+    # "DuplicatePreparedStatementError" / "prepared statement does not
+    # exist" under real traffic (confirmed against a live PgBouncer 1.22).
+    # Disabling the cache is the fix asyncpg's own error message recommends.
+    DB_PGBOUNCER_COMPAT: bool = os.getenv("DB_PGBOUNCER_COMPAT", "false").strip().lower() == "true"
 
     # Flow Builder engine — hop limit + Redis session TTL.
     FLOW_MAX_EXECUTION_STEPS: int = int(os.getenv("FLOW_MAX_EXECUTION_STEPS", "50"))
@@ -615,6 +624,13 @@ class Settings:
     # LLM response cache (Redis exact-match, 24h default TTL)
     LLM_CACHE_ENABLED: bool = os.getenv("LLM_CACHE_ENABLED", "true").lower() == "true"
     LLM_CACHE_TTL_SECONDS: int = int(os.getenv("LLM_CACHE_TTL_SECONDS", str(24 * 60 * 60)))
+    # Semantic cache (Chroma nearest-neighbor, exact-match miss only) — tune
+    # via mpai_llm_cache_lookups_total{cache_type="semantic"} hit-rate before
+    # widening; too low and near-duplicate greetings still cost a real LLM
+    # call, too high and unrelated questions get answered from a stale cache.
+    LLM_SEMANTIC_CACHE_THRESHOLD: float = float(
+        os.getenv("LLM_SEMANTIC_CACHE_THRESHOLD", "0.92")
+    )
 
     # Production vector store (optional dedicated Chroma server)
     # CHROMADB_* aliases accepted for ops naming consistency.

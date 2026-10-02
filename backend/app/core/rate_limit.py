@@ -93,8 +93,26 @@ def rate_limit_key_crm_public(request: Request) -> str:
     return rate_limit_key_ip(request)
 
 
+def rate_limit_key_bot(request: Request) -> str:
+    """
+    Bucket by the ``bot_id`` path parameter so one bot cannot exhaust the quota
+    shared by every visitor behind the same IP (widget/proxy/NAT traffic), and
+    so a flood aimed at one bot doesn't need an org lookup to be scoped.
+    """
+    bot_id = request.path_params.get("bot_id")
+    if bot_id:
+        return f"bot:{bot_id}"
+    return rate_limit_key_ip(request)
+
+
+# Redis-backed storage: an in-memory Limiter only counts requests seen by the
+# single worker process that handled them, so with --workers N (or more than
+# one instance behind a load balancer) the real ceiling is N times looser than
+# configured. Every other subsystem here already requires Redis, so this adds
+# no new runtime dependency.
 limiter = Limiter(
     key_func=rate_limit_key_ip,
     default_limits=[settings.RATE_LIMIT_DEFAULT] if settings.RATE_LIMIT_ENABLED else [],
+    storage_uri=settings.REDIS_URL,
     enabled=settings.RATE_LIMIT_ENABLED,
 )

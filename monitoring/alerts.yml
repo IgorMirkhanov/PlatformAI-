@@ -56,6 +56,49 @@ groups:
           summary: "Stripe webhook handler failures"
           description: "{{ $value }} Stripe webhook failures in 15m. Replay events from Stripe Dashboard after fix."
 
+      - alert: MpaiRateLimitSpike
+        expr: increase(mpai_rate_limit_exceeded_total[10m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: rate_limit
+        annotations:
+          summary: "Sustained 429s on {{ $labels.scope }}"
+          description: >
+            {{ $value }} rate-limit rejections in 10m on scope={{ $labels.scope }}.
+            Check `RateLimit.exceeded` log lines (path includes the bot/org id) to
+            see if this is one bot hammering /execute (abuse, or its plan's limit
+            is too low) or a broad spike (undersized RATE_LIMIT_EXECUTE / RATE_LIMIT_DEFAULT).
+
+      - alert: MpaiLLMPipelineDegraded
+        expr: |
+          sum(rate(mpai_llm_completions_total{result!="success"}[10m]))
+          /
+          clamp_min(sum(rate(mpai_llm_completions_total[10m])), 0.001)
+          > 0.2
+        for: 5m
+        labels:
+          severity: critical
+          service: llm_gateway
+        annotations:
+          summary: "LLM gateway completion failure rate above 20%"
+          description: >
+            {{ $value | humanizePercentage }} of LLM completion attempts (real
+            /execute traffic, all providers combined) failed over 10m. Check
+            ai_provider_latency_seconds and provider circuit-breaker state —
+            this is the earliest signal that /execute is timing out under load,
+            well before end users report it.
+
+      - alert: MpaiLLMPipelineSlow
+        expr: histogram_quantile(0.95, sum(rate(ai_provider_latency_seconds_bucket[10m])) by (le)) > 8
+        for: 10m
+        labels:
+          severity: warning
+          service: llm_gateway
+        annotations:
+          summary: "LLM provider p95 latency above 8s"
+          description: "p95 completion latency is {{ $value }}s over 10m — /execute callers are likely hitting client-side timeouts."
+
   - name: mpai.infra
     interval: 30s
     rules:

@@ -301,33 +301,63 @@ def _bind_repos(monkeypatch: pytest.MonkeyPatch, store: Store) -> None:
     monkeypatch.setattr(quota_mod, "deal_repository", _deals, raising=False)
     monkeypatch.setattr(quota_mod, "automation_rule_repository", _rules, raising=False)
 
-    # Instance helpers (services call self._contacts / self._deals, not the factory directly)
-    contact_service._contacts = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeContactRepo(store, organization_id)
+    # Instance helpers (services call self._contacts / self._deals, not the
+    # factory directly). These are process-wide singletons shared with every
+    # other test module, so use monkeypatch — not a raw assignment — or the
+    # override leaks past this test and breaks whichever test runs next.
+    monkeypatch.setattr(
+        contact_service,
+        "_contacts",
+        lambda db, organization_id: FakeContactRepo(store, organization_id),
+        raising=False,
     )
-    contact_service._accounts = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeAccountRepo(store, organization_id)
+    monkeypatch.setattr(
+        contact_service,
+        "_accounts",
+        lambda db, organization_id: FakeAccountRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._deals = (  # type: ignore[method-assign]
-        lambda db, organization_id, **_kw: FakeDealRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_deals",
+        lambda db, organization_id, **_kw: FakeDealRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._deals_unscoped = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeDealRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_deals_unscoped",
+        lambda db, organization_id: FakeDealRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._pipelines = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakePipelineRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_pipelines",
+        lambda db, organization_id: FakePipelineRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._stages = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeStageRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_stages",
+        lambda db, organization_id: FakeStageRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._contacts = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeContactRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_contacts",
+        lambda db, organization_id: FakeContactRepo(store, organization_id),
+        raising=False,
     )
-    deal_service._accounts = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeAccountRepo(store, organization_id)
+    monkeypatch.setattr(
+        deal_service,
+        "_accounts",
+        lambda db, organization_id: FakeAccountRepo(store, organization_id),
+        raising=False,
     )
-    automation_rule_service._repo = (  # type: ignore[method-assign]
-        lambda db, organization_id: FakeAutomationRepo(store, organization_id)
+    monkeypatch.setattr(
+        automation_rule_service,
+        "_repo",
+        lambda db, organization_id: FakeAutomationRepo(store, organization_id),
+        raising=False,
     )
 
 
