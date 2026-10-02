@@ -206,7 +206,10 @@ async def test_crm_full_lifecycle_real_db(
         wh_resp = await client.post(
             "/api/v1/crm/webhooks",
             json={
-                "target_url": "https://partner.example.com/hooks/crm",
+                # assert_safe_public_https_url requires a resolvable public host;
+                # partner.example.com has no DNS record at all (not an environment
+                # limitation — it never resolves anywhere), unlike bare example.com.
+                "target_url": "https://example.com/hooks/crm",
                 "event_types": ["deal.closed"],
             },
         )
