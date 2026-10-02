@@ -440,6 +440,12 @@ class Settings:
                 or raw.lower().startswith("gpt-")
             ):
                 return gemini_model
+        if provider == "openrouter":
+            if not raw:
+                return "openai/gpt-4o-mini"
+            if "/" not in raw:
+                return f"openai/{raw}"
+            return raw
         return raw or "gpt-4o-mini"
 
     def effective_chat_model(self, model_name: str | None = None) -> str:
@@ -455,6 +461,13 @@ class Settings:
         }
         if provider == "gemini" and lowered in retired_gemini:
             return self.resolved_chat_model
+        if provider == "openrouter":
+            if not raw or lowered in {"openrouter/free", "free", "openrouter-free"}:
+                return self.resolved_chat_model
+            # OpenRouter rejects bare ids like "gpt-4o-mini" stored on bots.
+            if "/" not in raw:
+                return f"openai/{raw}"
+            return raw
         if provider in {"groq", "gemini", "ollama"}:
             if (
                 not raw

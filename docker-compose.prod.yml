@@ -42,11 +42,11 @@ x-backend-env: &backend-env
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_BASE_URL: ${GEMINI_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
   GEMINI_CHAT_MODEL: gemini-3.6-flash
-  # Gemini Flash is the live Russian chat path; Groq remains fallback.
-  # Hardcoded so .env.production LLM_PROVIDER=groq cannot keep the weak gpt-oss model.
+  # OpenRouter is the default chat path; override via .env.production LLM_PROVIDER.
+  # Groq remains the free fallback when OpenRouter fails.
   FALLBACK_LLM_PROVIDER: groq
   FALLBACK_LLM_MODEL: openai/gpt-oss-20b
-  LLM_PROVIDER: gemini
+  LLM_PROVIDER: ${LLM_PROVIDER:-openrouter}
   OPERATOR_WS_TOKEN: ${OPERATOR_WS_TOKEN}
   # Required + distinct from ENCRYPTION_KEY (deploy.sh / checklist §2.2). No fallback.
   JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
