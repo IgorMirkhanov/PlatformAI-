@@ -11,6 +11,12 @@ jobs:
   build-preview:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
+    # Default GITHUB_TOKEN is read-only in this repo; the "Preview comment" step's
+    # issues.createComment needs pull-requests: write or it 403s with "Resource not
+    # accessible by integration" (reproduced on every PR so far — not a flake).
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker Buildx
