@@ -55,12 +55,24 @@ function formatJoined(iso: string): string {
   }
 }
 
-function buildInviteLink(token: string): string {
-  const params = new URLSearchParams({ token });
+function buildInviteLink(token: string, email: string): string {
+  const params = new URLSearchParams({
+    token,
+    email: email.trim().toLowerCase(),
+  });
+  const path = `/accept-invite?${params.toString()}`;
   if (typeof window === "undefined") {
-    return `/dashboard/settings/team?accept=${params.get("token")}`;
+    return path;
   }
-  return `${window.location.origin}/dashboard/settings/team?token=${encodeURIComponent(token)}`;
+  return `${window.location.origin}${path}`;
+}
+
+function buildInviteMailto(email: string, link: string): string {
+  const subject = encodeURIComponent("Приглашение в команду MP.AI");
+  const body = encodeURIComponent(
+    `Вас пригласили в команду MP.AI.\n\nОткройте ссылку и задайте пароль:\n${link}`,
+  );
+  return `mailto:${email.trim()}?subject=${subject}&body=${body}`;
 }
 
 export default function DashboardTeamSettingsPage() {
@@ -78,6 +90,7 @@ export default function DashboardTeamSettingsPage() {
   const [inviteRole, setInviteRole] = useState<OrgInviteRole>("MEMBER");
   const [lastInviteToken, setLastInviteToken] = useState<string | null>(null);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
+  const [lastInviteEmail, setLastInviteEmail] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
@@ -111,6 +124,16 @@ export default function DashboardTeamSettingsPage() {
     void loadTeam();
   }, [loadTeam]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (!token) return;
+    const next = new URLSearchParams({ token });
+    const email = params.get("email");
+    if (email) next.set("email", email);
+    window.location.replace(`/accept-invite?${next.toString()}`);
+  }, []);
+
   const sortedMembers = useMemo(
     () =>
       [...members].sort((left, right) => {
@@ -127,15 +150,17 @@ export default function DashboardTeamSettingsPage() {
     }
     setSubmitting(true);
     try {
-      const response = await createInvite(inviteEmail.trim(), inviteRole);
-      const link = buildInviteLink(response.token);
+      const email = inviteEmail.trim();
+      const response = await createInvite(email, inviteRole);
+      const link = buildInviteLink(response.token, email);
       setLastInviteToken(response.token);
       setLastInviteLink(link);
+      setLastInviteEmail(email);
       try {
         await navigator.clipboard.writeText(link);
-        showToast("Приглашение создано. Ссылка скопирована.", "success");
+        showToast("Приглашение создано. Письмо не уходит само — ссылка скопирована.", "success");
       } catch {
-        showToast("Приглашение создано. Скопируйте ссылку ниже.", "success");
+        showToast("Приглашение создано. Письмо не уходит само — скопируйте ссылку ниже.", "success");
       }
       setInviteEmail("");
       setInviteOpen(false);
@@ -215,7 +240,7 @@ export default function DashboardTeamSettingsPage() {
           </p>
           <h1 className="mt-1 text-2xl font-semibold text-zinc-50">Команда</h1>
           <p className="mt-2 text-sm text-zinc-500">
-            Участники и email-приглашения для активного workspace.
+            Участники workspace. Письмо само не уходит — скопируйте ссылку или откройте её в почте.
           </p>
         </div>
         {canManage ? (
@@ -235,6 +260,10 @@ export default function DashboardTeamSettingsPage() {
       {lastInviteLink ? (
         <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-100">
           <p className="font-medium">Ссылка приглашения (показывается один раз)</p>
+          <p className="mt-1 text-xs text-emerald-200/80">
+            Почтовый сервер не подключён, поэтому письмо на {lastInviteEmail || "адрес"} не
+            отправляется. Отправьте ссылку сами.
+          </p>
           <p className="mt-1 break-all text-xs text-emerald-200/90">{lastInviteLink}</p>
           {lastInviteToken ? (
             <p className="mt-2 break-all font-mono text-[11px] text-emerald-300/80">
@@ -252,6 +281,15 @@ export default function DashboardTeamSettingsPage() {
             <Copy className="h-3 w-3" />
             Копировать снова
           </button>
+          {lastInviteEmail ? (
+            <a
+              href={buildInviteMailto(lastInviteEmail, lastInviteLink)}
+              className="ml-3 inline-flex items-center gap-1 text-xs font-medium text-emerald-300 underline"
+            >
+              <Mail className="h-3 w-3" />
+              Открыть в почте
+            </a>
+          ) : null}
         </div>
       ) : null}
 
