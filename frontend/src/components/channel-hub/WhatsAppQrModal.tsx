@@ -65,6 +65,11 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
   const connectedNotifiedRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const scannedThisOpenRef = useRef(false);
+  // Mirrors scannedThisOpenRef for the one render-time read below (react-hooks/refs
+  // forbids reading ref.current during render) — the ref itself stays the source of
+  // truth for synchronous checks inside pollOnce/WS handlers, where a stale closure
+  // over state would miss updates between renders.
+  const [scannedThisOpen, setScannedThisOpen] = useState(false);
 
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -123,6 +128,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
     setPhone(null);
     connectedNotifiedRef.current = false;
     scannedThisOpenRef.current = true;
+    setScannedThisOpen(true);
     try {
       await stopWhatsAppSession(botId);
       await startWhatsAppSession(botId);
@@ -174,12 +180,14 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
       setSecondsLeft(QR_TTL_SECONDS);
       connectedNotifiedRef.current = false;
       scannedThisOpenRef.current = false;
+      setScannedThisOpen(false);
       return;
     }
 
     intentionalCloseRef.current = false;
     connectedNotifiedRef.current = false;
     scannedThisOpenRef.current = false;
+    setScannedThisOpen(false);
     setPhase("connecting");
     setMessage("Подключаемся к WhatsApp-сервису…");
 
@@ -203,6 +211,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
         }
         if (live.qr_base64) {
           scannedThisOpenRef.current = true;
+          setScannedThisOpen(true);
           applyQr(live.qr_base64);
           setMessage("Отсканируйте QR в WhatsApp → Связанные устройства.");
         }
@@ -244,6 +253,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
         }
         if (frame.qr_base64) {
           scannedThisOpenRef.current = true;
+          setScannedThisOpen(true);
           applyQr(frame.qr_base64);
         }
         if (frame.message) {
@@ -254,6 +264,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
           setPhase((p) => (p === "connected" ? p : "waiting"));
         } else if (ev === "scanning_detected") {
           scannedThisOpenRef.current = true;
+          setScannedThisOpen(true);
           setPhase("scanning");
         } else if (ev === "CONNECTED" || ev === "session_connected") {
           markConnected(frame.reference_id, frame.push_name);
@@ -311,7 +322,7 @@ export function WhatsAppQrModal({ open, botId, onClose, onConnected }: WhatsAppQ
   if (!open) return null;
 
   const showQr = Boolean(qrBase64) && phase !== "connected" && phase !== "failed";
-  const alreadyLinked = phase === "connected" && !scannedThisOpenRef.current;
+  const alreadyLinked = phase === "connected" && !scannedThisOpen;
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
