@@ -122,6 +122,7 @@ class OrchestratorResult:
 
     text: str
     media_attachments: list[MediaAttachment] = field(default_factory=list)
+    showcase_case: str | None = None
 
     # Allow legacy call sites that treat the result as a string via str().
     def __str__(self) -> str:
@@ -230,6 +231,28 @@ class AIOrchestrator:
             incoming_message = guard.redacted_text
 
             history = await self._fetch_chat_history(db_session, client_id)
+            global_prompt = await self._resolve_global_prompt(
+                db_session,
+                current_node_data,
+                bot_id=bot_id,
+            )
+            from app.services.showcase_session import prepare_showcase_turn
+
+            showcase = await prepare_showcase_turn(
+                db_session,
+                bot_id=bot_id,
+                client_id=client_id,
+                prompt=global_prompt,
+                incoming_message=incoming_message,
+                history=history,
+            )
+            if showcase.active and showcase.prompt:
+                global_prompt = showcase.prompt
+                logger.info(
+                    "AIOrchestrator.showcase_case | client_id={client_id} case={case}",
+                    client_id=client_id,
+                    case=showcase.case_id,
+                )
             rag_hits, rag_context = await self._fetch_rag_context_detailed(
                 db_session,
                 current_node_data,
@@ -237,11 +260,7 @@ class AIOrchestrator:
                 bot_id=bot_id,
                 client_id=client_id,
                 node_id=node_id,
-            )
-            global_prompt = await self._resolve_global_prompt(
-                db_session,
-                current_node_data,
-                bot_id=bot_id,
+                allowed_document_ids=showcase.allowed_document_ids,
             )
             system_prompt = self._apply_platform_prompt_routing(
                 self._merge_prompts(
@@ -250,6 +269,8 @@ class AIOrchestrator:
                 ),
                 channel=channel,
             )
+            if showcase.lock:
+                system_prompt = f"{system_prompt}\n\n{showcase.lock}"
             messages = self._build_llm_messages(
                 system_prompt=system_prompt,
                 rag_context=rag_context,
@@ -333,6 +354,20 @@ class AIOrchestrator:
                     tools=completion.tools_executed,
                 )
             response_text = sanitize_outbound_text(response_text) or response_text
+            if showcase.active:
+                response_text = await self._drop_unrequested_case_ending(
+                    response_text,
+                    messages,
+                    incoming_message=incoming_message,
+                    case_id=showcase.case_id,
+                    model_name=str(node_model) if node_model else None,
+                    temperature=float(node_temperature) if node_temperature is not None else None,
+                    bot_id=bot_id,
+                    client_id=client_id,
+                    node_id=node_id,
+                    db_session=db_session,
+                    dry_run=dry_run,
+                )
             if not (response_text or "").strip():
                 logger.warning(
                     "AIOrchestrator.empty_completion_fallback | client_id={client_id} "
@@ -355,7 +390,11 @@ class AIOrchestrator:
                 length=len(response_text),
                 count=len(attachments),
             )
-            return OrchestratorResult(text=response_text, media_attachments=attachments)
+            return OrchestratorResult(
+                text=response_text,
+                media_attachments=attachments,
+                showcase_case=showcase.case_id if showcase.active else None,
+            )
         except (
             InsufficientFundsError,
             WalletInsufficientFundsError,
@@ -1148,7 +1187,13 @@ class AIOrchestrator:
         bot_id: uuid.UUID | None = None,
         client_id: uuid.UUID | None = None,
         node_id: str | None = None,
+        allowed_document_ids: list[str] | None = None,
     ) -> tuple[list[RAGSearchHit], list[str]]:
+        if allowed_document_ids is not None and len(allowed_document_ids) == 0:
+            logger.info(
+                "AIOrchestrator.rag_skipped | reason=showcase_case_has_no_documents"
+            )
+            return [], []
         knowledge_base_id = self._resolve_knowledge_base_id(current_node_data, bot_id)
         if not knowledge_base_id:
             logger.debug("AIOrchestrator.rag_skipped | reason=no_knowledge_base_id")
@@ -1183,6 +1228,17 @@ class AIOrchestrator:
                 inactive=len(inactive_document_ids),
             )
             return [], []
+        if allowed_document_ids is not None:
+            active_ids = set(activation.active_document_ids)
+            allowed_document_ids = [
+                document_id for document_id in allowed_document_ids if document_id in active_ids
+            ]
+            if not allowed_document_ids:
+                logger.info(
+                    "AIOrchestrator.rag_skipped | knowledge_base_id={kb_id} reason=showcase_documents_inactive",
+                    kb_id=knowledge_base_id,
+                )
+                return [], []
 
         try:
             from app.core.embeddings import embedding_api_keys_available
@@ -1199,7 +1255,8 @@ class AIOrchestrator:
                 knowledge_base_id=knowledge_base_id,
                 query=incoming_message,
                 top_k=settings.RAG_TOP_K,
-                excluded_document_ids=inactive_document_ids,
+                allowed_document_ids=allowed_document_ids,
+                excluded_document_ids=None if allowed_document_ids else inactive_document_ids,
             )
         except Exception as exc:
             logger.error(
@@ -1240,11 +1297,102 @@ class AIOrchestrator:
             pending.append((role, content))
 
         history: list[dict[str, str]] = []
+        seen_assistant: set[str] = set()
         for role, content in pending:
             if role == "assistant" and content in scripted:
                 continue
+            if role == "assistant" and "Режим тестирования текущего кейса успешно завершен" in content:
+                continue
+            if role == "assistant" and len(content) > 80 and content in seen_assistant:
+                continue
+            if role == "assistant" and len(content) > 80:
+                seen_assistant.add(content)
             history.append({"role": role, "content": content})
         return history
+
+    async def _drop_unrequested_case_ending(
+        self,
+        response_text: str,
+        messages: list[dict[str, str]],
+        *,
+        incoming_message: str,
+        case_id: str,
+        model_name: str | None,
+        temperature: float | None,
+        bot_id: uuid.UUID | None,
+        client_id: uuid.UUID,
+        node_id: str | None,
+        db_session: AsyncSession,
+        dry_run: bool,
+    ) -> str:
+        """Ask once more when the model closes a case the user did not leave."""
+        from app.services.showcase_session import strip_unrequested_case_closer, user_requests_exit
+
+        if case_id in {"", "main_menu", "none"} or user_requests_exit(incoming_message):
+            return response_text
+        if "Режим тестирования" not in (response_text or ""):
+            return response_text
+
+        logger.info(
+            "AIOrchestrator.showcase_closer_rejected | client_id={client_id} case={case}",
+            client_id=client_id,
+            case=case_id,
+        )
+        corrected = [dict(message) for message in messages]
+        if corrected:
+            corrected[0]["content"] = (
+                f"{corrected[0].get('content', '')}\n\n"
+                "The draft you were about to send ended the showcase. "
+                "The user did not write «выйти». Reply again to their latest message, "
+                "stay in the active case, and do not say that testing is finished."
+            )
+        try:
+            completion = await self._request_completion_with_usage(
+                corrected,
+                model_name=model_name,
+                temperature=temperature,
+                bot_id=bot_id,
+                client_id=client_id,
+                node_id=node_id,
+                db=db_session,
+                source="orchestrator",
+            )
+        except Exception as exc:
+            logger.warning(
+                "AIOrchestrator.showcase_closer_retry_failed | client_id={client_id} error={error}",
+                client_id=client_id,
+                error=str(exc),
+            )
+            return strip_unrequested_case_closer(response_text) or (
+                "Давайте продолжим. Напишите, что нужно уточнить."
+            )
+        used_model = (
+            getattr(completion, "model_name", None)
+            or model_name
+            or settings.resolved_chat_model
+            or settings.OPENAI_CHAT_MODEL
+        )
+        if (
+            bot_id is not None
+            and not completion.cache_hit
+            and (completion.input_tokens > 0 or completion.output_tokens > 0)
+        ):
+            await self._record_llm_usage_and_debit(
+                db_session,
+                bot_id=bot_id,
+                prompt_tokens=completion.input_tokens,
+                completion_tokens=completion.output_tokens,
+                model_name=used_model,
+                billing_handled=completion.billing_handled,
+                client_id=client_id,
+                dry_run=dry_run,
+            )
+        revised = (completion.text or "").strip()
+        if "Режим тестирования" in revised:
+            revised = strip_unrequested_case_closer(revised)
+        return revised or strip_unrequested_case_closer(response_text) or (
+            "Давайте продолжим. Напишите, что нужно уточнить."
+        )
 
     async def _fetch_chat_history(
         self,

@@ -603,7 +603,7 @@ async def process_inbound_message(
             "error": next_node.get("error"),
 
             "ai_generated": ai_generated,
-
+            "showcase_case": (next_node.get("variables") or {}).get("showcase_case"),
             **ai_payload,
 
         },

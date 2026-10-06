@@ -599,6 +599,9 @@ class FlowExecutor:
                 else:
                     text = ai_result.text
                     media = list(ai_result.media_attachments or [])
+                    showcase_case = getattr(ai_result, "showcase_case", None)
+                    if showcase_case:
+                        self.variables["showcase_case"] = showcase_case
             except Exception as exc:
                 logger.exception(
                     "FlowParser.llm_orchestrator_failed | node_id={node_id} error={error}",
@@ -643,6 +646,9 @@ class FlowExecutor:
             node_type="ai_agent",
             text=text,
             data=node_payload,
+            variables={"showcase_case": self.variables.get("showcase_case")}
+            if self.variables.get("showcase_case")
+            else {},
             requires_ai=False,
             is_waiting=True,
             media_attachments=media,
