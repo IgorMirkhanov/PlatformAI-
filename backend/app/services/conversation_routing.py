@@ -20,11 +20,14 @@ from app.models.core_models import BotFlow
 from app.schemas.core_schemas import FlowGraphData
 
 PROMPT_AGENT_NODE_ID = "prompt_agent"
-_PLAIN_TEXT_TYPES = frozenset({"text_message", "message", "text", "reply", "say"})
 
 
 def uses_custom_scenario(graph_data: dict[str, Any] | None) -> bool:
-    """True when the published graph should run instead of the prompt agent."""
+    """True when the published graph should run instead of the prompt agent.
+
+    Unconnected nodes are not a scenario: a welcome card sitting next to an AI
+    block still answers with the card, because nothing leads into the model.
+    """
     if not isinstance(graph_data, dict):
         return False
     nodes = graph_data.get("nodes")
@@ -33,18 +36,17 @@ def uses_custom_scenario(graph_data: dict[str, Any] | None) -> bool:
         return False
     if edges:
         return True
-    if len(nodes) != 1 or not isinstance(nodes[0], dict):
+    node_types: list[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            return True
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        if data.get("buttons"):
+            return True
+        node_types.append(str(node.get("type") or "").strip().lower())
+    if node_types and all(node_type in {"ai_agent", "llm"} for node_type in node_types):
         return True
-    node = nodes[0]
-    node_type = str(node.get("type") or "").strip().lower()
-    if node_type in {"ai_agent", "llm"}:
-        return True
-    data = node.get("data") if isinstance(node.get("data"), dict) else {}
-    if data.get("buttons"):
-        return True
-    if node_type in _PLAIN_TEXT_TYPES:
-        return False
-    return True
+    return False
 
 
 def prompt_reply_graph(bot_id: uuid.UUID) -> dict[str, Any]:

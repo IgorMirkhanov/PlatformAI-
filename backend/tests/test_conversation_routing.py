@@ -22,6 +22,25 @@ def test_starter_welcome_card_is_not_a_custom_scenario() -> None:
     assert uses_custom_scenario(None) is False
 
 
+def test_unconnected_welcome_and_ai_node_stay_on_the_prompt() -> None:
+    graph = {
+        "nodes": [
+            {
+                "id": "welcome_node",
+                "type": "text_message",
+                "data": {"text": "Здравствуйте! Я ассистент техподдержки.", "buttons": []},
+            },
+            {
+                "id": "ai_agent_80ffcf6c",
+                "type": "ai_agent",
+                "data": {"prompt_context": "Следуй промпту"},
+            },
+        ],
+        "edges": [],
+    }
+    assert uses_custom_scenario(graph) is False
+
+
 def test_buttons_or_edges_keep_the_scenario() -> None:
     menu = {
         "nodes": [
