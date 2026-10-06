@@ -257,12 +257,16 @@ class AIOrchestrator:
                 incoming_message=incoming_message,
             )
             if history:
-                # Reinforce continuity — models sometimes re-greet mid-dialog.
+                # Scripted scenario lines are already removed from history.
+                # The system prompt stays the persona, even if an earlier
+                # model reply copied a fixed greeting.
                 messages[0]["content"] = (
                     f"{messages[0]['content']}\n\n"
                     "CONTINUITY: This is an ongoing conversation. "
-                    "Do not restart with a greeting or company intro. "
-                    "Answer the latest user message using prior turns."
+                    "Your identity and rules come from the system instructions above, "
+                    "not from earlier assistant replies. "
+                    "Do not repeat a fixed greeting from previous turns. "
+                    "Answer the latest user message in that voice."
                 )
             node_model = (
                 current_node_data.get("llm_model_name")
@@ -1219,6 +1223,29 @@ class AIOrchestrator:
             trace.record_rag_chunks(trace_chunks)
         return hits, [str(hit["text"]) for hit in hits if hit.get("text")]
 
+    @staticmethod
+    def _history_without_scripted_replies(rows: list[Any]) -> list[dict[str, str]]:
+        """Drop scenario text cards so the model does not imitate them."""
+        scripted: set[str] = set()
+        pending: list[tuple[str, str]] = []
+        for row in rows:
+            role = AIOrchestrator._map_sender_to_role(row.sender)
+            content = (row.message_text or "").strip()
+            if not content:
+                continue
+            payload = row.payload if isinstance(getattr(row, "payload", None), dict) else {}
+            if role == "assistant" and str(payload.get("node_type") or "") == "text_message":
+                scripted.add(content)
+                continue
+            pending.append((role, content))
+
+        history: list[dict[str, str]] = []
+        for role, content in pending:
+            if role == "assistant" and content in scripted:
+                continue
+            history.append({"role": role, "content": content})
+        return history
+
     async def _fetch_chat_history(
         self,
         db_session: AsyncSession,
@@ -1266,13 +1293,7 @@ class AIOrchestrator:
             )
             return []
 
-        history: list[dict[str, str]] = []
-        for row in rows:
-            role = self._map_sender_to_role(row.sender)
-            content = (row.message_text or "").strip()
-            if not content:
-                continue
-            history.append({"role": role, "content": content})
+        history = self._history_without_scripted_replies(rows)
 
         logger.debug(
             "AIOrchestrator.history_loaded | client_id={client_id} messages={count}",
