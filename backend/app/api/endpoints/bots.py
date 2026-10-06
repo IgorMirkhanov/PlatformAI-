@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_bot_access
@@ -14,7 +15,9 @@ from app.core.rbac import Permission, get_current_user
 from app.models.core_models import Bot
 from app.models.users import User
 from app.schemas.core_schemas import CreateBotResponse
+from app.services.bot_billing_service import bot_billing_service
 from app.services.bot_service import BotNotFoundError, BotOrgMismatchError, bot_service
+from app.services.wallet_service import InsufficientFundsException
 
 router = APIRouter(prefix="/bots", tags=["bots-lifecycle"])
 
@@ -104,5 +107,50 @@ async def delete_bot(
         ) from exc
 
 
+class BotWalletTopUpRequest(BaseModel):
+    amount: int = Field(..., ge=1, le=10_000_000, description="Whole tenge moved onto the bot")
+
+
+class BotWalletTopUpResponse(BaseModel):
+    bot_id: uuid.UUID
+    bot_name: str
+    amount: int
+    bot_balance: int
+    organization_balance: float
+
+
+@router.post(
+    "/{bot_id}/wallet/top-up",
+    response_model=BotWalletTopUpResponse,
+    summary="Move organization tenge onto this bot's credit balance",
+)
+async def top_up_bot_wallet_from_organization(
+    payload: BotWalletTopUpRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    bot: Bot = Depends(require_bot_access(Permission.BILLING_WRITE)),
+) -> BotWalletTopUpResponse:
+    org_id = _resolve_org_id(bot, current_user)
+    try:
+        result = await bot_billing_service.top_up_from_organization(
+            db,
+            bot.id,
+            org_id,
+            int(payload.amount),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Агент не найден.") from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except InsufficientFundsException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="На балансе организации не хватает средств.",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return BotWalletTopUpResponse(**result)
+
+
 # Re-export for tests / explicit imports.
-__all__ = ["router", "clone_bot", "delete_bot"]
+__all__ = ["router", "clone_bot", "delete_bot", "top_up_bot_wallet_from_organization"]

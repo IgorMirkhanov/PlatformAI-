@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, type Variants } from "framer-motion";
 import { Settings2 } from "lucide-react";
 
+import { FundBotFromOrgModal } from "@/components/billing/FundBotFromOrgModal";
 import { Button } from "@/components/ui/button";
 import { AgentCardActions } from "@/components/bots/AgentCardActions";
 import { OmnichannelBar } from "@/components/dashboard/OmnichannelBar";
@@ -13,6 +14,7 @@ import { getAgentTabPath } from "@/lib/agent-routes";
 import { updateBotSettings } from "@/lib/api";
 import { formatNumber } from "@/lib/dashboard-utils";
 import { useAsyncAction } from "@/lib/hooks/use-async-action";
+import { canManageBilling } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { useBotStore } from "@/store/useBotStore";
 import { AVATAR_PRESETS } from "@/types/agent";
@@ -52,8 +54,11 @@ function AgentCard({
   onOpen: (botId: string) => void;
 }) {
   const setAgentProfile = useBotStore((state) => state.setAgentProfile);
+  const currentUser = useBotStore((state) => state.currentUser);
   const [isActive, setIsActive] = useState(agent.is_active);
+  const [fundOpen, setFundOpen] = useState(false);
   const connectedChannels = agent.connected_channels ?? [];
+  const canFund = canManageBilling(currentUser?.role);
 
   useEffect(() => {
     setIsActive(agent.is_active);
@@ -128,6 +133,15 @@ function AgentCard({
                   </span>
                 )}
               </p>
+              {canFund ? (
+                <button
+                  type="button"
+                  onClick={() => setFundOpen(true)}
+                  className="mt-2 text-[11px] font-medium text-amber-300 underline-offset-2 hover:underline"
+                >
+                  Пополнить с баланса организации
+                </button>
+              ) : null}
             </div>
             <AgentCardActions
               botId={agent.bot_id}
@@ -171,6 +185,12 @@ function AgentCard({
           Управление
         </Button>
       </div>
+      <FundBotFromOrgModal
+        open={fundOpen}
+        bot={{ id: agent.bot_id, name: agent.bot_name }}
+        onClose={() => setFundOpen(false)}
+        onSuccess={() => onRefresh?.()}
+      />
     </motion.article>
   );
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CreditCard, Loader2, Sparkles, Wallet } from "lucide-react";
 
+import { FundBotFromOrgModal } from "@/components/billing/FundBotFromOrgModal";
 import { BalanceTopUpModal } from "@/components/billing/ManualDepositWidget";
 import {
   TransactionLedger,
@@ -11,11 +12,12 @@ import {
 } from "@/components/billing/TransactionLedger";
 import { useToast } from "@/hooks/useToast";
 import { formatBillingCurrency } from "@/lib/billing-utils";
-import { fetchBillingTransactions, openBillingPortal } from "@/lib/api";
+import { fetchBillingTransactions, fetchDashboardStats, openBillingPortal } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useImpersonation } from "@/lib/hooks/useImpersonation";
 import { getApiErrorMessage, useBotStore } from "@/store/useBotStore";
 import type { BillingTransaction } from "@/types/billing";
+import type { AgentStatusSummary } from "@/types/dashboard";
 import { DEFAULT_BILLING_CURRENCY } from "@/types/billing";
 
 const PAGE_SIZE = 10;
@@ -29,6 +31,8 @@ export default function BillingPageClient() {
   const { isImpersonating } = useImpersonation();
 
   const [topUpOpen, setTopUpOpen] = useState(false);
+  const [fundOpen, setFundOpen] = useState(false);
+  const [agents, setAgents] = useState<AgentStatusSummary[]>([]);
   const [portalLoading, setPortalLoading] = useState(false);
 
   const [transactions, setTransactions] = useState<BillingTransaction[]>([]);
@@ -57,6 +61,12 @@ export default function BillingPageClient() {
   useEffect(() => {
     void loadBilling();
   }, [loadBilling]);
+
+  useEffect(() => {
+    void fetchDashboardStats()
+      .then((stats) => setAgents(stats.agents ?? []))
+      .catch(() => setAgents([]));
+  }, [fundOpen]);
 
   useEffect(() => {
     void loadTransactions();
@@ -169,6 +179,18 @@ export default function BillingPageClient() {
           <CreditCard className="h-4 w-4" />
           Пополнить баланс
         </button>
+
+        <button
+          type="button"
+          onClick={() => setFundOpen(true)}
+          disabled={isImpersonating}
+          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900/70 px-4 py-3 text-sm font-semibold text-zinc-100 transition hover:border-zinc-500 disabled:opacity-60"
+        >
+          Перевести на агента
+        </button>
+        <p className="mt-3 text-xs text-zinc-500">
+          Перевод списывает тенге с этого кошелька и кладёт столько же кредитов на выбранного агента.
+        </p>
       </section>
 
       <TransactionLedger
@@ -219,6 +241,12 @@ export default function BillingPageClient() {
           void loadBilling();
           void loadTransactions();
         }}
+      />
+      <FundBotFromOrgModal
+        open={fundOpen}
+        bots={agents.map((agent) => ({ id: agent.bot_id, name: agent.bot_name }))}
+        onClose={() => setFundOpen(false)}
+        onSuccess={() => void loadTransactions()}
       />
     </div>
   );

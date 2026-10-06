@@ -85,10 +85,20 @@ async def get_user_from_bearer(
 
     # Prefer explicit workspace header (same as rbac.get_current_user), then
     # TenantMiddleware JWT-bound org, then JWT company claim.
+    jwt_company_id: uuid.UUID | None = None
+    company_claim = claims.get("company_id")
+    if company_claim:
+        try:
+            jwt_company_id = uuid.UUID(str(company_claim))
+        except ValueError:
+            jwt_company_id = None
+
     workspace_id: uuid.UUID | None = None
+    header_workspace = False
     if x_company_id:
         try:
             workspace_id = uuid.UUID(x_company_id)
+            header_workspace = True
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -99,12 +109,7 @@ async def get_user_from_bearer(
         if tenant and tenant.organization_id:
             workspace_id = tenant.organization_id
         else:
-            company_claim = claims.get("company_id")
-            if company_claim:
-                try:
-                    workspace_id = uuid.UUID(str(company_claim))
-                except ValueError:
-                    workspace_id = None
+            workspace_id = jwt_company_id
 
     if workspace_id is not None and workspace_id != user.company_id:
         try:
@@ -117,6 +122,21 @@ async def get_user_from_bearer(
 
                     set_committed_value(user, "company_id", company.id)
                     set_committed_value(user, "company_name", company.name)
+            elif (
+                header_workspace
+                and jwt_company_id is not None
+                and workspace_id != jwt_company_id
+            ):
+                if jwt_company_id != user.company_id:
+                    try:
+                        user = await team_service.apply_workspace_context(
+                            db, user, jwt_company_id
+                        )
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Not a member of the requested organization.",
+                        )
             else:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,

@@ -48,6 +48,49 @@ async def test_soft_launch_blocked_when_flag_off(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
+async def test_stale_company_header_falls_back_to_jwt_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = uuid.uuid4()
+    stale = uuid.uuid4()
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.is_active = True
+    user.is_superadmin = False
+    user.company_id = home
+    user.role = None
+
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = user
+    db = AsyncMock()
+    db.execute.return_value = result
+
+    seen: list[uuid.UUID] = []
+
+    async def apply_workspace(_db, bound_user, company_id, persist=False):
+        seen.append(company_id)
+        if company_id == stale:
+            raise ValueError("Invalid workspace context.")
+        return bound_user
+
+    monkeypatch.setattr(rbac_mod.team_service, "apply_workspace_context", apply_workspace)
+    monkeypatch.setattr(
+        "app.core.security.decode_access_token",
+        lambda _token: {"sub": str(user.id), "company_id": str(home)},
+    )
+
+    resolved = await rbac_mod.get_current_user(
+        db=db,
+        x_user_id=None,
+        x_company_id=str(stale),
+        authorization="Bearer fresh-token",
+        user_id=None,
+    )
+    assert resolved is user
+    assert seen == [stale, home]
+
+
+@pytest.mark.asyncio
 async def test_oauth_stub_disabled_by_default() -> None:
     from app.api.routers import auth as auth_router
 

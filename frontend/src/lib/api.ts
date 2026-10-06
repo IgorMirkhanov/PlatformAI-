@@ -383,13 +383,16 @@ function getAuthHeaders(): Record<string, string> {
     headers["X-User-Id"] = currentUser.id;
   }
 
-  // Prefer bot-store active company (kept in sync with org store on switch).
-  let orgId = activeCompanyId ?? currentUser?.company_id ?? null;
-  try {
-    const stored = window.localStorage.getItem("mpai_current_org_id");
-    if (!orgId && stored) orgId = stored;
-  } catch {
-    // ignore
+  // Attach a workspace only when it belongs to the signed-in user.
+  // A previous account's id in localStorage must not ride along on the new JWT.
+  const organizations = useBotStore.getState().organizations;
+  let orgId: string | null = null;
+  if (currentUser?.company_id) {
+    const activeIsMember =
+      !!activeCompanyId &&
+      (activeCompanyId === currentUser.company_id ||
+        organizations.some((org) => org.id === activeCompanyId));
+    orgId = activeIsMember ? activeCompanyId : currentUser.company_id;
   }
 
   if (orgId) {
@@ -439,6 +442,22 @@ export async function apiRequest<T>(
     const issues = body ? extractValidationIssues(body.detail, body.fields) : [];
     throw new ApiError(message, status, issues);
   }
+}
+
+export async function transferOrgBalanceToBot(
+  botId: string,
+  amount: number,
+): Promise<{
+  bot_id: string;
+  bot_name: string;
+  amount: number;
+  bot_balance: number;
+  organization_balance: number;
+}> {
+  return apiRequest(`/api/v1/bots/${encodeURIComponent(botId)}/wallet/top-up`, {
+    method: "POST",
+    body: JSON.stringify({ amount }),
+  });
 }
 
 export async function fetchDashboardStats(userId?: string): Promise<DashboardStatsResponse> {

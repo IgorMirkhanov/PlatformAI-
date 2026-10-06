@@ -195,9 +195,21 @@ export const useOrganizationStore = create<OrganizationState>()(
         currentOrgId: state.currentOrgId,
       }),
       onRehydrateStorage: () => (state) => {
-        if (state?.currentOrgId) {
+        if (!state?.currentOrgId) return;
+        const { currentUser, activeCompanyId } = useBotStore.getState();
+        if (!currentUser && !activeCompanyId) {
           writeOrgId(state.currentOrgId);
+          return;
         }
+        const belongs =
+          state.currentOrgId === currentUser?.company_id ||
+          state.currentOrgId === activeCompanyId;
+        if (!belongs) {
+          const next = activeCompanyId ?? currentUser?.company_id ?? null;
+          state.setCurrentOrgId(next);
+          return;
+        }
+        writeOrgId(state.currentOrgId);
       },
     },
   ),

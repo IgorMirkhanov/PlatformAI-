@@ -185,7 +185,7 @@ export const useBotStore = create<BotStoreState>()(
           const currentUser = await fetchCurrentUser();
           set({
             currentUser,
-            activeCompanyId: get().activeCompanyId ?? currentUser.company_id,
+            activeCompanyId: currentUser.company_id,
             currentUserLoading: false,
           });
           const { applyUserPlatformRole } = await import("@/lib/auth/session");

@@ -23,6 +23,30 @@ function roleFromUser(user: Pick<CurrentUser, "is_superadmin" | "is_support">): 
   return "USER";
 }
 
+async function bindLoginWorkspace(companyId: string | null | undefined): Promise<void> {
+  const { useBotStore } = await import("@/store/useBotStore");
+  const { useOrganizationStore } = await import("@/lib/stores/use-organization-store");
+  if (!useBotStore.persist.hasHydrated()) {
+    await useBotStore.persist.rehydrate();
+  }
+  if (!useOrganizationStore.persist.hasHydrated()) {
+    await useOrganizationStore.persist.rehydrate();
+  }
+  const nextCompanyId = companyId ?? null;
+  useBotStore.getState().clearWorkspaceCache();
+  useBotStore.setState({
+    currentUser: null,
+    activeCompanyId: nextCompanyId,
+    organizations: [],
+  });
+  useOrganizationStore.setState({
+    organizations: [],
+    currentOrgId: nextCompanyId,
+    usage: null,
+  });
+  useOrganizationStore.getState().setCurrentOrgId(nextCompanyId);
+}
+
 function roleFromAccessToken(accessToken: string): PlatformRoleCookie {
   const payload = decodeJwtPayload(accessToken);
   if (payload?.is_superuser === true || payload?.is_superadmin === true) {
@@ -60,6 +84,7 @@ export async function loginWithPassword(email: string, password: string): Promis
       expiresIn: data.expires_in ?? 60 * 60,
       platformRole: roleFromAccessToken(data.access_token),
     });
+    await bindLoginWorkspace(data.company_id);
     return data;
   } catch (error) {
     return parseAxiosError(error);

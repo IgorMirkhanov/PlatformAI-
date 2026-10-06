@@ -39,10 +39,9 @@ export function DashboardHeroHeader({
             <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-600">
               Рабочая группа
             </p>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight text-zinc-50">
-              MP.AI Production Console
+            <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-zinc-50">
+              {companyName}
             </h1>
-            <p className="mt-2 truncate text-sm text-zinc-400">{companyName}</p>
             <p className="mt-1 font-mono text-[11px] text-zinc-600">
               ID: {workspaceId.slice(0, 8)}…
             </p>

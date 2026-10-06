@@ -349,6 +349,19 @@ async def get_current_user(
                     set_committed_value(user, "company_id", company.id)
                     set_committed_value(user, "company_name", company.name)
                     return user
+                # localStorage can keep X-Company-Id from a previous account.
+                # That header is not a membership of this user; stay on the JWT workspace.
+                if (
+                    x_company_id
+                    and jwt_company_id is not None
+                    and workspace_id != jwt_company_id
+                ):
+                    try:
+                        return await team_service.apply_workspace_context(
+                            db, user, jwt_company_id
+                        )
+                    except ValueError:
+                        pass
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=str(exc),

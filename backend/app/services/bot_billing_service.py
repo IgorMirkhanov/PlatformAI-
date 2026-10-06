@@ -249,5 +249,69 @@ class BotBillingService:
         await db.flush()
         return bot
 
+    async def top_up_from_organization(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        organization_id: uuid.UUID,
+        amount: int,
+    ) -> dict[str, Any]:
+        """Move whole tenge from the org wallet onto this bot's credit balance.
+
+        1 ₸ on the organization subscription becomes 1 bot credit. When the
+        parallel organization credit ledger still holds a mirror of that money,
+        the same amount is removed there so it cannot be spent twice.
+        """
+        credits = int(amount)
+        if credits <= 0:
+            raise ValueError("Сумма перевода должна быть больше нуля.")
+        if credits > 10_000_000:
+            raise ValueError("Слишком большая сумма.")
+
+        bot = await self.get_bot(db, bot_id)
+        if bot is None:
+            raise LookupError("Bot not found.")
+        if bot.organization_id is not None and bot.organization_id != organization_id:
+            raise PermissionError("Агент принадлежит другой организации.")
+
+        from app.models.core_models import BillingTransactionType
+        from app.repositories.billing.wallet_repository import wallet_repository
+        from app.services.billing.wallet_service import wallet_service as credit_wallet
+        from app.services.wallet_service import wallet_service
+
+        ref = f"bot_topup:{bot_id}:{uuid.uuid4().hex[:16]}"
+        name = (getattr(bot, "name", None) or "").strip() or "агента"
+        deduction = await wallet_service.deduct_wallet_balance(
+            db,
+            organization_id,
+            credits,
+            description=f"Перевод на агента {name}"[:512],
+            reference_id=ref,
+            bot_id=bot_id,
+            transaction_type=BillingTransactionType.SUBSCRIPTION_CHARGE,
+        )
+
+        mirror = await wallet_repository(db).get(organization_id)
+        mirror_balance = int(getattr(mirror, "balance", 0) or 0) if mirror is not None else 0
+        mirror_debit = min(mirror_balance, credits)
+        if mirror_debit > 0:
+            await credit_wallet.deduct_credits(
+                db,
+                organization_id,
+                mirror_debit,
+                "bot_topup",
+                reference_id=ref,
+                auto_commit=False,
+            )
+
+        credited = await self.adjust_balance(db, bot_id, credits)
+        return {
+            "bot_id": bot_id,
+            "bot_name": name,
+            "amount": credits,
+            "bot_balance": int(credited["new_balance"]),
+            "organization_balance": float(deduction.balance_after),
+        }
+
 
 bot_billing_service = BotBillingService()
