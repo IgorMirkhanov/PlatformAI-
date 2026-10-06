@@ -175,33 +175,10 @@ class BotManagementService:
         bot.llm_model_name = "gpt-4o-mini"
         bot.llm_temperature = 0.7
 
-        # Prefer seeded template graph; empty use-case defaults to {}.
-        compiled_graph: dict[str, object] = {}
-        if payload.use_case != AgentUseCaseTemplate.EMPTY:
-            welcome_text = template.get("welcome_text")
-            if welcome_text:
-                compiled_graph = {
-                    "nodes": [
-                        {
-                            "id": "welcome_node",
-                            "type": "text_message",
-                            "data": {
-                                "text": str(welcome_text),
-                                "buttons": [],
-                            },
-                        }
-                    ],
-                    "edges": [],
-                }
+        from app.services.conversation_routing import prompt_reply_graph
 
-        graph_dump: dict[str, object]
-        is_published = False
-        if compiled_graph:
-            validated_graph = FlowGraphData.model_validate(compiled_graph)
-            graph_dump = validated_graph.model_dump(mode="json")
-            is_published = True
-        else:
-            graph_dump = {}
+        graph_dump = prompt_reply_graph(bot.id)
+        is_published = True
 
         flow = BotFlow(
             bot_id=bot.id,

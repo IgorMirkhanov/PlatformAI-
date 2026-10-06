@@ -12,6 +12,7 @@ from app.core.flow_cache import published_flow_cache
 from app.models.core_models import Bot, BotFlow
 from app.schemas.sandbox_schemas import SandboxChatResponse, SandboxClearResponse
 from app.services.ai_orchestrator import AIOrchestrator
+from app.services.conversation_routing import adopt_prompt_reply_graph, uses_custom_scenario
 from app.services.execution_trace import ExecutionTraceBuilder
 from app.services.flow_executor import FlowExecutor
 
@@ -139,14 +140,19 @@ class SandboxService:
         trace = ExecutionTraceBuilder()
         session = self.get_or_create_session(bot_id, session_id)
         bot = await self._load_bot(db, bot_id)
-        flow = await self._load_published_flow(db, bot_id)
-
-        graph_data = flow.graph_data if isinstance(flow.graph_data, dict) else {}
-        if not graph_data:
-            trace.record_error("empty_graph")
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Published flow contains empty graph data.",
+        try:
+            flow = await self._load_published_flow(db, bot_id)
+            graph_data = flow.graph_data if isinstance(flow.graph_data, dict) else {}
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_422_UNPROCESSABLE_ENTITY:
+                raise
+            graph_data = {}
+        if not uses_custom_scenario(graph_data):
+            graph_data = await adopt_prompt_reply_graph(db, bot_id)
+            session.current_step_id = ""
+            logger.info(
+                "SandboxService.prompt_mode | bot_id={bot_id} reason=no_custom_scenario",
+                bot_id=bot_id,
             )
 
         bot_config = FlowExecutor.build_bot_config(bot)

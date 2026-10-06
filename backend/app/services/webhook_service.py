@@ -15,6 +15,7 @@ from app.schemas.core_schemas import FlowButton, WebhookSimulateResponse
 from app.services.chat_service import broadcast_chat_message
 from app.workers.crm_tasks import process_crm_automation_action
 from app.tasks.crm_tasks import capture_lead_task
+from app.services.conversation_routing import adopt_prompt_reply_graph, uses_custom_scenario
 from app.services.flow_parser import FlowExecutor
 
 
@@ -181,7 +182,7 @@ async def _get_or_create_client(
     return client
 
 
-async def _get_latest_published_flow(db: AsyncSession, bot_id: uuid.UUID) -> BotFlow:
+async def _get_latest_published_flow(db: AsyncSession, bot_id: uuid.UUID) -> BotFlow | None:
     """Load the most recently published flow for live webhook evaluation (no restart required)."""
     cached = published_flow_cache.get(bot_id)
     if cached is not None and cached.is_published:
@@ -214,11 +215,8 @@ async def _get_latest_published_flow(db: AsyncSession, bot_id: uuid.UUID) -> Bot
     flow = result.scalar_one_or_none()
 
     if flow is None:
-        logger.warning("WebhookService.no_published_flow | bot_id={bot_id}", bot_id=bot_id)
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No published flow found for bot '{bot_id}'.",
-        )
+        logger.info("WebhookService.no_published_flow | bot_id={bot_id}", bot_id=bot_id)
+        return None
 
     await db.refresh(flow)
 
@@ -447,21 +445,13 @@ async def process_inbound_message(
 
 
     flow = await _get_latest_published_flow(db, bot_id)
-
-
-
-    graph_data = flow.graph_data if isinstance(flow.graph_data, dict) else {}
-
-    if not graph_data:
-
-        logger.error("WebhookService.empty_graph_data | flow_id={flow_id}", flow_id=flow.id)
-
-        raise HTTPException(
-
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-
-            detail="Published flow contains empty graph data.",
-
+    graph_data = flow.graph_data if flow is not None and isinstance(flow.graph_data, dict) else {}
+    if not uses_custom_scenario(graph_data):
+        graph_data = await adopt_prompt_reply_graph(db, bot_id)
+        client.current_step_id = ""
+        logger.info(
+            "WebhookService.prompt_mode | bot_id={bot_id} reason=no_custom_scenario",
+            bot_id=bot_id,
         )
 
 
