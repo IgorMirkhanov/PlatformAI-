@@ -9,6 +9,7 @@ buttons is left alone.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -95,14 +96,20 @@ async def adopt_prompt_reply_graph(db: AsyncSession, bot_id: uuid.UUID) -> dict[
         flow.graph_data = graph
         flow.is_published = True
         flag_modified(flow, "graph_data")
+    # Read identifiers before flush. updated_at is server-updated and a later
+    # sync read raises MissingGreenlet inside the Celery worker.
+    flow_id = flow.id
+    title = flow.title or "Ответы по промпту"
+    updated_at = datetime.now(timezone.utc)
+    flow.updated_at = updated_at
     await db.flush()
     published_flow_cache.invalidate(bot_id)
     published_flow_cache.put_from_orm(
-        flow_id=flow.id,
+        flow_id=flow_id,
         bot_id=bot_id,
-        title=flow.title,
+        title=title,
         graph_data=graph,
         is_published=True,
-        updated_at=flow.updated_at,
+        updated_at=updated_at,
     )
     return graph
