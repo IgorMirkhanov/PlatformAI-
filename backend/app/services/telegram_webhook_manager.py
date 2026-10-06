@@ -190,6 +190,26 @@ async def register_all_webhooks() -> dict[str, int]:
             header_secret = _channel_header_secret(meta)
             expected_url = f"{base}/api/v1/webhooks/telegram/{path_secret}"
 
+            # A channel already on getUpdates stays there. Restart must not
+            # put a webhook back when Telegram cannot deliver to it.
+            if str(meta.get("delivery_mode") or "").strip().lower() == "polling":
+                try:
+                    await telegram_service.delete_webhook(bot_token)
+                except Exception as exc:
+                    logger.warning(
+                        "TelegramWebhookManager.delete_webhook_failed | bot_id={bot_id} "
+                        "error={error}",
+                        bot_id=row.bot_id,
+                        error=str(exc),
+                    )
+                stats["polling"] += 1
+                logger.info(
+                    "TelegramWebhookManager.keep_polling | bot_id={bot_id} channel_id={channel_id}",
+                    bot_id=row.bot_id,
+                    channel_id=row.id,
+                )
+                continue
+
             if not is_public_https_webhook_url(expected_url):
                 # getUpdates only works when no webhook is registered on Telegram.
                 try:
