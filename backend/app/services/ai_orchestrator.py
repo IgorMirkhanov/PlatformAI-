@@ -253,10 +253,17 @@ class AIOrchestrator:
                     client_id=client_id,
                     case=showcase.case_id,
                 )
+            from app.services.showcase_session import retrieval_query
+
+            search_text = (
+                retrieval_query(incoming_message, history)
+                if showcase.active
+                else incoming_message
+            )
             rag_hits, rag_context = await self._fetch_rag_context_detailed(
                 db_session,
                 current_node_data,
-                incoming_message,
+                search_text,
                 bot_id=bot_id,
                 client_id=client_id,
                 node_id=node_id,
@@ -1266,6 +1273,12 @@ class AIOrchestrator:
                 traceback=__import__("traceback").format_exc(),
             )
             return [], []
+        if allowed_document_ids:
+            hits = await self._append_product_rule_chunks(
+                hits,
+                bot_id=knowledge_base_id,
+                document_ids=allowed_document_ids,
+            )
         if not hits and bot_id is not None:
             await diagnostic_log_service.log(
                 db_session,
@@ -1279,6 +1292,52 @@ class AIOrchestrator:
         if trace is not None:
             trace.record_rag_chunks(trace_chunks)
         return hits, [str(hit["text"]) for hit in hits if hit.get("text")]
+
+    async def _append_product_rule_chunks(
+        self,
+        hits: list[RAGSearchHit],
+        *,
+        bot_id: str,
+        document_ids: list[str],
+    ) -> list[RAGSearchHit]:
+        """Add formula and intake chunks the short similarity search leaves out."""
+        from app.core.vector_db import list_document_chunks
+        from app.services.showcase_session import select_product_rule_chunks
+
+        collected: list[str] = []
+        for document_id in document_ids[:3]:
+            try:
+                stored = await list_document_chunks(document_id, bot_id=bot_id)
+            except Exception as exc:
+                logger.warning(
+                    "AIOrchestrator.product_rules_failed | document_id={document_id} error={error}",
+                    document_id=document_id,
+                    error=str(exc),
+                )
+                continue
+            collected.extend(str(item.get("text") or "") for item in stored)
+        existing = {str(hit.get("text") or "").strip() for hit in hits}
+        for text in select_product_rule_chunks(collected):
+            if text in existing:
+                continue
+            existing.add(text)
+            hits.append(
+                {
+                    "text": text,
+                    "similarity_score": 1.0,
+                    "document_id": None,
+                    "file_name": None,
+                    "chunk_index": None,
+                    "page_number": None,
+                    "section": "product-rule",
+                    "source_file_url": None,
+                    "image_attachment": None,
+                    "file_url": None,
+                    "media_url": None,
+                    "metadata": {},
+                }
+            )
+        return hits
 
     @staticmethod
     def _history_without_scripted_replies(rows: list[Any]) -> list[dict[str, str]]:

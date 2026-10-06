@@ -184,8 +184,41 @@ def case_lock_instruction(case_id: str) -> str:
         "A booking, a price, or a symptom is not the end of the dialogue. "
         "Use only the knowledge for this case. Do not mention doctors, prices, or services from other cases. "
         "Do not paste a scripted greeting or copy an earlier reply. "
-        "Answer the latest user message in your own words."
+        "If the knowledge lists several products, stay on the one the user named. "
+        "Ask only that product's questions and calculate only with its formula, units, and prices. "
+        "Do not reuse another product's coefficient, gap, height, or price."
     )
+
+
+_PRODUCT_RULE_MARKERS = ("формул", "последовательно запросить")
+
+
+def select_product_rule_chunks(chunks: list[str]) -> list[str]:
+    """Keep the intake steps and formulas that vector search often misses."""
+    selected: list[str] = []
+    for raw in chunks:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        folded = text.casefold()
+        if any(marker in folded for marker in _PRODUCT_RULE_MARKERS):
+            selected.append(text)
+        if len(selected) >= 8:
+            break
+    return selected
+
+
+def retrieval_query(incoming_message: str, history: list[dict[str, str]] | None) -> str:
+    """Search with the recent user turns so a short reply still finds the right product."""
+    parts = [
+        str(item.get("content") or "").strip()
+        for item in (history or [])
+        if item.get("role") == "user" and str(item.get("content") or "").strip()
+    ]
+    current = (incoming_message or "").strip()
+    if current:
+        parts.append(current)
+    return " ".join(parts[-4:])[:600]
 
 
 def strip_unrequested_case_closer(text: str) -> str:

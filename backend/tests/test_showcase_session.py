@@ -7,7 +7,9 @@ from app.services.showcase_session import (
     file_matches_case,
     match_case_selection,
     parse_case_routes,
+    retrieval_query,
     resolve_showcase_case,
+    select_product_rule_chunks,
     strip_unrequested_case_closer,
 )
 
@@ -71,6 +73,28 @@ def test_knowledge_file_stays_inside_the_selected_case() -> None:
     assert not file_matches_case("RefreshMP.txt", "kart", routes["kart"])
     assert file_matches_case("RefreshMP.txt", "refresh", routes["refresh"])
     assert file_matches_case("АСАРMP.txt", "asar", routes["asar"])
+
+
+def test_product_formulas_stay_in_context_when_the_reply_is_only_a_color() -> None:
+    chunks = [
+        "Прайс: евроштакетник глянец 450, сайдинг глянец 650.",
+        "Если Евроштакетник: последовательно запросить длину забора и тип зашивки.",
+        "Формула 1: Евроштакетник. GAP 0.13. Цена глянец 450 за метр планки.",
+        "Формула 3: Металлический сайдинг. Площадь умножить на 1000.",
+    ]
+    selected = select_product_rule_chunks(chunks)
+    assert chunks[0] not in selected
+    assert "Формула 1" in selected[1]
+    assert "сайдинг" in selected[2].casefold()
+    query = retrieval_query(
+        "Глянец",
+        [
+            {"role": "user", "content": "Хочу сайдинг"},
+            {"role": "assistant", "content": "Какое покрытие?"},
+        ],
+    )
+    assert "Хочу сайдинг" in query
+    assert query.endswith("Глянец")
 
 
 def test_case_closer_and_copied_replies_leave_the_model_history() -> None:
