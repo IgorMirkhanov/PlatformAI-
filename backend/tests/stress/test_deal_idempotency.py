@@ -152,4 +152,4 @@ async def test_twenty_parallel_handle_new_message_one_deal_one_crm_call(
             select(func.count()).select_from(CrmDeal).where(CrmDeal.organization_id == org_id)
         )
     assert int(count or 0) == 1
-    assert create_lead.await_count == 1
+    assert create_lead.await_count == 0

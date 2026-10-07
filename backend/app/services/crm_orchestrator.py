@@ -1083,6 +1083,222 @@ class CRMOrchestrator:
         row.status = "active"
         await db.flush()
 
+    async def _mirror_new_deal_to_external_crms(
+        self,
+        db: AsyncSession,
+        *,
+        bot: Bot,
+        client: Client,
+        deal_id: uuid.UUID,
+        title: str,
+        message_text: str,
+        channel_type: str,
+    ) -> None:
+        """Create the same deal in every connected external CRM. Internal row already exists."""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from app.models.crm.deal import CrmDeal
+
+        deal = await db.get(CrmDeal, deal_id)
+        if deal is None:
+            return
+        fields = dict(deal.custom_fields or {})
+        changed = False
+        if self._is_crm_sync_enabled(bot, "bitrix24") and not fields.get("bitrix_deal_id"):
+            try:
+                external_id = await self._create_bitrix_inbound_deal(
+                    bot,
+                    client,
+                    title=title,
+                    message_text=message_text,
+                    channel_type=channel_type,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CRM.bitrix_mirror_failed | deal={deal} error={error}",
+                    deal=deal_id,
+                    error=str(exc),
+                )
+                external_id = None
+            if external_id:
+                fields["bitrix_deal_id"] = str(external_id)
+                changed = True
+        if self._is_crm_sync_enabled(bot, "amocrm") and not fields.get("amocrm_lead_id"):
+            try:
+                external_id = await self._create_amocrm_inbound_lead(
+                    db,
+                    bot,
+                    client,
+                    title=title,
+                    message_text=message_text,
+                    channel_type=channel_type,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CRM.amocrm_mirror_failed | deal={deal} error={error}",
+                    deal=deal_id,
+                    error=str(exc),
+                )
+                external_id = None
+            if external_id:
+                fields["amocrm_lead_id"] = str(external_id)
+                changed = True
+        if changed:
+            deal.custom_fields = fields
+            flag_modified(deal, "custom_fields")
+            await db.flush()
+
+    async def _comment_external_deals(
+        self,
+        db: AsyncSession,
+        *,
+        bot: Bot,
+        deal_id: uuid.UUID,
+        message_text: str,
+    ) -> None:
+        note = (message_text or "").strip()
+        if not note:
+            return
+        from app.models.crm.deal import CrmDeal
+
+        deal = await db.get(CrmDeal, deal_id)
+        if deal is None:
+            return
+        fields = deal.custom_fields if isinstance(deal.custom_fields, dict) else {}
+        bitrix_id = fields.get("bitrix_deal_id")
+        if bitrix_id and self._is_crm_sync_enabled(bot, "bitrix24"):
+            try:
+                await self._comment_bitrix_deal(bot, int(bitrix_id), note[:1500])
+            except Exception as exc:
+                logger.warning(
+                    "CRM.bitrix_comment_failed | deal={deal} error={error}",
+                    deal=deal_id,
+                    error=str(exc),
+                )
+        amo_id = fields.get("amocrm_lead_id")
+        if amo_id and self._is_crm_sync_enabled(bot, "amocrm"):
+            try:
+                await self._comment_amocrm_lead(db, bot, int(amo_id), note[:1500])
+            except Exception as exc:
+                logger.warning(
+                    "CRM.amocrm_comment_failed | deal={deal} error={error}",
+                    deal=deal_id,
+                    error=str(exc),
+                )
+
+    async def _create_bitrix_inbound_deal(
+        self,
+        bot: Bot,
+        client: Client,
+        *,
+        title: str,
+        message_text: str,
+        channel_type: str,
+    ) -> int | None:
+        webhook = self._get_bitrix_webhook(bot)
+        if not webhook:
+            return None
+        comments = (
+            f"Канал: {channel_type}\n"
+            f"Чат: {client.external_id}\n"
+            f"{(message_text or '').strip()[:1500]}"
+        ).strip()
+        fields: dict[str, Any] = {
+            "TITLE": (title or "Лид")[:255],
+            "SOURCE_ID": "OTHER",
+            "SOURCE_DESCRIPTION": channel_type[:255],
+            "COMMENTS": comments,
+        }
+        phone = clean_phone_number(self._client_lookup_query(client))
+        async with self._client() as http:
+            if phone:
+                try:
+                    fields["CONTACT_ID"] = await self._bitrix_find_or_create_contact(
+                        http,
+                        webhook,
+                        client,
+                        phone,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "CRM.bitrix_contact_skipped | client_id={client_id} error={error}",
+                        client_id=client.id,
+                        error=str(exc),
+                    )
+            deal_id = await self._bitrix_api_add(
+                http,
+                webhook,
+                "crm.deal.add",
+                {"fields": fields},
+            )
+            logger.info(
+                "CRM.bitrix_deal_created | bot_id={bot_id} client_id={client_id} deal_id={deal_id}",
+                bot_id=bot.id,
+                client_id=client.id,
+                deal_id=deal_id,
+            )
+            return deal_id
+
+    async def _comment_bitrix_deal(self, bot: Bot, deal_id: int, text: str) -> None:
+        webhook = self._get_bitrix_webhook(bot)
+        if not webhook:
+            return
+        async with self._client() as http:
+            await self._bitrix_attach_timeline_comment(http, webhook, deal_id, text)
+
+    async def _create_amocrm_inbound_lead(
+        self,
+        db: AsyncSession,
+        bot: Bot,
+        client: Client,
+        *,
+        title: str,
+        message_text: str,
+        channel_type: str,
+    ) -> int | None:
+        result = await self._execute_amocrm(
+            db,
+            bot,
+            client,
+            {
+                "tags": ["mp_ai", channel_type],
+                "custom_attributes": {
+                    "lead_name": title,
+                    "channel": channel_type,
+                    "message": (message_text or "")[:1000],
+                },
+            },
+        )
+        if not result.get("success"):
+            logger.warning(
+                "CRM.amocrm_mirror_skipped | bot_id={bot_id} error={error}",
+                bot_id=bot.id,
+                error=result.get("error"),
+            )
+            return None
+        lead_id = result.get("lead_id")
+        return int(lead_id) if lead_id else None
+
+    async def _comment_amocrm_lead(
+        self,
+        db: AsyncSession,
+        bot: Bot,
+        lead_id: int,
+        text: str,
+    ) -> None:
+        config = await self._get_amocrm_config(db, bot)
+        if not config:
+            return
+        headers = await self._amocrm_auth_headers(db, bot, config)
+        async with self._client() as http:
+            await self._amocrm_attach_note(
+                http,
+                config["base_domain"],
+                headers,
+                lead_id,
+                text,
+            )
+
     async def handle_new_message_for_crm(
         self,
         db: AsyncSession,
@@ -1131,44 +1347,22 @@ class CRMOrchestrator:
                     "channel_type": channel_type,
                 },
             )
-            if result.was_inserted:
-                try:
-                    from app.services.crm.adapters import get_crm_adapter
-
-                    platform = "amocrm"
-                    crm = (bot.credentials or {}).get("crm") or {}
-                    if isinstance(crm, dict) and crm.get("bitrix24"):
-                        platform = "bitrix24"
-                    adapter = get_crm_adapter(platform)
-                    await adapter.create_lead(
-                        payload={
-                            "bot": bot,
-                            "db": db,
-                            "name": title,
-                            "phone": external_chat_id,
-                            "comment": (message_text or "")[:2000],
-                            "channel": channel_type,
-                            "channel_user_id": external_chat_id,
-                        }
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "CRM.external_lead_failed | deal={deal} error={error}",
-                        deal=result.deal_id,
-                        error=str(exc),
-                    )
-            else:
-                try:
-                    from app.services.crm.adapters import get_crm_adapter
-
-                    adapter = get_crm_adapter("amocrm")
-                    await adapter.add_note(str(result.deal_id), (message_text or "")[:2000])
-                except Exception as exc:
-                    logger.debug(
-                        "CRM.add_note_skipped | deal={deal} error={error}",
-                        deal=result.deal_id,
-                        error=str(exc),
-                    )
+            await self._mirror_new_deal_to_external_crms(
+                db,
+                bot=bot,
+                client=client,
+                deal_id=result.deal_id,
+                title=title,
+                message_text=message_text,
+                channel_type=channel_type,
+            )
+            if not result.was_inserted:
+                await self._comment_external_deals(
+                    db,
+                    bot=bot,
+                    deal_id=result.deal_id,
+                    message_text=message_text,
+                )
             return {"deal_id": str(result.deal_id), "was_inserted": result.was_inserted}
         except Exception as exc:
             logger.warning(
