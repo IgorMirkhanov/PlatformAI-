@@ -115,7 +115,7 @@ async def test_bind_registers_webhook_on_connection_url(monkeypatch: pytest.Monk
     assert str(captured["url"]).endswith("/webhooks")
     body = captured["body"]
     assert isinstance(body, dict)
-    assert body["webhooksUri"] == f"https://api.mp.ai/webhooks/wazzup/{cid}"
+    assert body["webhooksUri"] == f"https://api.mp.ai/api/v1/webhooks/wazzup/{cid}"
     assert body["subscriptions"]["messagesAndStatuses"] is True
     assert uri == body["webhooksUri"]
     assert len(uri) < 200

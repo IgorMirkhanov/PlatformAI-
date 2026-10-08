@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -195,8 +196,15 @@ class IntegrationHubService:
                     if bundle.extra.get("channels"):
                         cfg["channels"] = bundle.extra["channels"]
                     row.config_json = cfg
-                except Exception:
+                except Exception as exc:
                     row.last_error = "event_bind_failed"
+                    logger.warning(
+                        "IntegrationHub.event_bind_failed | provider={provider} "
+                        "connection_id={connection_id} error={error}",
+                        provider=key,
+                        connection_id=row.id,
+                        error=str(exc)[:300],
+                    )
             elif callable(binder) and key in {"amocrm", "kommo"}:
                 from app.config import settings
                 from app.tasks.amocrm_tasks import bind_amocrm_webhooks_task

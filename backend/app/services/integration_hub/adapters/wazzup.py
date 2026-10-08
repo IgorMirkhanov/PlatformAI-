@@ -34,8 +34,12 @@ _KIND_CHAT_TYPE = {
 
 
 def wazzup_webhook_public_url(connection_id: UUID) -> str:
-    """Public URI registered with Wazzup (max 200 chars). Spec: /webhooks/wazzup/:id."""
-    return f"{resolve_webhook_base_url()}/webhooks/wazzup/{connection_id}"
+    """Public URI registered with Wazzup (max 200 chars).
+
+    The hub route is mounted under ``/api/v1``. A bare ``/webhooks/wazzup``
+    path hits the frontend and is redirected to login, so Wazzup rejects it.
+    """
+    return f"{resolve_webhook_base_url()}/api/v1/webhooks/wazzup/{connection_id}"
 
 
 def summarize_wazzup_channels(raw: Any) -> list[dict[str, Any]]:
