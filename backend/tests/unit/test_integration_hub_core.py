@@ -14,7 +14,10 @@ from app.services.integration_hub.crm_adapter import AmoCRMAdapter, Bitrix24Adap
 from app.services.integration_hub.oauth import (
     account_from_referer,
     build_authorize_url,
+    build_external_authorize_url,
     decode_oauth_state,
+    load_install_secrets,
+    save_install_secrets,
     sign_oauth_state,
 )
 from app.services.integration_hub.types import PlatformOAuthApp, TokenBundle
@@ -66,6 +69,43 @@ def test_amocrm_authorize_url_opens_account_picker() -> None:
     assert qs["mode"] == ["popup"]
     assert "platform-secret" not in url
     assert "subdomain" not in qs
+
+
+def test_amocrm_external_authorize_url_needs_no_client_id() -> None:
+    workspace = uuid.uuid4()
+    state = sign_oauth_state(workspace_id=workspace, provider="amocrm")
+    url = build_external_authorize_url(provider="amocrm", state=state)
+    parsed = urlparse(url)
+    assert parsed.netloc == "www.amocrm.ru"
+    assert parsed.path == "/oauth/"
+    qs = parse_qs(parsed.query)
+    assert qs["state"] == [state]
+    assert qs["mode"] == ["post_message"]
+    assert qs["scopes[]"] == ["crm", "notifications"]
+    assert qs["redirect_uri"][0].endswith("/api/v1/integrations/amocrm/callback")
+    assert qs["secrets_uri"][0].endswith("/api/v1/integrations/amocrm/secrets")
+    assert "client_id" not in qs
+
+
+def test_amocrm_install_secrets_roundtrip(monkeypatch: pytest.MonkeyPatch) -> None:
+    store: dict[str, str] = {}
+
+    class _Redis:
+        def setex(self, key: str, _ttl: int, value: str) -> None:
+            store[key] = value
+
+        def get(self, key: str) -> str | None:
+            return store.get(key)
+
+    monkeypatch.setattr(
+        "app.core.redis_client.get_redis_client",
+        lambda: _Redis(),
+    )
+    state = sign_oauth_state(workspace_id=uuid.uuid4(), provider="amocrm")
+    save_install_secrets(state, "install-client", "install-secret")
+    assert "install-secret" not in next(iter(store.values()))
+    loaded = load_install_secrets(state)
+    assert loaded == {"client_id": "install-client", "client_secret": "install-secret"}
 
 
 def test_amocrm_referer_is_the_chosen_account() -> None:

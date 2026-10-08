@@ -72,22 +72,33 @@ class AmoCRMHubAdapter:
         payload: dict[str, Any],
         http: httpx.AsyncClient,
     ) -> TokenBundle:
-        if platform_app is None or not platform_app.client_id or not platform_app.client_secret:
+        client_id = str(
+            payload.get("client_id") or (platform_app.client_id if platform_app else "") or ""
+        ).strip()
+        client_secret = str(
+            payload.get("client_secret")
+            or (platform_app.client_secret if platform_app else "")
+            or ""
+        ).strip()
+        redirect_uri = str(
+            payload.get("redirect_uri") or (platform_app.redirect_uri if platform_app else "") or ""
+        ).strip()
+        if not client_id or not client_secret:
             raise ValueError("Platform amoCRM OAuth app is not configured.")
         subdomain = str(payload.get("subdomain") or payload.get("base_domain") or "").strip()
         code = str(payload.get("authorization_code") or payload.get("code") or "").strip()
         if not subdomain or not code:
             raise ValueError("Для amoCRM нужны subdomain и authorization_code.")
         host = self._host(subdomain)
-        token_url = platform_app.token_url or f"https://{host}/oauth2/access_token"
+        token_url = (platform_app.token_url if platform_app else None) or f"https://{host}/oauth2/access_token"
         response = await http.post(
             token_url,
             json={
-                "client_id": platform_app.client_id,
-                "client_secret": platform_app.client_secret,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": payload.get("redirect_uri") or platform_app.redirect_uri,
+                "redirect_uri": redirect_uri,
             },
             timeout=20.0,
         )
@@ -96,6 +107,10 @@ class AmoCRMHubAdapter:
         if not isinstance(data, dict):
             data = {}
         bundle = self._bundle_from_token_response(data, host)
+        bundle.extra["client_id"] = client_id
+        bundle.extra["client_secret"] = client_secret
+        if redirect_uri:
+            bundle.extra["redirect_uri"] = redirect_uri
         try:
             acc = await http.get(
                 f"https://{host}/api/v4/account",
@@ -118,18 +133,34 @@ class AmoCRMHubAdapter:
         http: httpx.AsyncClient,
     ) -> TokenBundle:
         """HTTP token rotation only. Callers MUST hold the connection advisory lock."""
-        if platform_app is None or not secrets.refresh_token:
+        client_id = str(
+            secrets.extra.get("client_id") or (platform_app.client_id if platform_app else "") or ""
+        ).strip()
+        client_secret = str(
+            secrets.extra.get("client_secret")
+            or (platform_app.client_secret if platform_app else "")
+            or ""
+        ).strip()
+        redirect_uri = str(
+            secrets.extra.get("redirect_uri")
+            or (platform_app.redirect_uri if platform_app else "")
+            or ""
+        ).strip()
+        if not client_id or not client_secret or not secrets.refresh_token:
             raise ValueError("Cannot refresh amoCRM: missing platform app or refresh_token.")
         host = str(secrets.extra.get("subdomain") or secrets.external_account_id or "")
-        token_url = platform_app.token_url or f"https://{self._host(host)}/oauth2/access_token"
+        token_url = (
+            (platform_app.token_url if platform_app else None)
+            or f"https://{self._host(host)}/oauth2/access_token"
+        )
         response = await http.post(
             token_url,
             json={
-                "client_id": platform_app.client_id,
-                "client_secret": platform_app.client_secret,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "grant_type": "refresh_token",
                 "refresh_token": secrets.refresh_token,
-                "redirect_uri": platform_app.redirect_uri,
+                "redirect_uri": redirect_uri,
             },
             timeout=20.0,
         )
@@ -141,6 +172,10 @@ class AmoCRMHubAdapter:
             data["refresh_token"] = secrets.refresh_token
         bundle = self._bundle_from_token_response(data, host)
         bundle.extra["subdomain"] = self._host(host)
+        bundle.extra["client_id"] = client_id
+        bundle.extra["client_secret"] = client_secret
+        if redirect_uri:
+            bundle.extra["redirect_uri"] = redirect_uri
         if secrets.extra.get("account_id"):
             bundle.extra["account_id"] = secrets.extra["account_id"]
         return bundle

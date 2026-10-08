@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Literal
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from loguru import logger
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -25,6 +27,7 @@ from app.services.integration_hub.oauth import (
     disconnect_connection,
     frontend_result_url,
     handle_callback,
+    save_install_secrets,
     start_authorize,
 )
 from app.services.integration_hub.service import integration_hub_service
@@ -62,6 +65,7 @@ class HubConnectionRead(BaseModel):
 
 def _to_read(row: IntegrationConnection) -> HubConnectionRead:
     config = dict(row.config_json or {})
+    config.pop("client_secret", None)
     meta = config.get("metadata")
     if not isinstance(meta, dict):
         meta = {"channels": config.get("channels") or []}
@@ -403,6 +407,44 @@ async def oauth_authorize(
     if (response_format or "").strip().lower() == "json":
         return JSONResponse({"authorize_url": url, "provider": provider})
     return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
+
+
+@oauth_router.api_route(
+    "/{provider}/secrets",
+    methods=["GET", "POST"],
+    summary="amoCRM external integration delivers client_id and client_secret here",
+)
+async def oauth_install_secrets(provider: OAuthProvider, request: Request) -> JSONResponse:
+    if provider not in {"amocrm", "kommo"}:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Not found.")
+    fields = {key: value for key, value in request.query_params.items()}
+    raw = await request.body()
+    content_type = (request.headers.get("content-type") or "").lower()
+    if raw and "json" in content_type:
+        try:
+            body = json.loads(raw)
+        except json.JSONDecodeError:
+            body = None
+        if isinstance(body, dict):
+            for key, value in body.items():
+                if value is not None and key not in fields:
+                    fields[key] = value if isinstance(value, str) else str(value)
+    elif raw:
+        parsed = parse_qs(raw.decode("utf-8", "replace"))
+        for key, values in parsed.items():
+            if values and key not in fields:
+                fields[key] = values[0]
+    client_id = str(fields.get("client_id") or "").strip()
+    client_secret = str(fields.get("client_secret") or "").strip()
+    state = str(fields.get("state") or "").strip()
+    if not client_id or not client_secret or not state:
+        return JSONResponse({"status": "ignored"})
+    try:
+        save_install_secrets(state, client_id, client_secret)
+    except OAuthFlowError:
+        return JSONResponse({"status": "rejected"}, status_code=status.HTTP_400_BAD_REQUEST)
+    logger.info("amoCRM.install_secrets_stored | provider={provider}", provider=provider)
+    return JSONResponse({"status": "ok"})
 
 
 @oauth_router.get("/{provider}/callback", summary="OAuth2 callback — exchange code, encrypt tokens")

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -22,7 +25,7 @@ from app.models.integration_hub import (
     IntegrationOAuthApp,
     IntegrationProvider,
 )
-from app.services.encryption import decrypt
+from app.services.encryption import decrypt, encrypt
 from app.services.integration_hub.adapters.bitrix24 import Bitrix24HubAdapter
 from app.repositories.credentials_repository import CredentialsRepository
 from app.services.integration_hub.oauth_apps import get_platform_oauth_app
@@ -40,6 +43,11 @@ class OAuthFlowError(ValueError):
 
 def callback_url(provider: str) -> str:
     return f"{resolve_webhook_base_url()}/api/v1/integrations/{provider}/callback"
+
+
+def secrets_url(provider: str) -> str:
+    """amoCRM posts client_id and client_secret here before the browser redirect."""
+    return f"{resolve_webhook_base_url()}/api/v1/integrations/{provider}/secrets"
 
 
 def frontend_result_url(*, provider: str, status: str, **query: str) -> str:
@@ -125,6 +133,68 @@ def build_authorize_url(
     raise OAuthFlowError(f"Provider {provider} does not use OAuth2.")
 
 
+def build_external_authorize_url(*, provider: str, state: str) -> str:
+    """Account picker that creates an amo integration at click time.
+
+    No platform client_id is required. amo sends the new integration's
+    client_id and client_secret to secrets_uri, then redirects with the code.
+    """
+    key = (provider or "").strip().lower()
+    picker = "https://www.kommo.com/oauth/" if key == "kommo" else "https://www.amocrm.ru/oauth/"
+    slug = "amocrm" if key == "kommo" else key
+    origin = (settings.FRONTEND_URL or resolve_webhook_base_url()).rstrip("/")
+    if not origin.startswith("https://"):
+        origin = resolve_webhook_base_url()
+    params = [
+        ("state", state),
+        ("mode", "post_message"),
+        ("origin", origin),
+        ("name", "MP.AI"),
+        ("description", "Подключение CRM к агенту MP.AI"),
+        ("redirect_uri", callback_url(slug)),
+        ("secrets_uri", secrets_url(slug)),
+        ("logo", f"{resolve_webhook_base_url()}/amocrm-logo.png"),
+        ("scopes[]", "crm"),
+        ("scopes[]", "notifications"),
+    ]
+    return f"{picker}?{urlencode(params)}"
+
+
+_INSTALL_PREFIX = "amocrm:oauth_install:"
+
+
+def _install_key(state: str) -> str:
+    digest = hashlib.sha256(state.encode("utf-8")).hexdigest()
+    return f"{_INSTALL_PREFIX}{digest}"
+
+
+def save_install_secrets(state: str, client_id: str, client_secret: str) -> None:
+    decode_oauth_state(state)
+    from app.core.redis_client import get_redis_client
+
+    payload = json.dumps(
+        {"client_id": client_id, "client_secret": encrypt(client_secret)},
+        separators=(",", ":"),
+    )
+    get_redis_client().setex(_install_key(state), int(_STATE_TTL.total_seconds()), payload)
+
+
+def load_install_secrets(state: str) -> dict[str, str] | None:
+    from app.core.redis_client import get_redis_client
+
+    raw = get_redis_client().get(_install_key(state))
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return None
+    client_id = str(data.get("client_id") or "").strip()
+    sealed = str(data.get("client_secret") or "").strip()
+    if not client_id or not sealed:
+        return None
+    return {"client_id": client_id, "client_secret": decrypt(sealed)}
+
+
 def secrets_from_connection(connection: IntegrationConnection) -> TokenBundle:
     access = decrypt(connection.encrypted_access_token) if connection.encrypted_access_token else None
     refresh = decrypt(connection.encrypted_refresh_token) if connection.encrypted_refresh_token else None
@@ -202,17 +272,23 @@ async def start_authorize(
         if bot is None or bot.organization_id != workspace_id:
             raise OAuthFlowError("Agent not found in this workspace.")
     platform_app = await get_platform_oauth_app(db, key)
+    if key in {"amocrm", "kommo"} and (
+        platform_app is None or not platform_app.client_id or not platform_app.client_secret
+    ):
+        state = sign_oauth_state(
+            workspace_id=workspace_id,
+            provider=key,
+            agent_id=agent_id,
+            extra=extra,
+        )
+        return build_external_authorize_url(provider=key, state=state)
     if platform_app is None or not platform_app.client_id or not platform_app.client_secret:
         if key == "bitrix24":
             raise OAuthFlowError(
                 "Bitrix24 OAuth app is not configured (BITRIX_APP_ID). "
                 "Use Incoming Webhook URL on the Bitrix24 card instead."
             )
-        raise OAuthFlowError(
-            "Приложение amoCRM на платформе ещё не настроено. "
-            "Нужны Client ID и Secret интеграции. "
-            f"Redirect URI: {callback_url('amocrm')}."
-        )
+        raise OAuthFlowError("Platform OAuth app is not configured for this provider.")
     # Canonical redirect must match the partner cabinet entry character-for-character.
     slug = "amocrm" if key == "kommo" else key
     canonical = callback_url(slug)
@@ -257,6 +333,8 @@ async def mirror_amocrm_tokens_to_bot(
     *,
     bot_id: uuid.UUID,
     connection: IntegrationConnection,
+    client_id: str | None = None,
+    client_secret: str | None = None,
 ) -> None:
     """Deals read bot.credentials.crm.amocrm. Copy the hub OAuth result there."""
     bot = await db.scalar(select(Bot).where(Bot.id == bot_id))
@@ -265,10 +343,13 @@ async def mirror_amocrm_tokens_to_bot(
     platform_app = await get_platform_oauth_app(db, "amocrm")
     secrets = secrets_from_connection(connection)
     domain = str(secrets.extra.get("subdomain") or secrets.external_account_id or "").strip()
+    resolved_id = (client_id or (platform_app.client_id if platform_app else "") or "").strip()
+    resolved_secret = (
+        client_secret or (platform_app.client_secret if platform_app else "") or ""
+    ).strip()
     if (
-        platform_app is None
-        or not platform_app.client_id
-        or not platform_app.client_secret
+        not resolved_id
+        or not resolved_secret
         or not domain
         or not secrets.access_token
         or not secrets.refresh_token
@@ -291,14 +372,14 @@ async def mirror_amocrm_tokens_to_bot(
         db,
         bot,
         domain=domain,
-        client_id=platform_app.client_id,
-        client_secret=platform_app.client_secret,
+        client_id=resolved_id,
+        client_secret=resolved_secret,
         token_data={
             "access_token": secrets.access_token,
             "refresh_token": secrets.refresh_token,
             "expires_in": expires_in,
         },
-        redirect_uri=platform_app.redirect_uri or callback_url("amocrm"),
+        redirect_uri=(platform_app.redirect_uri if platform_app else None) or callback_url("amocrm"),
     )
 
 
@@ -328,7 +409,31 @@ async def handle_callback(
             raise OAuthFlowError("amoCRM не вернул выбранный аккаунт. Начните подключение заново.")
         extra["subdomain"] = account
         extra["base_domain"] = account
+    install: dict[str, str] | None = None
+    if key in {"amocrm", "kommo"}:
+        install = load_install_secrets(state)
+        if install is None:
+            platform_app = await get_platform_oauth_app(db, key)
+            needs_install = (
+                platform_app is None
+                or not platform_app.client_id
+                or not platform_app.client_secret
+            )
+            if needs_install:
+                for _attempt in range(8):
+                    await asyncio.sleep(0.25)
+                    install = load_install_secrets(state)
+                    if install:
+                        break
+                if install is None:
+                    raise OAuthFlowError(
+                        "amoCRM не прислал ключи интеграции. Начните подключение заново."
+                    )
     payload = {"code": code, "authorization_code": code, **extra}
+    if install:
+        payload["client_id"] = install["client_id"]
+        payload["client_secret"] = install["client_secret"]
+        payload["redirect_uri"] = callback_url("amocrm")
     row = await integration_hub_service.connect(
         db,
         organization_id=workspace_id,
@@ -351,7 +456,13 @@ async def handle_callback(
     row.last_error = None
     await db.flush()
     if agent_id is not None and key in {"amocrm", "kommo"}:
-        await mirror_amocrm_tokens_to_bot(db, bot_id=agent_id, connection=row)
+        await mirror_amocrm_tokens_to_bot(
+            db,
+            bot_id=agent_id,
+            connection=row,
+            client_id=str(payload.get("client_id") or "") or None,
+            client_secret=str(payload.get("client_secret") or "") or None,
+        )
     logger.info(
         "IntegrationHub.oauth_connected | provider={provider} connection_id={id}",
         provider=key,
