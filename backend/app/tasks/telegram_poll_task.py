@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from loguru import logger
@@ -18,8 +19,10 @@ from app.services.telegram_service import telegram_service
 from app.tasks.webhook_tasks import process_inbound_message_task
 
 POLL_LOCK_KEY = "telegram:poll:lock"
-# Must cover long-poll getUpdates (25s) + processing slack.
-POLL_LOCK_TTL = 45
+# One parallel round of long-polls, plus slack if the worker stalls.
+# Must stay above TELEGRAM_LONG_POLL_TIMEOUT or a second poller starts and
+# Telegram answers both with "Conflict".
+POLL_LOCK_TTL = 70
 OFFSET_KEY = "telegram:poll:offset:{token_hash}"
 POLL_INTERVAL_SECONDS = 1
 # Hold Telegram's getUpdates stream so a competing poller cannot steal updates.
@@ -112,10 +115,92 @@ async def _switch_unreachable_channels() -> None:
             await db.commit()
 
 
+async def _poll_one_bot(row: BotChannel, token: str) -> int:
+    """Long-poll one bot and enqueue updates as soon as Telegram returns them.
+
+    Other bots keep their own getUpdates open, so a reply is not stuck behind
+    a 25s wait on a different token.
+    """
+    redis = get_redis_client()
+    meta = row.meta_data if isinstance(row.meta_data, dict) else {}
+    token_hash = str(meta.get("token_hash") or row.bot_id)
+    offset_raw = redis.get(OFFSET_KEY.format(token_hash=token_hash))
+    offset = int(offset_raw) if offset_raw else None
+    updates = await telegram_service.fetch_updates(
+        token,
+        offset=offset,
+        timeout=TELEGRAM_LONG_POLL_TIMEOUT,
+    )
+    if not updates:
+        return 0
+
+    processed = 0
+    max_update_id: int | None = None
+    for raw in updates:
+        if not isinstance(raw, dict):
+            continue
+        update_id = raw.get("update_id")
+        if update_id is not None:
+            try:
+                uid = int(update_id)
+                max_update_id = uid if max_update_id is None else max(max_update_id, uid)
+            except (TypeError, ValueError):
+                uid = None
+        else:
+            uid = None
+
+        try:
+            update = TelegramUpdate.model_validate(raw)
+        except Exception:
+            continue
+        parsed = telegram_service.extract_inbound_fields(update)
+        message_id = _extract_message_id(raw)
+        chat_id = parsed.chat_id if parsed else None
+        if not claim_telegram_inbound(
+            update_id=uid if uid is not None else update_id,
+            bot_id=str(row.bot_id),
+            chat_id=chat_id,
+            message_id=message_id,
+            message_text=parsed.message_text if parsed else None,
+        ):
+            logger.info(
+                "TelegramPoll.dedup_skip | bot_id={bot_id} update_id={update_id} message_id={message_id}",
+                bot_id=row.bot_id,
+                update_id=update_id,
+                message_id=message_id,
+            )
+            continue
+
+        process_inbound_message_task.apply_async(
+            args=[
+                str(row.bot_id),
+                "TELEGRAM",
+                {
+                    "bot_id": str(row.bot_id),
+                    "bot_token_hash": token_hash,
+                    "update": update.to_raw_dict() if parsed else raw,
+                    "external_id": parsed.chat_id if parsed else None,
+                    "username": parsed.username if parsed else None,
+                    "first_name": parsed.first_name if parsed else None,
+                    "last_name": parsed.last_name if parsed else None,
+                    "message_text": parsed.message_text if parsed else None,
+                    "telegram_message_id": message_id,
+                },
+            ],
+            queue=settings.CELERY_INBOUND_QUEUE,
+        )
+        processed += 1
+
+    # Confirm offsets with Telegram immediately so the next poll cannot redeliver.
+    if max_update_id is not None:
+        next_offset = max_update_id + 1
+        redis.set(OFFSET_KEY.format(token_hash=token_hash), next_offset)
+        await telegram_service.fetch_updates(token, offset=next_offset, timeout=0)
+    return processed
+
+
 async def _poll_connected_bots() -> int:
     await _switch_unreachable_channels()
-    processed = 0
-    redis = get_redis_client()
     async with async_session_factory() as db:
         result = await db.execute(
             select(BotChannel).where(
@@ -130,11 +215,10 @@ async def _poll_connected_bots() -> int:
 
     # One getUpdates stream per bot token (avoid TELEGRAM + BUSINESS dual poll).
     seen_tokens: set[str] = set()
-
+    jobs: list[asyncio.Task[int]] = []
     for row in rows:
         if not _is_polling_row(row):
             continue
-        token = ""
         try:
             token = decrypt_credential(row.encrypted_token or "")
         except Exception as exc:
@@ -147,81 +231,20 @@ async def _poll_connected_bots() -> int:
         if not token or token in seen_tokens:
             continue
         seen_tokens.add(token)
+        jobs.append(asyncio.create_task(_poll_one_bot(row, token)))
 
-        meta = row.meta_data if isinstance(row.meta_data, dict) else {}
-        token_hash = str(meta.get("token_hash") or row.bot_id)
-        offset_raw = redis.get(OFFSET_KEY.format(token_hash=token_hash))
-        offset = int(offset_raw) if offset_raw else None
-        updates = await telegram_service.fetch_updates(
-            token,
-            offset=offset,
-            timeout=TELEGRAM_LONG_POLL_TIMEOUT,
-        )
-        if not updates:
-            continue
-
-        max_update_id: int | None = None
-        for raw in updates:
-            if not isinstance(raw, dict):
-                continue
-            update_id = raw.get("update_id")
-            if update_id is not None:
-                try:
-                    uid = int(update_id)
-                    max_update_id = uid if max_update_id is None else max(max_update_id, uid)
-                except (TypeError, ValueError):
-                    uid = None
-            else:
-                uid = None
-
-            try:
-                update = TelegramUpdate.model_validate(raw)
-            except Exception:
-                continue
-            parsed = telegram_service.extract_inbound_fields(update)
-            message_id = _extract_message_id(raw)
-            chat_id = parsed.chat_id if parsed else None
-            if not claim_telegram_inbound(
-                update_id=uid if uid is not None else update_id,
-                bot_id=str(row.bot_id),
-                chat_id=chat_id,
-                message_id=message_id,
-                message_text=parsed.message_text if parsed else None,
-            ):
-                logger.info(
-                    "TelegramPoll.dedup_skip | bot_id={bot_id} update_id={update_id} message_id={message_id}",
-                    bot_id=row.bot_id,
-                    update_id=update_id,
-                    message_id=message_id,
-                )
-                continue
-
-            process_inbound_message_task.apply_async(
-                args=[
-                    str(row.bot_id),
-                    "TELEGRAM",
-                    {
-                        "bot_id": str(row.bot_id),
-                        "bot_token_hash": token_hash,
-                        "update": update.to_raw_dict() if parsed else raw,
-                        "external_id": parsed.chat_id if parsed else None,
-                        "username": parsed.username if parsed else None,
-                        "first_name": parsed.first_name if parsed else None,
-                        "last_name": parsed.last_name if parsed else None,
-                        "message_text": parsed.message_text if parsed else None,
-                        "telegram_message_id": message_id,
-                    },
-                ],
-                queue=settings.CELERY_INBOUND_QUEUE,
+    if not jobs:
+        return 0
+    results = await asyncio.gather(*jobs, return_exceptions=True)
+    processed = 0
+    for result in results:
+        if isinstance(result, Exception):
+            logger.warning(
+                "TelegramPoll.bot_failed | error={error}",
+                error=type(result).__name__,
             )
-            processed += 1
-
-        # Confirm offsets with Telegram immediately so the next poll cannot redeliver.
-        if max_update_id is not None:
-            next_offset = max_update_id + 1
-            redis.set(OFFSET_KEY.format(token_hash=token_hash), next_offset)
-            await telegram_service.fetch_updates(token, offset=next_offset, timeout=0)
-
+            continue
+        processed += int(result)
     return processed
 
 
