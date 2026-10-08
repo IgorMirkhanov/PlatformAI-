@@ -53,7 +53,7 @@ export const HUB_CARD_PROVIDERS: HubCardProvider[] = [
     auth: "oauth",
     logo: "amo",
     permissions: ["Контакты", "Сделки", "Примечания"],
-    oauthHint: "Поддомен аккаунта, например acme",
+    oauthHint: "Откроется amoCRM — выберите аккаунт.",
   },
   {
     id: "wazzup",

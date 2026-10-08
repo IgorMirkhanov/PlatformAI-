@@ -12,6 +12,7 @@ import pytest
 from app.services.encryption import decrypt, encrypt
 from app.services.integration_hub.crm_adapter import AmoCRMAdapter, Bitrix24Adapter, get_crm_adapter
 from app.services.integration_hub.oauth import (
+    account_from_referer,
     build_authorize_url,
     decode_oauth_state,
     sign_oauth_state,
@@ -41,9 +42,9 @@ def test_oauth_state_roundtrip() -> None:
     assert claims["extra"]["subdomain"] == "acme"
 
 
-def test_amocrm_authorize_url_includes_signed_state() -> None:
+def test_amocrm_authorize_url_opens_account_picker() -> None:
     workspace = uuid.uuid4()
-    state = sign_oauth_state(workspace_id=workspace, provider="amocrm", extra={"subdomain": "acme"})
+    state = sign_oauth_state(workspace_id=workspace, provider="amocrm")
     app = PlatformOAuthApp(
         provider="amocrm",
         client_id="platform-client",
@@ -54,14 +55,24 @@ def test_amocrm_authorize_url_includes_signed_state() -> None:
         platform_app=app,
         provider="amocrm",
         state=state,
-        extra={"subdomain": "acme"},
+        extra={},
     )
     parsed = urlparse(url)
-    assert parsed.netloc == "acme.amocrm.ru"
+    assert parsed.netloc == "www.amocrm.ru"
+    assert parsed.path == "/oauth"
     qs = parse_qs(parsed.query)
     assert qs["client_id"] == ["platform-client"]
     assert qs["state"] == [state]
+    assert qs["mode"] == ["popup"]
     assert "platform-secret" not in url
+    assert "subdomain" not in qs
+
+
+def test_amocrm_referer_is_the_chosen_account() -> None:
+    assert account_from_referer("acme.amocrm.ru", "amocrm") == "acme.amocrm.ru"
+    assert account_from_referer("https://acme.amocrm.kz/oauth", "amocrm") == "acme.amocrm.kz"
+    assert account_from_referer("acme", "amocrm") == "acme.amocrm.ru"
+    assert account_from_referer("", "amocrm") == ""
 
 
 @pytest.mark.asyncio

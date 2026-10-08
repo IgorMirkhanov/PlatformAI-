@@ -410,6 +410,7 @@ async def oauth_callback(
     provider: OAuthProvider,
     code: str = Query(default=""),
     state: str = Query(default=""),
+    referer: str = Query(default=""),
     error: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> RedirectResponse:
@@ -424,7 +425,9 @@ async def oauth_callback(
             status_code=status.HTTP_302_FOUND,
         )
     try:
-        row = await handle_callback(db, provider=provider, code=code, state=state)
+        row = await handle_callback(
+            db, provider=provider, code=code, state=state, referer=referer
+        )
         await db.commit()
     except Exception as exc:
         await db.rollback()

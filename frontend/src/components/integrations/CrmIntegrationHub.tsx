@@ -307,6 +307,7 @@ export function CrmIntegrationHub({ botId, profile }: CrmIntegrationHubProps) {
         saving={saving}
         onClose={() => setActiveDefinition(null)}
         onSave={(payload) => handleCrmSave("amocrm", payload)}
+        onConnected={loadStatus}
       />
 
       <AmoCrmModal
@@ -331,6 +332,7 @@ export function CrmIntegrationHub({ botId, profile }: CrmIntegrationHubProps) {
         saving={saving}
         onClose={() => setActiveDefinition(null)}
         onSave={(payload) => handleCrmSave("kommo", payload)}
+        onConnected={loadStatus}
       />
 
       <Bitrix24Modal

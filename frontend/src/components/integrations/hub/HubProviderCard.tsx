@@ -52,7 +52,6 @@ export function HubProviderCard({
     busy && panel !== "settings",
     oauthUiError || Boolean(formError && !busy && panel === "idle" && connection?.status !== "connected"),
   );
-  const needsOAuthField = definition.id === "amocrm";
   const account = useMemo(
     () =>
       hubAccountLabel({
@@ -141,7 +140,7 @@ export function HubProviderCard({
   const startConnect = () => {
     setFormError(null);
     setOauthUiError(false);
-    if (definition.auth === "oauth" && !needsOAuthField) {
+    if (definition.auth === "oauth") {
       void handleOAuth({});
       return;
     }

@@ -101,22 +101,17 @@ def build_authorize_url(
     extra = extra or {}
     redirect = platform_app.redirect_uri or callback_url(key if key != "kommo" else "amocrm")
     if key in {"amocrm", "kommo"}:
-        host = str(extra.get("subdomain") or extra.get("base_domain") or "").strip()
-        if not host:
-            raise OAuthFlowError("Для amoCRM укажите subdomain.")
-        host = host.replace("https://", "").replace("http://", "").rstrip("/")
-        if not host.endswith(".amocrm.ru") and "." not in host:
-            host = f"{host}.amocrm.ru"
+        # Account is chosen on amo's side. mode=popup returns to our redirect URI
+        # with code + referer. mode=post_message never hits the callback.
+        picker = "https://www.kommo.com/oauth" if key == "kommo" else "https://www.amocrm.ru/oauth"
         params = urlencode(
             {
                 "client_id": platform_app.client_id,
-                "redirect_uri": redirect,
-                "response_type": "code",
                 "state": state,
-                "mode": "post_message",
+                "mode": "popup",
             }
         )
-        return f"https://{host}/oauth?{params}"
+        return f"{picker}?{params}"
     if key == "bitrix24":
         from app.services.integration_hub.adapters.bitrix24 import Bitrix24HubAdapter
 
@@ -213,7 +208,11 @@ async def start_authorize(
                 "Bitrix24 OAuth app is not configured (BITRIX_APP_ID). "
                 "Use Incoming Webhook URL on the Bitrix24 card instead."
             )
-        raise OAuthFlowError("Platform OAuth app is not configured for this provider.")
+        raise OAuthFlowError(
+            "Приложение amoCRM на платформе ещё не настроено. "
+            "Нужны Client ID и Secret интеграции. "
+            f"Redirect URI: {callback_url('amocrm')}."
+        )
     # Canonical redirect must match the partner cabinet entry character-for-character.
     slug = "amocrm" if key == "kommo" else key
     canonical = callback_url(slug)
@@ -241,12 +240,75 @@ async def start_authorize(
     )
 
 
+def account_from_referer(referer: str | None, provider: str) -> str:
+    """amoCRM/Kommo send the chosen account host as `referer` on the redirect."""
+    host = (referer or "").strip()
+    host = host.replace("https://", "").replace("http://", "").split("/")[0].split("?")[0]
+    if not host:
+        return ""
+    key = (provider or "").strip().lower()
+    if "." not in host:
+        host = f"{host}.kommo.com" if key == "kommo" else f"{host}.amocrm.ru"
+    return host
+
+
+async def mirror_amocrm_tokens_to_bot(
+    db: AsyncSession,
+    *,
+    bot_id: uuid.UUID,
+    connection: IntegrationConnection,
+) -> None:
+    """Deals read bot.credentials.crm.amocrm. Copy the hub OAuth result there."""
+    bot = await db.scalar(select(Bot).where(Bot.id == bot_id))
+    if bot is None:
+        return
+    platform_app = await get_platform_oauth_app(db, "amocrm")
+    secrets = secrets_from_connection(connection)
+    domain = str(secrets.extra.get("subdomain") or secrets.external_account_id or "").strip()
+    if (
+        platform_app is None
+        or not platform_app.client_id
+        or not platform_app.client_secret
+        or not domain
+        or not secrets.access_token
+        or not secrets.refresh_token
+    ):
+        logger.warning(
+            "IntegrationHub.amocrm_bot_mirror_skipped | bot_id={bot_id} has_domain={has_domain}",
+            bot_id=bot_id,
+            has_domain=bool(domain),
+        )
+        return
+    expires_in = 86400
+    if connection.oauth_expires_at is not None:
+        expires = connection.oauth_expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        expires_in = max(60, int((expires - datetime.now(timezone.utc)).total_seconds()))
+    from app.services.crm_orchestrator import crm_orchestrator
+
+    await crm_orchestrator._persist_amocrm_tokens(
+        db,
+        bot,
+        domain=domain,
+        client_id=platform_app.client_id,
+        client_secret=platform_app.client_secret,
+        token_data={
+            "access_token": secrets.access_token,
+            "refresh_token": secrets.refresh_token,
+            "expires_in": expires_in,
+        },
+        redirect_uri=platform_app.redirect_uri or callback_url("amocrm"),
+    )
+
+
 async def handle_callback(
     db: AsyncSession,
     *,
     provider: str,
     code: str,
     state: str,
+    referer: str | None = None,
     http: httpx.AsyncClient | None = None,
 ) -> IntegrationConnection:
     key = (provider or "").strip().lower()
@@ -256,7 +318,16 @@ async def handle_callback(
     workspace_id = uuid.UUID(str(claims["workspace_id"]))
     agent_raw = claims.get("agent_id")
     agent_id = uuid.UUID(str(agent_raw)) if agent_raw else None
-    extra = claims.get("extra") if isinstance(claims.get("extra"), dict) else {}
+    extra = dict(claims.get("extra") or {}) if isinstance(claims.get("extra"), dict) else {}
+    if key in {"amocrm", "kommo"}:
+        account = account_from_referer(referer, key) or account_from_referer(
+            str(extra.get("subdomain") or extra.get("base_domain") or ""),
+            key,
+        )
+        if not account:
+            raise OAuthFlowError("amoCRM не вернул выбранный аккаунт. Начните подключение заново.")
+        extra["subdomain"] = account
+        extra["base_domain"] = account
     payload = {"code": code, "authorization_code": code, **extra}
     row = await integration_hub_service.connect(
         db,
@@ -279,6 +350,8 @@ async def handle_callback(
     row.status = HubConnectionStatus.CONNECTED.value
     row.last_error = None
     await db.flush()
+    if agent_id is not None and key in {"amocrm", "kommo"}:
+        await mirror_amocrm_tokens_to_bot(db, bot_id=agent_id, connection=row)
     logger.info(
         "IntegrationHub.oauth_connected | provider={provider} connection_id={id}",
         provider=key,

@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 import { IntegrationModalShell } from "@/components/integrations/IntegrationModalShell";
 import { PipelineMappingStep } from "@/components/integrations/PipelineMappingStep";
 import { fetchCRMPipelines } from "@/lib/api";
+import { fetchHubAuthorizeUrl } from "@/lib/integrations/hubApi";
+import { openHubOAuthPopup } from "@/lib/integrations/hubOAuthPopup";
+import { useOrganizationStore } from "@/lib/stores/use-organization-store";
 import { cn } from "@/lib/utils";
+import { getApiErrorMessage, useBotStore } from "@/store/useBotStore";
 import type { CRMIntegrationDefinition } from "@/types/crm-integrations";
 import type {
-  AmoCRMCredentialsForm,
   CRMIntegrationPatchRequest,
   CRMPipelineMappingForm,
   CRMPipelineStage,
@@ -26,15 +29,8 @@ interface AmoCrmModalProps {
   platform?: "amocrm" | "kommo";
   onClose: () => void;
   onSave: (payload: CRMIntegrationPatchRequest) => Promise<void>;
+  onConnected?: () => void | Promise<void>;
 }
-
-const DEFAULT_CREDENTIALS: AmoCRMCredentialsForm = {
-  base_domain: "company.amocrm.ru",
-  client_id: "",
-  client_secret: "",
-  authorization_code: "",
-  redirect_uri: "https://localhost/oauth",
-};
 
 export function AmoCrmModal({
   open,
@@ -45,13 +41,13 @@ export function AmoCrmModal({
   platform = "amocrm",
   onClose,
   onSave,
+  onConnected,
 }: AmoCrmModalProps) {
-  const defaultDomain = platform === "kommo" ? "company.kommo.com" : "company.amocrm.ru";
+  const currentOrgId = useOrganizationStore((state) => state.currentOrgId);
+  const activeCompanyId = useBotStore((state) => state.activeCompanyId);
+  const workspaceId = currentOrgId || activeCompanyId;
   const [step, setStep] = useState<1 | 2>(1);
-  const [credentials, setCredentials] = useState<AmoCRMCredentialsForm>({
-    ...DEFAULT_CREDENTIALS,
-    base_domain: defaultDomain,
-  });
+  const [connecting, setConnecting] = useState(false);
   const [mapping, setMapping] = useState<CRMPipelineMappingForm>({
     pipeline_id: "",
     stage_id: "",
@@ -67,7 +63,6 @@ export function AmoCrmModal({
       setError(null);
       return;
     }
-    setCredentials({ ...DEFAULT_CREDENTIALS, base_domain: defaultDomain });
     setMapping({
       pipeline_id: status?.pipeline_id ?? "",
       stage_id: status?.stage_id ?? "",
@@ -95,30 +90,30 @@ export function AmoCrmModal({
     }
   }, [open, step, botId]);
 
-  const handleVerify = async (): Promise<void> => {
+  const handleConnect = async (): Promise<void> => {
     setError(null);
-    if (
-      !credentials.base_domain.trim() ||
-      !credentials.client_id.trim() ||
-      !credentials.client_secret.trim() ||
-      !credentials.authorization_code.trim()
-    ) {
-      setError("Заполните все поля OAuth amoCRM.");
+    if (!workspaceId) {
+      setError("Не выбран workspace.");
       return;
     }
-
+    setConnecting(true);
     try {
-      await onSave({
-        base_domain: credentials.base_domain.trim(),
-        client_id: credentials.client_id.trim(),
-        client_secret: credentials.client_secret.trim(),
-        authorization_code: credentials.authorization_code.trim(),
-        redirect_uri: credentials.redirect_uri.trim(),
-        sync_enabled: true,
+      const authorizeUrl = await fetchHubAuthorizeUrl({
+        provider: platform === "kommo" ? "kommo" : "amocrm",
+        workspaceId,
+        agentId: botId,
       });
+      const result = await openHubOAuthPopup(authorizeUrl);
+      if (result.status !== "connected") {
+        setError(result.message || "Не удалось подключить amoCRM.");
+        return;
+      }
+      await onConnected?.();
       setStep(2);
-    } catch {
-      // toast handled upstream
+    } catch (connectError) {
+      setError(getApiErrorMessage(connectError, "Не удалось открыть amoCRM."));
+    } finally {
+      setConnecting(false);
     }
   };
 
@@ -137,9 +132,7 @@ export function AmoCrmModal({
     });
   };
 
-  const oauthUrl = `https://www.amocrm.ru/oauth?client_id=${encodeURIComponent(
-    credentials.client_id || "CLIENT_ID",
-  )}&redirect_uri=${encodeURIComponent(credentials.redirect_uri)}&response_type=code`;
+  const brandName = platform === "kommo" ? "Kommo" : "amoCRM";
 
   return (
     <IntegrationModalShell
@@ -159,77 +152,23 @@ export function AmoCrmModal({
             exit={{ opacity: 0, x: -12 }}
             className="space-y-4"
           >
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <label className="text-xs text-zinc-500">Subdomain</label>
-                <input
-                  value={credentials.base_domain}
-                  onChange={(event) =>
-                    setCredentials((current) => ({ ...current, base_domain: event.target.value }))
-                  }
-                  placeholder="company.amocrm.ru"
-                  className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500">Client ID</label>
-                <input
-                  value={credentials.client_id}
-                  onChange={(event) =>
-                    setCredentials((current) => ({ ...current, client_id: event.target.value }))
-                  }
-                  className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500">Client Secret</label>
-                <input
-                  type="password"
-                  value={credentials.client_secret}
-                  onChange={(event) =>
-                    setCredentials((current) => ({ ...current, client_secret: event.target.value }))
-                  }
-                  className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-xs text-zinc-500">Authorization Code</label>
-                <input
-                  value={credentials.authorization_code}
-                  onChange={(event) =>
-                    setCredentials((current) => ({
-                      ...current,
-                      authorization_code: event.target.value,
-                    }))
-                  }
-                  className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100"
-                />
-              </div>
-            </div>
-
-            <a
-              href={oauthUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-[#0061FF] hover:text-[#4d94ff]"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              Открыть OAuth amoCRM
-            </a>
+            <p className="text-sm leading-relaxed text-zinc-400">
+              Откроется {brandName}. Выберите аккаунт, к которому подключить агента.
+            </p>
 
             {error ? <p className="text-xs text-rose-400">{error}</p> : null}
 
             <button
               type="button"
-              disabled={saving}
-              onClick={() => void handleVerify()}
+              disabled={saving || connecting}
+              onClick={() => void handleConnect()}
               className={cn(
                 "inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white",
                 "bg-[#0061FF] hover:bg-[#0056e6] disabled:opacity-50",
               )}
             >
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Проверить и продолжить
+              {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Подключить
             </button>
           </motion.div>
         ) : (
