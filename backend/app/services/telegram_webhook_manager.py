@@ -190,8 +190,24 @@ async def register_all_webhooks() -> dict[str, int]:
             header_secret = _channel_header_secret(meta)
             expected_url = f"{base}/api/v1/webhooks/telegram/{path_secret}"
 
+            from app.services.telegram_delivery import (
+                error_means_unreachable,
+                note_webhook_failure,
+                webhook_delivery_blocked,
+            )
+
+            info = await telegram_service.get_webhook_info(bot_token)
+            last_error = str(info.get("last_error_message") or "")
+            if error_means_unreachable(last_error):
+                note_webhook_failure(last_error)
             # A channel already on getUpdates stays there. Restart must not
             # put a webhook back when Telegram cannot deliver to it.
+            unreachable = webhook_delivery_blocked() or error_means_unreachable(last_error)
+            if unreachable and str(meta.get("delivery_mode") or "").strip().lower() != "polling":
+                meta["delivery_mode"] = "polling"
+                meta["webhook_synced_at"] = datetime.now(timezone.utc).isoformat()
+                row.meta_data = meta
+                row.updated_at = datetime.now(timezone.utc)
             if str(meta.get("delivery_mode") or "").strip().lower() == "polling":
                 try:
                     await telegram_service.delete_webhook(bot_token)

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 from starlette.datastructures import UploadFile
 
-from app.core.config import settings
+from app.core.config import is_public_https_webhook_url, settings
 from app.core.flow_cache import published_flow_cache
 from app.core.llm_cache import llm_response_cache
 from app.core.rag_cache import rag_activation_cache
@@ -569,11 +569,12 @@ class BotManagementService:
         bot.is_active = active
         await db.flush()
 
-        connected_message = (
-            "Telegram подключён в локальном polling-режиме."
-            if delivery_mode == "polling"
-            else "Telegram webhook registered successfully."
-        )
+        if delivery_mode == "polling" and not is_public_https_webhook_url(webhook_url):
+            connected_message = "Telegram подключён в локальном polling-режиме."
+        elif delivery_mode == "polling":
+            connected_message = "Telegram подключён. Входящие сообщения принимаются напрямую."
+        else:
+            connected_message = "Telegram webhook registered successfully."
         return SetupChannelResponse(
             bot_id=bot.id,
             platform_type=bot.platform_type,

@@ -43,7 +43,7 @@ def test_adapter_has_no_receipt_verification() -> None:
 
 def test_public_webhook_url() -> None:
     cid = uuid.uuid4()
-    assert kaspi_webhook_public_url(cid).endswith(f"/webhooks/kaspi_pay/{cid}")
+    assert kaspi_webhook_public_url(cid).endswith(f"/api/v1/webhooks/kaspi_pay/{cid}")
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import resolve_webhook_base_url, settings
+from app.core.config import is_public_https_webhook_url, resolve_webhook_base_url, settings
 from app.core.database import async_session_factory
 from app.core.security import encrypt_credential, hash_bot_token
 from app.models.channels import (
@@ -460,12 +460,19 @@ class ChannelsHubService:
                     error=str(exc),
                 )
         label = "Telegram Business" if business else "Telegram"
-        message = (
-            f"{label} подключён (@{username or 'bot'}). "
-            "Локальный режим: входящие сообщения через polling (webhook на localhost Telegram не принимает)."
-            if delivery_mode == "polling"
-            else f"{label} подключён (@{username or 'bot'})."
-        )
+        if delivery_mode == "polling" and not is_public_https_webhook_url(webhook_url):
+            message = (
+                f"{label} подключён (@{username or 'bot'}). "
+                "Локальный режим: входящие сообщения через polling "
+                "(webhook на localhost Telegram не принимает)."
+            )
+        elif delivery_mode == "polling":
+            message = (
+                f"{label} подключён (@{username or 'bot'}). "
+                "Входящие сообщения принимаются напрямую."
+            )
+        else:
+            message = f"{label} подключён (@{username or 'bot'})."
         return ChannelConnectResponse(
             bot_id=bot.id,
             channel_type=row.channel_type,

@@ -616,9 +616,24 @@ class TelegramService:
 
     def telegram_delivery_mode(self, webhook_url: str | None = None) -> str:
         from app.core.config import is_public_https_webhook_url, resolve_webhook_base_url
+        from app.services.telegram_delivery import webhook_delivery_blocked
 
+        # A public URL is not enough: Telegram has already failed to open it.
+        if webhook_delivery_blocked():
+            return "polling"
         url = (webhook_url or "").strip() or f"{resolve_webhook_base_url()}/"
         return "webhook" if is_public_https_webhook_url(url) else "polling"
+
+    async def get_webhook_info(self, bot_token: str) -> dict[str, Any]:
+        url = f"{settings.TELEGRAM_API_BASE}/bot{bot_token}/getWebhookInfo"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url)
+            data = _safe_telegram_json(response)
+        except Exception:
+            return {}
+        result = data.get("result")
+        return result if isinstance(result, dict) else {}
 
     async def delete_webhook(self, bot_token: str) -> None:
         url = f"{settings.TELEGRAM_API_BASE}/bot{bot_token}/deleteWebhook"
@@ -719,6 +734,15 @@ class TelegramService:
             f"{resolve_webhook_base_url()}/api/v1/webhooks/telegram/{token_hash}"
         )
         secret = (secret_token or "").strip() or generate_webhook_secret()
+
+        from app.services.telegram_delivery import webhook_delivery_blocked
+
+        if webhook_delivery_blocked():
+            await self.delete_webhook(bot_token)
+            logger.info(
+                "TelegramService.polling_mode | reason=webhook_previously_unreachable",
+            )
+            return webhook_url, secret
 
         if not is_public_https_webhook_url(webhook_url):
             if mode == "skip":

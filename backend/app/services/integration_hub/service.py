@@ -197,7 +197,6 @@ class IntegrationHubService:
                         cfg["channels"] = bundle.extra["channels"]
                     row.config_json = cfg
                 except Exception as exc:
-                    row.last_error = "event_bind_failed"
                     logger.warning(
                         "IntegrationHub.event_bind_failed | provider={provider} "
                         "connection_id={connection_id} error={error}",
@@ -205,6 +204,10 @@ class IntegrationHubService:
                         connection_id=row.id,
                         error=str(exc)[:300],
                     )
+                    raise ValueError(
+                        "Wazzup не принял адрес для входящих сообщений. "
+                        "Подключение не сохранено, повторите его."
+                    ) from exc
             elif callable(binder) and key in {"amocrm", "kommo"}:
                 from app.config import settings
                 from app.tasks.amocrm_tasks import bind_amocrm_webhooks_task
@@ -221,8 +224,18 @@ class IntegrationHubService:
                         cfg["webhook_registered"] = True
                         cfg["webhook_uri"] = uri
                         row.config_json = cfg
-                except Exception:
-                    row.last_error = "event_bind_failed"
+                except Exception as exc:
+                    logger.warning(
+                        "IntegrationHub.event_bind_failed | provider={provider} "
+                        "connection_id={connection_id} error={error}",
+                        provider=key,
+                        connection_id=row.id,
+                        error=str(exc)[:300],
+                    )
+                    raise ValueError(
+                        "Не удалось зарегистрировать входящий вебхук. "
+                        "Подключение не сохранено, повторите его."
+                    ) from exc
             return row
         finally:
             if close:

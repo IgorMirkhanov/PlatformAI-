@@ -50,8 +50,8 @@ _STATUS_MAP = {
 
 
 def kaspi_webhook_public_url(connection_id: UUID) -> str:
-    """Public URI Kaspi (or the merchant cabinet) should call for payment status."""
-    return f"{resolve_webhook_base_url()}/webhooks/kaspi_pay/{connection_id}"
+    """Public URI Kaspi should call. Mounted under /api/v1, same as the other webhooks."""
+    return f"{resolve_webhook_base_url()}/api/v1/webhooks/kaspi_pay/{connection_id}"
 
 
 def _format_amount(amount: float | int | str | Decimal) -> str:

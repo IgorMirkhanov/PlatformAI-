@@ -50,7 +50,70 @@ def _extract_message_id(raw: dict[str, Any]) -> str | None:
     return None
 
 
+async def _switch_unreachable_channels() -> None:
+    """Move webhook channels to getUpdates when Telegram cannot deliver.
+
+    Pending updates are kept (deleteWebhook does not drop them) and the same
+    poll cycle then reads them.
+    """
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.telegram_delivery import (
+        error_means_unreachable,
+        note_webhook_failure,
+        webhook_delivery_blocked,
+    )
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(BotChannel).where(
+                BotChannel.channel_type.in_(
+                    (HubChannelType.TELEGRAM, HubChannelType.TELEGRAM_BUSINESS)
+                ),
+                BotChannel.status == HubChannelStatus.CONNECTED,
+                BotChannel.encrypted_token.is_not(None),
+            )
+        )
+        rows = list(result.scalars().all())
+        changed = False
+        for row in rows:
+            meta = dict(row.meta_data) if isinstance(row.meta_data, dict) else {}
+            if str(meta.get("delivery_mode") or "").strip().lower() == "polling":
+                continue
+            try:
+                token = decrypt_credential(row.encrypted_token or "")
+            except Exception:
+                continue
+            if not token:
+                continue
+            info = await telegram_service.get_webhook_info(token)
+            last_error = str(info.get("last_error_message") or "")
+            if error_means_unreachable(last_error):
+                note_webhook_failure(last_error)
+            if not webhook_delivery_blocked() and not error_means_unreachable(last_error):
+                continue
+            try:
+                await telegram_service.delete_webhook(token)
+            except Exception as exc:
+                logger.warning(
+                    "TelegramPoll.delete_webhook_failed | bot_id={bot_id} error={error}",
+                    bot_id=row.bot_id,
+                    error=type(exc).__name__,
+                )
+            meta["delivery_mode"] = "polling"
+            row.meta_data = meta
+            flag_modified(row, "meta_data")
+            changed = True
+            logger.info(
+                "TelegramPoll.switched_to_polling | bot_id={bot_id}",
+                bot_id=row.bot_id,
+            )
+        if changed:
+            await db.commit()
+
+
 async def _poll_connected_bots() -> int:
+    await _switch_unreachable_channels()
     processed = 0
     redis = get_redis_client()
     async with async_session_factory() as db:
