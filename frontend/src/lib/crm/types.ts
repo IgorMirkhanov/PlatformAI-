@@ -314,6 +314,8 @@ export interface CrmDealUpdatePayload {
   custom_fields?: Record<string, unknown>;
   amount?: number | string;
   source?: string | null;
+  contact_id?: string | null;
+  assigned_user_id?: string | null;
 }
 
 export interface CrmDealCreatePayload {
@@ -323,4 +325,21 @@ export interface CrmDealCreatePayload {
   amount?: number | string;
   currency?: string;
   source?: string | null;
+  contact_id?: string | null;
+}
+
+export interface CrmStageCreatePayload {
+  name: string;
+  position?: number | null;
+  color?: string | null;
+  is_won?: boolean;
+  is_lost?: boolean;
+}
+
+export interface CrmStageUpdatePayload {
+  name?: string;
+  position?: number;
+  color?: string | null;
+  is_won?: boolean;
+  is_lost?: boolean;
 }

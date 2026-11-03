@@ -1330,6 +1330,25 @@ class CRMOrchestrator:
                 logger.warning("CRM.handle_new_message_no_stage | org={org}", org=org_id)
                 return None
 
+            contact_id = None
+            try:
+                from app.services.crm.contact_service import (
+                    ContactServiceError,
+                    contact_service,
+                )
+
+                contact = await contact_service.get_or_create_from_client(db, client.id)
+                contact_id = contact.id
+                # Prefer channel on the deal; keep contact.source if empty.
+                if not (contact.source or "").strip():
+                    contact.source = (channel_type or "")[:50] or contact.source
+            except ContactServiceError as exc:
+                logger.warning(
+                    "CRM.handle_new_message_contact_failed | client_id={client_id} error={error}",
+                    client_id=client.id,
+                    error=exc.message,
+                )
+
             dedup = compute_dedup_key(org_id, channel_type, external_chat_id)
             title = (client.first_name or client.username or external_chat_id or "Lead")[:255]
             result = await deal_repository(db, organization_id=org_id).upsert_idempotent(
@@ -1339,6 +1358,7 @@ class CRMOrchestrator:
                 pipeline_id=pipeline.id,
                 stage_id=open_stage.id,
                 bot_id=bot.id,
+                contact_id=contact_id,
                 crm_integration_id=getattr(bot, "crm_integration_id", None),
                 source=channel_type[:50],
                 custom_fields={

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -206,6 +207,7 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
         pipeline_id: uuid.UUID,
         stage_id: uuid.UUID,
         bot_id: uuid.UUID | None = None,
+        contact_id: uuid.UUID | None = None,
         crm_integration_id: uuid.UUID | None = None,
         source: str | None = None,
         custom_fields: dict | None = None,
@@ -214,6 +216,10 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
         if crm_integration_id is not None:
             fields["crm_integration_id"] = str(crm_integration_id)
         deal_id = uuid.uuid4()
+        conflict_set: dict[str, Any] = {"updated_at": func.now()}
+        # Keep the card linked to the messenger contact if it was created empty.
+        if contact_id is not None:
+            conflict_set["contact_id"] = func.coalesce(CrmDeal.contact_id, contact_id)
         stmt = (
             pg_insert(CrmDeal)
             .values(
@@ -222,6 +228,7 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
                 pipeline_id=pipeline_id,
                 stage_id=stage_id,
                 bot_id=bot_id,
+                contact_id=contact_id,
                 title=title[:255],
                 status=DealStatus.OPEN.value,
                 source=(source or "inbound")[:50],
@@ -231,7 +238,7 @@ class DealRepository(BaseCrmRepository[CrmDeal]):
             .on_conflict_do_update(
                 index_elements=["organization_id", "dedup_key"],
                 index_where=text("dedup_key IS NOT NULL"),
-                set_={"updated_at": func.now()},
+                set_=conflict_set,
             )
             .returning(CrmDeal.id, literal_column("(xmax = 0)").label("was_inserted"))
         )

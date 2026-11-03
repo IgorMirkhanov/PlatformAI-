@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo } from "react";
 
 import { CrmSubNav } from "@/components/crm/CrmSubNav";
 import { KanbanBoard } from "@/components/crm/KanbanBoard";
+import { StageManager } from "@/components/crm/StageManager";
 import { useCrmWebSocket } from "@/hooks/useCrmWebSocket";
 import { cn } from "@/lib/utils";
 import { useCrmStore } from "@/store/useCrmStore";
@@ -61,38 +62,52 @@ export default function CrmKanbanPage() {
             </p>
             <h1 className="mt-1 text-2xl font-semibold text-zinc-50">Сделки</h1>
             <p className="mt-1 text-sm text-zinc-400">
-              Канбан-доска по этапам воронки. Перетащите карточку, чтобы сменить этап.
+              Доска отдела продаж: этапы, суммы, контакты из мессенджеров. Перетащите
+              карточку, чтобы сменить этап.
             </p>
           </div>
         </div>
 
-        {pipelines.length > 1 ? (
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Воронки">
-            {pipelines.map((pipeline) => {
-              const active = pipeline.id === activePipelineId;
-              return (
-                <button
-                  key={pipeline.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => void onSelectPipeline(pipeline.id)}
-                  className={cn(
-                    "rounded-full border px-3.5 py-1.5 text-sm font-medium transition",
-                    active
-                      ? "border-violet-500/60 bg-violet-500/15 text-violet-100"
-                      : "border-zinc-700 bg-zinc-900/50 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200",
-                  )}
-                >
-                  {pipeline.name}
-                  {pipeline.is_default ? (
-                    <span className="ml-1.5 text-[10px] uppercase text-zinc-500">default</span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {pipelines.length > 1 ? (
+            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Воронки">
+              {pipelines.map((pipeline) => {
+                const active = pipeline.id === activePipelineId;
+                return (
+                  <button
+                    key={pipeline.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => void onSelectPipeline(pipeline.id)}
+                    className={cn(
+                      "rounded-full border px-3.5 py-1.5 text-sm font-medium transition",
+                      active
+                        ? "border-violet-500/60 bg-violet-500/15 text-violet-100"
+                        : "border-zinc-700 bg-zinc-900/50 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200",
+                    )}
+                  >
+                    {pipeline.name}
+                    {pipeline.is_default ? (
+                      <span className="ml-1.5 text-[10px] uppercase text-zinc-500">default</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {activePipeline ? (
+            <StageManager
+              pipeline={activePipeline}
+              onChanged={async () => {
+                await fetchPipelines();
+                if (activePipelineId) {
+                  await fetchDeals(activePipelineId);
+                }
+              }}
+            />
+          ) : null}
+        </div>
       </header>
 
       {isLoading && !activePipeline ? (

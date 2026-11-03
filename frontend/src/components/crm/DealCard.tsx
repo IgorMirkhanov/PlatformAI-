@@ -68,6 +68,11 @@ export function DealCard({ deal, index }: DealCardProps) {
             ) : (
               <p className="text-xs text-zinc-600">Без контакта</p>
             )}
+            {deal.source ? (
+              <p className="truncate text-[10px] uppercase tracking-wide text-zinc-600">
+                {deal.source}
+              </p>
+            ) : null}
           </Link>
         </article>
       )}

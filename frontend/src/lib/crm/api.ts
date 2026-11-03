@@ -25,6 +25,9 @@ import type {
   CrmNoteListResponse,
   CrmPerformanceResponse,
   CrmPipeline,
+  CrmStage,
+  CrmStageCreatePayload,
+  CrmStageUpdatePayload,
   CrmTag,
   CrmTagListResponse,
   CrmTimelineEvent,
@@ -65,6 +68,53 @@ export type {
 
 export async function getPipelines(): Promise<CrmPipeline[]> {
   return apiRequest<CrmPipeline[]>("/api/v1/crm/pipelines");
+}
+
+export async function createStage(
+  pipelineId: string,
+  payload: CrmStageCreatePayload,
+): Promise<CrmStage> {
+  return apiRequest<CrmStage>(
+    `/api/v1/crm/pipelines/${encodeURIComponent(pipelineId)}/stages`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function updateStage(
+  pipelineId: string,
+  stageId: string,
+  payload: CrmStageUpdatePayload,
+): Promise<CrmStage> {
+  return apiRequest<CrmStage>(
+    `/api/v1/crm/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function deleteStage(
+  pipelineId: string,
+  stageId: string,
+): Promise<void> {
+  await apiRequest<void>(
+    `/api/v1/crm/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function closeDeal(
+  dealId: string,
+  status: "won" | "lost",
+): Promise<CrmDeal> {
+  return apiRequest<CrmDeal>(`/api/v1/crm/deals/${encodeURIComponent(dealId)}/close`, {
+    method: "POST",
+    body: JSON.stringify({ status }),
+  });
 }
 
 export async function getDeals(pipelineId: string): Promise<CrmDeal[]> {
