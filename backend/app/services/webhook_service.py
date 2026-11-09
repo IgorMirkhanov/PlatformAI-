@@ -527,6 +527,12 @@ async def process_inbound_message(
     ai_generated = next_node.get("node_type") in {"ai_agent", "llm"}
     ai_payload: dict[str, object] = {}
     media_attachments: list = list(next_node.get("media_attachments") or [])
+    serialized_media: list[dict[str, object]] = []
+    for item in media_attachments:
+        if hasattr(item, "model_dump"):
+            serialized_media.append(item.model_dump())
+        elif isinstance(item, dict):
+            serialized_media.append(dict(item))
 
     if ai_generated and not bot_silent and not response_text and not media_attachments:
         from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
@@ -546,7 +552,6 @@ async def process_inbound_message(
             "prompt_context_preview": str(
                 (node_data.get("prompt_context") if isinstance(node_data, dict) else "") or ""
             )[:200],
-            "media_attachment_count": len(media_attachments),
         }
         logger.info(
             "WebhookService.ai_response | client_id={client_id} node_id={node_id}",
@@ -554,7 +559,8 @@ async def process_inbound_message(
             node_id=next_node.get("node_id"),
         )
 
-
+    ai_payload["media_attachment_count"] = len(media_attachments)
+    ai_payload["media_attachments"] = serialized_media
 
     client_message = ChatMessage(
 
@@ -642,7 +648,7 @@ async def process_inbound_message(
 
     await broadcast_chat_message(client, client_message)
 
-    if response_text and not bot_silent:
+    if (response_text or media_attachments) and not bot_silent:
 
         await broadcast_chat_message(client, bot_message)
 

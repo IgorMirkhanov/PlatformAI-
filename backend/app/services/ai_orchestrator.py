@@ -291,14 +291,22 @@ class AIOrchestrator:
                 # Scripted scenario lines are already removed from history.
                 # The system prompt stays the persona, even if an earlier
                 # model reply copied a fixed greeting.
-                messages[0]["content"] = (
-                    f"{messages[0]['content']}\n\n"
+                continuity = (
                     "CONTINUITY: This is an ongoing conversation. "
                     "Your identity and rules come from the system instructions above, "
                     "not from earlier assistant replies. "
                     "Do not repeat a fixed greeting from previous turns. "
                     "Answer the latest user message in that voice."
                 )
+                if self._is_greeting_only(incoming_message) and self._history_has_bot_greeting(
+                    history
+                ):
+                    continuity += (
+                        " The user only greeted again after you already introduced yourself. "
+                        "Reply in one short sentence WITHOUT re-introducing your name or company — "
+                        "ask what material or project they need. Never paste your previous greeting."
+                    )
+                messages[0]["content"] = f"{messages[0]['content']}\n\n{continuity}"
             node_model = (
                 current_node_data.get("llm_model_name")
                 or current_node_data.get("model_name")
@@ -1366,6 +1374,46 @@ class AIOrchestrator:
         return hits
 
     @staticmethod
+    def _is_greeting_only(text: str) -> bool:
+        cleaned = re.sub(r"[^\w\s/]+", " ", (text or "").strip().lower(), flags=re.UNICODE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if not cleaned or len(cleaned) > 40:
+            return False
+        greetings = {
+            "start",
+            "/start",
+            "hi",
+            "hello",
+            "hey",
+            "привет",
+            "здравствуйте",
+            "здравствуй",
+            "добрый день",
+            "добрый вечер",
+            "доброе утро",
+            "доброго дня",
+            "hello!",
+            "hi!",
+        }
+        return cleaned in greetings or cleaned.rstrip("!") in greetings
+
+    @staticmethod
+    def _history_has_bot_greeting(history: list[dict[str, str]]) -> bool:
+        for item in reversed(history):
+            if item.get("role") != "assistant":
+                continue
+            content = (item.get("content") or "").strip().lower()
+            if not content:
+                continue
+            return bool(
+                re.search(
+                    r"^(здравств|привет|добр|hello|hi\b|меня зовут)",
+                    content,
+                )
+            )
+        return False
+
+    @staticmethod
     def _history_without_scripted_replies(rows: list[Any]) -> list[dict[str, str]]:
         """Drop scenario text cards so the model does not imitate them."""
         scripted: set[str] = set()
@@ -1866,7 +1914,8 @@ class AIOrchestrator:
 
         # Exact-match ignores chat history; never short-circuit mid-dialog or the
         # model keeps replaying an old scenario for greetings like «Добрый день».
-        allow_exact_cache = history_turns <= 1
+        # Also skip cache for bare greetings — they must stay contextual.
+        allow_exact_cache = history_turns <= 1 and not self._is_greeting_only(incoming_text)
         cached = None
         if allow_exact_cache:
             cached = await llm_response_cache.get_cached_response(

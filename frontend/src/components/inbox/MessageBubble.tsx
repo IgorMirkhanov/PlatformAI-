@@ -1,7 +1,8 @@
 "use client";
 
-import { Check, CheckCheck } from "lucide-react";
+import { Check, CheckCheck, FileText } from "lucide-react";
 
+import { buildApiUrl } from "@/lib/api/baseUrl";
 import { cn } from "@/lib/utils";
 import {
   formatBubbleTimestamp,
@@ -12,6 +13,13 @@ import {
 interface MessageBubbleProps {
   message: ChatMessage;
 }
+
+type MediaAttachmentPayload = {
+  url?: string;
+  media_type?: string;
+  filename?: string | null;
+  caption?: string | null;
+};
 
 function DeliveryStatusIcon({ message }: { message: ChatMessage }) {
   if (message.sender === "CLIENT") {
@@ -31,10 +39,33 @@ function DeliveryStatusIcon({ message }: { message: ChatMessage }) {
   return <Check className="h-3.5 w-3.5 text-zinc-500" aria-label="Отправлено" />;
 }
 
+function resolveMediaUrl(url: string): string {
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  if (url.startsWith("/")) {
+    return buildApiUrl(url);
+  }
+  return url;
+}
+
+function getMediaAttachments(message: ChatMessage): MediaAttachmentPayload[] {
+  const raw = message.payload.media_attachments;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter(
+    (item): item is MediaAttachmentPayload =>
+      Boolean(item) && typeof item === "object" && typeof (item as MediaAttachmentPayload).url === "string",
+  );
+}
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isClient = message.sender === "CLIENT";
   const isBot = message.sender === "BOT";
   const isOperator = message.sender === "OPERATOR";
+  const media = getMediaAttachments(message);
+  const text = (message.message_text || "").trim();
 
   return (
     <div
@@ -65,7 +96,50 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           )}
         </div>
 
-        <p className="whitespace-pre-wrap leading-relaxed">{message.message_text}</p>
+        {media.length > 0 ? (
+          <div className="mb-2 space-y-2">
+            {media.map((item, index) => {
+              const url = resolveMediaUrl(String(item.url));
+              const isImage = (item.media_type || "").toLowerCase() === "image";
+              if (isImage) {
+                return (
+                  <a
+                    key={`${url}-${index}`}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block overflow-hidden rounded-xl border border-white/10"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt={item.caption || item.filename || "Вложение"}
+                      className="max-h-72 w-full object-cover"
+                      loading="lazy"
+                    />
+                  </a>
+                );
+              }
+              return (
+                <a
+                  key={`${url}-${index}`}
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-xs hover:bg-black/30"
+                >
+                  <FileText className="h-4 w-4 shrink-0 opacity-80" />
+                  <span className="min-w-0 truncate">{item.filename || url}</span>
+                </a>
+              );
+            })}
+          </div>
+        ) : null}
+
+        {text ? <p className="whitespace-pre-wrap leading-relaxed">{text}</p> : null}
+        {!text && media.length === 0 ? (
+          <p className="whitespace-pre-wrap leading-relaxed opacity-60">Пустое сообщение</p>
+        ) : null}
 
         <div className="mt-2 flex items-center justify-end gap-1.5 text-[10px] opacity-70">
           <span>{formatBubbleTimestamp(message.created_at)}</span>
