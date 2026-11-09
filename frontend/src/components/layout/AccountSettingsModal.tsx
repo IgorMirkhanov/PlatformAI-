@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Copy, Loader2, Save, Settings, X } from "lucide-react";
 
@@ -21,11 +22,16 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
   const updateAccountProfile = useBotStore((state) => state.updateAccountProfile);
   const { showToast } = useToast();
 
+  const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<(typeof SETTINGS_TABS)[number]["id"]>("general");
   const [companyName, setCompanyName] = useState("");
   const [fullName, setFullName] = useState("");
   const [timezone, setTimezone] = useState("Asia/Almaty");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!open || !currentUser) {
@@ -84,11 +90,16 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
     }
   };
 
-  return (
+  if (!mounted) {
+    return null;
+  }
+
+  return createPortal(
     <AnimatePresence>
       {open ? (
         <motion.div
-          className="fixed inset-0 z-[100] overflow-y-auto overscroll-contain"
+          className="fixed inset-0 flex items-center justify-center overflow-y-auto overscroll-contain bg-black/75 p-4 backdrop-blur-sm sm:p-6"
+          style={{ zIndex: 9999 }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -96,7 +107,7 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
           <button
             type="button"
             aria-label="Закрыть"
-            className="fixed inset-0 bg-black/75 backdrop-blur-sm"
+            className="absolute inset-0"
             onClick={() => {
               if (!saving) {
                 onClose();
@@ -104,7 +115,6 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
             }}
           />
 
-          <div className="relative flex min-h-full items-center justify-center p-4 sm:p-6">
           <motion.div
             role="dialog"
             aria-modal="true"
@@ -248,9 +258,9 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
               </div>
             </div>
           </motion.div>
-          </div>
         </motion.div>
       ) : null}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }

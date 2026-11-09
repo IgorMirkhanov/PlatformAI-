@@ -571,7 +571,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main id="main-content" className="flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
+        <main id="main-content" className="relative z-0 flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
         </main>
       </div>
