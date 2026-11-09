@@ -629,7 +629,7 @@ class FlowExecutor:
             )
 
         text = (text or "").strip()
-        if not text:
+        if not text and not media:
             from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
 
             logger.warning(

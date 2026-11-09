@@ -165,10 +165,11 @@ export function AgentMessagesTab({ botId, profile }: AgentMessagesTabProps) {
             <div className="mb-3">
               <p className="text-sm font-medium text-zinc-100">Буфер сообщений</p>
               <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-                Задержка отправки сообщений экономит токены и делает бота «человечнее»
+                Минимальная пауза до ответа (не добавляется поверх времени LLM). При отправке
+                файлов/фото буфер пропускается.
               </p>
             </div>
-            <label className="mb-1.5 block text-xs text-zinc-500">Задержка в секундах</label>
+            <label className="mb-1.5 block text-xs text-zinc-500">Пауза до ответа, сек</label>
             <input
               type="number"
               min={0}

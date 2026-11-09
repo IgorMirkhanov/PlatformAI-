@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -331,6 +332,7 @@ class TelegramService:
                 part for part in (inbound.first_name, inbound.last_name) if part
             ).strip() or inbound.first_name
 
+            inbound_started = time.monotonic()
             result = await process_inbound_message(
                 db=db,
                 bot_id=bot.id,
@@ -355,7 +357,8 @@ class TelegramService:
                 return {"status": "processed", "bot_silent": True, "client_id": str(result.client_id)}
 
             outbound_text = (result.response_text or "").strip()
-            if not outbound_text:
+            has_media = bool(result.media_attachments)
+            if not outbound_text and not has_media:
                 from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
 
                 outbound_text = SAFE_USER_FALLBACK_MESSAGE
@@ -365,16 +368,36 @@ class TelegramService:
                     client_id=result.client_id,
                 )
 
+            # Buffer is a human-feel delay, not "AI time + N seconds".
+            # Skip entirely when delivering files so photos are not delayed further.
             buffer_ms = int(getattr(bot, "message_buffer_delay", 0) or 0)
-            if buffer_ms > 0:
-                await asyncio.sleep(min(buffer_ms, 60_000) / 1000.0)
+            if buffer_ms > 0 and not has_media:
+                elapsed_ms = (time.monotonic() - inbound_started) * 1000.0
+                remaining_ms = max(0.0, min(buffer_ms, 60_000) - elapsed_ms)
+                if remaining_ms > 0:
+                    await asyncio.sleep(remaining_ms / 1000.0)
 
             from app.services.bot_message_extras import get_message_extras, split_outbound_text
 
             extras = get_message_extras(bot)
-            chunks = split_outbound_text(
-                outbound_text,
-                enabled=bool(getattr(bot, "message_split", False)),
+            # Media first when present — user asked for photos / files, not more waiting.
+            if has_media:
+                await self.dispatch_media_attachments(
+                    bot_token=bot_token,
+                    chat_id=inbound.chat_id,
+                    attachments=list(result.media_attachments),
+                    bot_id=bot.id,
+                    client_id=result.client_id,
+                    db=db,
+                )
+
+            chunks = (
+                split_outbound_text(
+                    outbound_text,
+                    enabled=bool(getattr(bot, "message_split", False)),
+                )
+                if outbound_text
+                else []
             )
             split_delay = float(extras.get("split_delay_seconds") or 0)
             buttons_payload = [button.model_dump() for button in result.buttons]
@@ -390,16 +413,6 @@ class TelegramService:
                 )
                 if index < len(chunks) - 1 and split_delay > 0:
                     await asyncio.sleep(split_delay)
-
-            if result.media_attachments:
-                await self.dispatch_media_attachments(
-                    bot_token=bot_token,
-                    chat_id=inbound.chat_id,
-                    attachments=list(result.media_attachments),
-                    bot_id=bot.id,
-                    client_id=result.client_id,
-                    db=db,
-                )
 
             if extras.get("follow_up_enabled"):
                 try:

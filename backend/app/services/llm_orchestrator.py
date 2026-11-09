@@ -112,6 +112,13 @@ class LLMOrchestrator:
                 temperature=temperature,
                 tools=tools,
             )
+            result = await self._maybe_force_tool_call(
+                result,
+                messages=messages,
+                model=primary,
+                temperature=temperature,
+                tools=tools,
+            )
             result = await self._resolve_tool_calls(
                 result,
                 messages=messages,
@@ -145,6 +152,15 @@ class LLMOrchestrator:
                 )
             try:
                 result = await self._client.chat_completion(
+                    messages=messages,
+                    model=fallback_model,
+                    temperature=temperature,
+                    tools=tools,
+                    api_key=fallback_key,
+                    base_url=fallback_base,
+                )
+                result = await self._maybe_force_tool_call(
+                    result,
                     messages=messages,
                     model=fallback_model,
                     temperature=temperature,
@@ -453,6 +469,76 @@ class LLMOrchestrator:
         if tool_result.get("available") is not None:
             return True
         return False
+
+    async def _maybe_force_tool_call(
+        self,
+        result: LLMCompletion,
+        *,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        tools: list[dict[str, Any]] | None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> LLMCompletion:
+        """
+        If the model narrates «подождите / отправлю фото / выполню расчет»
+        without tool_calls while tools exist, force one tool round.
+        """
+        if not tools or result.tool_calls:
+            return result
+        text = (result.text or "").strip()
+        if not text:
+            return result
+        import re
+
+        wait_pattern = re.compile(
+            r"(?i)("
+            r"подожд(?:ите|и)|сейчас\s+(?:отправ|расчит|выполн)|"
+            r"выполню\s+расч[её]т|отправлю\s+(?:вам\s+)?(?:фото|файл|изображен)|"
+            r"please\s+wait|i(?:'| a)m\s+(?:sending|calculating)"
+            r")"
+        )
+        if not wait_pattern.search(text):
+            return result
+
+        nudge = list(messages)
+        nudge.append({"role": "assistant", "content": text})
+        nudge.append(
+            {
+                "role": "user",
+                "content": (
+                    "Не обещай отправку позже. Сейчас же вызови нужную function "
+                    "(фото/файл/расчет) через tool call в этом же ходе."
+                ),
+            }
+        )
+        try:
+            forced = await self._client.chat_completion(
+                messages=nudge,
+                model=model,
+                temperature=temperature,
+                tools=tools,
+                tool_choice="required",
+                api_key=api_key,
+                base_url=base_url,
+                max_tokens=1024,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "LLMOrchestrator.force_tool_failed | model={model} error={error}",
+                model=model,
+                error=str(exc),
+            )
+            return result
+        if forced.tool_calls:
+            logger.info(
+                "LLMOrchestrator.force_tool_ok | model={model} tools={n}",
+                model=model,
+                n=len(forced.tool_calls),
+            )
+            return forced
+        return result
 
     async def _handle_exhaustion(
         self,

@@ -83,6 +83,18 @@ def function_to_openai_tool(item: dict[str, Any]) -> dict[str, Any] | None:
         if param.get("required"):
             required.append(pname)
     description = str(item.get("description") or "").strip() or f"Call {name}"
+    result_file = item.get("result_file") if isinstance(item.get("result_file"), dict) else {}
+    integrations = [
+        str(x).lower()
+        for x in (item.get("result_integrations") or [])
+        if x and str(x).lower() != "none"
+    ]
+    if result_file.get("url") or "file" in integrations:
+        description = (
+            f"{description} "
+            "Call this function in the SAME turn whenever the user asks for photos, "
+            "files, samples, or visual examples — never promise to send them later."
+        ).strip()
     schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,

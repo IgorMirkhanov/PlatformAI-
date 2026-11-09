@@ -95,8 +95,16 @@ LLM_MEDIA_HINT_PATTERN = re.compile(
 )
 
 URL_IN_TEXT_PATTERN = re.compile(
-    r"(https?://[^\s<>\"']+\.(?:png|jpe?g|gif|webp|bmp|pdf|docx?|xlsx?|pptx?|zip|mp4|mp3))",
+    r"(https?://[^\s<>\"']+(?:/uploads/[^\s<>\"']+|\.(?:png|jpe?g|gif|webp|bmp|pdf|docx?|xlsx?|pptx?|zip|mp4|mp3)))",
     re.IGNORECASE,
+)
+MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
+WAIT_WITHOUT_ACTION_PATTERN = re.compile(
+    r"(?i)("
+    r"подожд(?:ите|и)|сейчас\s+(?:отправ|расчит|выполн)|"
+    r"выполню\s+расч[её]т|отправлю\s+(?:вам\s+)?(?:фото|файл)|"
+    r"please\s+wait|i(?:'| a)m\s+(?:sending|calculating)"
+    r")"
 )
 
 
@@ -396,6 +404,14 @@ class AIOrchestrator:
             for item in list(getattr(completion, "media_attachments", None) or []):
                 if isinstance(item, MediaAttachment):
                     attachments.append(item)
+            attachments = dedupe_attachments(attachments)
+            response_text = self._strip_media_markup(response_text, attachments)
+            if not (response_text or "").strip() and attachments:
+                response_text = ""
+            elif not (response_text or "").strip():
+                response_text = ensure_user_visible_reply(
+                    response_text, fallback=self.FALLBACK_MESSAGE
+                )
             logger.info(
                 "AIOrchestrator.success | client_id={client_id} response_len={length} attachments={count}",
                 client_id=client_id,
@@ -1131,7 +1147,7 @@ class AIOrchestrator:
             if attachment is not None:
                 collected.append(attachment)
 
-        for match in re.finditer(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)", llm_text or ""):
+        for match in MARKDOWN_IMAGE_PATTERN.finditer(llm_text or ""):
             attachment = cls._attachment_from_url(
                 match.group(2),
                 hint="image",
@@ -1142,6 +1158,18 @@ class AIOrchestrator:
                 collected.append(attachment)
 
         return dedupe_attachments(collected)
+
+    @classmethod
+    def _strip_media_markup(cls, text: str, attachments: list[MediaAttachment]) -> str:
+        """Remove markdown images / raw attachment URLs so Telegram doesn't show them as text."""
+        cleaned = MARKDOWN_IMAGE_PATTERN.sub("", text or "")
+        for attachment in attachments:
+            url = (attachment.url or "").strip()
+            if url:
+                cleaned = cleaned.replace(url, "")
+        cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+        return cleaned.strip()
 
     @staticmethod
     def _estimate_cost_kzt(model_name: str, total_tokens: int) -> float:
@@ -1726,45 +1754,54 @@ class AIOrchestrator:
         tool_media: list[MediaAttachment] = []
 
         # Gateway returns tool_calls with empty content — execute tools and get a user reply.
-        if response.tool_calls and bot_id is not None:
+        # Also force a tool when the model only narrates «подождите / отправлю фото».
+        if bot_id is not None and (response.tool_calls or tools):
             interim = LLMCompletion(
                 text=text,
                 model=response.model_name or model_name,
                 input_tokens=response.prompt_tokens,
                 output_tokens=response.completion_tokens,
                 total_tokens=response.total_tokens,
-                tool_calls=list(response.tool_calls),
+                tool_calls=list(response.tool_calls or []) or None,
             )
-            resolved = await llm_orchestrator._resolve_tool_calls(
+            interim = await llm_orchestrator._maybe_force_tool_call(
                 interim,
                 messages=list(messages),
                 model=response.model_name or model_name,
                 temperature=temperature,
                 tools=tools,
-                bot_id=bot_id,
-                client_id=client_id,
-                db=db,
             )
-            text = (resolved.text or "").strip()
-            tools_executed = list(getattr(resolved, "tools_executed", None) or [])
-            booking_ok = bool(getattr(resolved, "booking_tools_succeeded", False))
-            raw_media = list(getattr(resolved, "media_attachments", None) or [])
-            for item in raw_media:
-                try:
-                    if isinstance(item, MediaAttachment):
-                        tool_media.append(item)
-                    elif isinstance(item, dict):
-                        tool_media.append(MediaAttachment.model_validate(item))
-                except Exception:
-                    continue
-            if not tools_executed and response.tool_calls:
-                for tc in response.tool_calls:
-                    if not isinstance(tc, dict):
+            if interim.tool_calls:
+                resolved = await llm_orchestrator._resolve_tool_calls(
+                    interim,
+                    messages=list(messages),
+                    model=response.model_name or model_name,
+                    temperature=temperature,
+                    tools=tools,
+                    bot_id=bot_id,
+                    client_id=client_id,
+                    db=db,
+                )
+                text = (resolved.text or "").strip()
+                tools_executed = list(getattr(resolved, "tools_executed", None) or [])
+                booking_ok = bool(getattr(resolved, "booking_tools_succeeded", False))
+                raw_media = list(getattr(resolved, "media_attachments", None) or [])
+                for item in raw_media:
+                    try:
+                        if isinstance(item, MediaAttachment):
+                            tool_media.append(item)
+                        elif isinstance(item, dict):
+                            tool_media.append(MediaAttachment.model_validate(item))
+                    except Exception:
                         continue
-                    fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
-                    name = str((fn or {}).get("name") if fn else tc.get("name") or "")
-                    if name:
-                        tools_executed.append(name)
+                if not tools_executed:
+                    for tc in interim.tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        fn = tc.get("function") if isinstance(tc.get("function"), dict) else None
+                        name = str((fn or {}).get("name") if fn else tc.get("name") or "")
+                        if name:
+                            tools_executed.append(name)
 
         if not text and (
             booking_ok or any(name in self.BOOKING_TOOL_NAMES for name in tools_executed)

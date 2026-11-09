@@ -170,34 +170,37 @@ async def execute_tool_call(
         else:
             result["message"] = f"Function '{tool_name}' executed successfully."
 
-        if "file" in integrations:
-            file_cfg = fn.get("result_file") if isinstance(fn.get("result_file"), dict) else {}
-            file_url = str(file_cfg.get("url") or "").strip()
-            if file_url:
-                if file_url.startswith("/"):
-                    from app.core.config import settings
+        file_cfg = fn.get("result_file") if isinstance(fn.get("result_file"), dict) else {}
+        file_url = str(file_cfg.get("url") or "").strip()
+        # Send configured result file whenever a URL exists (integration tag optional).
+        if file_url and ("file" in integrations or bool(file_cfg)):
+            if file_url.startswith("/"):
+                from app.core.config import settings
 
-                    base = (settings.WEBHOOK_BASE_URL or "").rstrip("/")
-                    if base:
-                        file_url = f"{base}{file_url}"
-                from app.services.media_dispatch_service import infer_media_kind
+                base = (settings.WEBHOOK_BASE_URL or "").rstrip("/")
+                if base:
+                    file_url = f"{base}{file_url}"
+            from app.services.media_dispatch_service import infer_media_kind
 
-                caption = ""
-                if str(file_cfg.get("message_mode") or "text") == "text":
-                    caption = str(file_cfg.get("message") or "").strip()
-                result["media_attachments"] = [
-                    {
-                        "url": file_url,
-                        "media_type": infer_media_kind(
-                            file_url,
-                            mime_type=str(file_cfg.get("mime_type") or "") or None,
-                        ),
-                        "filename": str(file_cfg.get("filename") or "") or None,
-                        "caption": caption or None,
-                        "mime_type": str(file_cfg.get("mime_type") or "") or None,
-                        "source": "function_result_file",
-                    }
-                ]
+            caption = ""
+            if str(file_cfg.get("message_mode") or "text") == "text":
+                caption = str(file_cfg.get("message") or "").strip()
+            result["media_attachments"] = [
+                {
+                    "url": file_url,
+                    "media_type": infer_media_kind(
+                        file_url,
+                        mime_type=str(file_cfg.get("mime_type") or "") or None,
+                    ),
+                    "filename": str(file_cfg.get("filename") or "") or None,
+                    "caption": caption or None,
+                    "mime_type": str(file_cfg.get("mime_type") or "") or None,
+                    "source": "function_result_file",
+                }
+            ]
+            if "file" not in integrations:
+                integrations.append("file")
+                result["result_integrations"] = integrations
 
         logger.info(
             "ToolExecutor.workspace_fn | bot_id={bot_id} name={name}",

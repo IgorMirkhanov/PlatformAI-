@@ -155,7 +155,12 @@ async def deliver_attachments_safely(
     delivered: list[MediaAttachment] = []
     for attachment in attachments:
         try:
-            if probe and not await probe_media_url(attachment.url):
+            # Platform-hosted function files / own uploads — skip slow HEAD probe.
+            source = str(getattr(attachment, "source", "") or "")
+            skip_probe = source in {"function_result_file", "manual"} or "/uploads/bots/" in (
+                attachment.url or ""
+            )
+            if probe and not skip_probe and not await probe_media_url(attachment.url):
                 await log_media_failure(
                     db,
                     bot_id=bot_id,

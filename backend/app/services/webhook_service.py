@@ -528,7 +528,7 @@ async def process_inbound_message(
     ai_payload: dict[str, object] = {}
     media_attachments: list = list(next_node.get("media_attachments") or [])
 
-    if ai_generated and not bot_silent and not response_text:
+    if ai_generated and not bot_silent and not response_text and not media_attachments:
         from app.services.llm.types import SAFE_USER_FALLBACK_MESSAGE
 
         response_text = SAFE_USER_FALLBACK_MESSAGE
