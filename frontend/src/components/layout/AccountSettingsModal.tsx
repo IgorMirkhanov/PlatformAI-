@@ -88,7 +88,7 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
     <AnimatePresence>
       {open ? (
         <motion.div
-          className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto px-4 py-10 sm:py-14"
+          className="fixed inset-0 z-[100] overflow-y-auto overscroll-contain"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -104,13 +104,14 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
             }}
           />
 
+          <div className="relative flex min-h-full items-center justify-center p-4 sm:p-6">
           <motion.div
             role="dialog"
             aria-modal="true"
-            className="relative z-10 my-auto flex h-[min(640px,calc(100vh-7rem))] w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/95 shadow-glow-purple backdrop-blur-xl"
-            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            className="relative z-10 flex h-[min(640px,calc(100dvh-3rem))] w-full max-w-4xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950/95 shadow-glow-purple backdrop-blur-xl"
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 16, scale: 0.98 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ type: "spring", stiffness: 420, damping: 32 }}
           >
             <aside className="hidden w-56 shrink-0 border-r border-zinc-800/80 bg-black/30 p-4 md:block">
@@ -247,6 +248,7 @@ export function AccountSettingsModal({ open, onClose }: AccountSettingsModalProp
               </div>
             </div>
           </motion.div>
+          </div>
         </motion.div>
       ) : null}
     </AnimatePresence>
