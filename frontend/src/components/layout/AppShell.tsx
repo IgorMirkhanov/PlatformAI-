@@ -65,7 +65,6 @@ import {
   KeyRound,
   Workflow,
   X,
-  Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -230,14 +229,12 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto pr-1">
-        <div className="mb-5 flex items-center gap-3 px-1">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-glow-purple">
-            <Zap className="h-5 w-5 text-white" />
-          </div>
-          <div>
-            <p className="text-base font-bold tracking-tight text-white">MP.AI</p>
-            <p className="text-[11px] text-zinc-500">Production Console</p>
-          </div>
+        <div className="mb-5 px-1">
+          <img
+            src="/mpa-logo.png"
+            alt="Media Peace Agency"
+            className="h-10 w-auto max-w-full object-contain object-left"
+          />
         </div>
 
         <div className="grid grid-cols-2 gap-2">
