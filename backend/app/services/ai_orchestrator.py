@@ -114,6 +114,8 @@ class LLMCompletionResult:
     tools_executed: list[str] = field(default_factory=list)
     # True when at least one booking/CRM tool returned a successful status.
     booking_tools_succeeded: bool = False
+    # Attachments produced by function tools (e.g. static result file).
+    media_attachments: list[MediaAttachment] = field(default_factory=list)
 
 
 @dataclass
@@ -391,6 +393,9 @@ class AIOrchestrator:
                 rag_hits=rag_hits,
                 llm_text=response_text,
             )
+            for item in list(getattr(completion, "media_attachments", None) or []):
+                if isinstance(item, MediaAttachment):
+                    attachments.append(item)
             logger.info(
                 "AIOrchestrator.success | client_id={client_id} response_len={length} attachments={count}",
                 client_id=client_id,
@@ -1718,6 +1723,7 @@ class AIOrchestrator:
         text = (response.content or "").strip()
         tools_executed: list[str] = []
         booking_ok = False
+        tool_media: list[MediaAttachment] = []
 
         # Gateway returns tool_calls with empty content — execute tools and get a user reply.
         if response.tool_calls and bot_id is not None:
@@ -1742,6 +1748,15 @@ class AIOrchestrator:
             text = (resolved.text or "").strip()
             tools_executed = list(getattr(resolved, "tools_executed", None) or [])
             booking_ok = bool(getattr(resolved, "booking_tools_succeeded", False))
+            raw_media = list(getattr(resolved, "media_attachments", None) or [])
+            for item in raw_media:
+                try:
+                    if isinstance(item, MediaAttachment):
+                        tool_media.append(item)
+                    elif isinstance(item, dict):
+                        tool_media.append(MediaAttachment.model_validate(item))
+                except Exception:
+                    continue
             if not tools_executed and response.tool_calls:
                 for tc in response.tool_calls:
                     if not isinstance(tc, dict):
@@ -1766,6 +1781,7 @@ class AIOrchestrator:
             billing_handled=True,
             tools_executed=tools_executed,
             booking_tools_succeeded=booking_ok,
+            media_attachments=tool_media,
         )
 
     async def _request_completion(
@@ -2132,6 +2148,15 @@ class AIOrchestrator:
         text = (result.text or "").strip()
         tools_executed = list(getattr(result, "tools_executed", None) or [])
         booking_ok = bool(getattr(result, "booking_tools_succeeded", False))
+        tool_media: list[MediaAttachment] = []
+        for item in list(getattr(result, "media_attachments", None) or []):
+            try:
+                if isinstance(item, MediaAttachment):
+                    tool_media.append(item)
+                elif isinstance(item, dict):
+                    tool_media.append(MediaAttachment.model_validate(item))
+            except Exception:
+                continue
         if not text and (
             booking_ok or any(name in self.BOOKING_TOOL_NAMES for name in tools_executed)
         ):
@@ -2145,6 +2170,7 @@ class AIOrchestrator:
             model_name=result.model,
             tools_executed=tools_executed,
             booking_tools_succeeded=booking_ok,
+            media_attachments=tool_media,
         )
 
     async def _ollama_completion(

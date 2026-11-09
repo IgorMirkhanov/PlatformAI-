@@ -13,6 +13,7 @@ from app.models.users import User
 from app.schemas.core_schemas import (
     BotAgentProfileRead,
     BotAvatarUploadResponse,
+    BotFunctionFileUploadResponse,
     BotChannelsResponse,
     BotFlowResponse,
     BotFunctionsUpdate,
@@ -402,6 +403,35 @@ async def upload_bot_avatar(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to upload avatar.",
+        ) from exc
+
+
+@router.post(
+    "/{bot_id}/function-files",
+    response_model=BotFunctionFileUploadResponse,
+    summary="Upload a static file for function result delivery",
+)
+async def upload_bot_function_file(
+    bot_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_bot_access(Permission.BOT_FUNCTIONS)),
+) -> BotFunctionFileUploadResponse:
+    try:
+        return await bot_management_service.upload_function_result_file(
+            db=db, bot_id=bot_id, file=file
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "BotManagement.function_file_error | bot_id={bot_id} error={error}",
+            bot_id=bot_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to upload function file.",
         ) from exc
 
 

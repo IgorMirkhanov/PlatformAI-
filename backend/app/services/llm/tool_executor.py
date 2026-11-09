@@ -149,6 +149,11 @@ async def execute_tool_call(
             continue
         if not bool(fn.get("is_active", True)):
             return {"status": "error", "message": f"Function '{tool_name}' is disabled."}
+        integrations = [
+            str(item).lower()
+            for item in (fn.get("result_integrations") or ([fn.get("integration")] if fn.get("integration") else []))
+            if item and str(item).lower() != "none"
+        ]
         result: dict[str, Any] = {
             "status": "ok",
             "function": tool_name,
@@ -156,7 +161,7 @@ async def execute_tool_call(
             "post_scenario": fn.get("post_scenario") or "continue",
             "disable_delayed_messages": bool(fn.get("disable_delayed_messages", False)),
             "nested_function_id": fn.get("nested_function_id"),
-            "result_integrations": list(fn.get("result_integrations") or []),
+            "result_integrations": integrations,
             "result_fields": list(fn.get("result_fields") or []),
         }
         if str(fn.get("reaction_mode") or "llm") == "fixed":
@@ -164,6 +169,36 @@ async def execute_tool_call(
             result["message"] = result["fixed_reply"] or f"Function '{tool_name}' executed."
         else:
             result["message"] = f"Function '{tool_name}' executed successfully."
+
+        if "file" in integrations:
+            file_cfg = fn.get("result_file") if isinstance(fn.get("result_file"), dict) else {}
+            file_url = str(file_cfg.get("url") or "").strip()
+            if file_url:
+                if file_url.startswith("/"):
+                    from app.core.config import settings
+
+                    base = (settings.WEBHOOK_BASE_URL or "").rstrip("/")
+                    if base:
+                        file_url = f"{base}{file_url}"
+                from app.services.media_dispatch_service import infer_media_kind
+
+                caption = ""
+                if str(file_cfg.get("message_mode") or "text") == "text":
+                    caption = str(file_cfg.get("message") or "").strip()
+                result["media_attachments"] = [
+                    {
+                        "url": file_url,
+                        "media_type": infer_media_kind(
+                            file_url,
+                            mime_type=str(file_cfg.get("mime_type") or "") or None,
+                        ),
+                        "filename": str(file_cfg.get("filename") or "") or None,
+                        "caption": caption or None,
+                        "mime_type": str(file_cfg.get("mime_type") or "") or None,
+                        "source": "function_result_file",
+                    }
+                ]
+
         logger.info(
             "ToolExecutor.workspace_fn | bot_id={bot_id} name={name}",
             bot_id=bot.id,

@@ -30,6 +30,7 @@ class LLMCompletion:
     raw_message: Any = None
     tools_executed: list[str] | None = None
     booking_tools_succeeded: bool = False
+    media_attachments: list[dict[str, Any]] | None = None
 
 
 class TransientLLMError(Exception):

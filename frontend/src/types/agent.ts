@@ -184,6 +184,18 @@ export interface FunctionResultField {
   value: string;
 }
 
+export type FunctionResultFileMethod = "upload" | "url";
+export type FunctionResultMessageMode = "text" | "none";
+
+export interface FunctionResultFile {
+  method: FunctionResultFileMethod;
+  url: string;
+  filename: string;
+  mime_type?: string;
+  message_mode: FunctionResultMessageMode;
+  message: string;
+}
+
 export interface FunctionToolDefinition {
   id: string;
   name: string;
@@ -194,6 +206,7 @@ export interface FunctionToolDefinition {
   integration: FunctionIntegrationKind;
   result_integrations?: FunctionIntegrationKind[];
   result_fields?: FunctionResultField[];
+  result_file?: FunctionResultFile | null;
   post_scenario?: "continue" | "end";
   nested_function_id?: string | null;
   disable_delayed_messages?: boolean;

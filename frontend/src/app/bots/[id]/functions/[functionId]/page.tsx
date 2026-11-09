@@ -1,14 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, GripVertical, Info, MoreVertical, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  FileText,
+  GripVertical,
+  Info,
+  Loader2,
+  MoreVertical,
+  Plus,
+  Trash2,
+  Upload,
+} from "lucide-react";
 
 import { PageSkeleton } from "@/components/ui/Skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/useToast";
 import { useAgentWorkspace } from "@/hooks/useAgentWorkspace";
+import { uploadBotFunctionFile } from "@/lib/api";
 import { getApiErrorMessage, useBotStore } from "@/store/useBotStore";
 import {
   FUNCTION_INTEGRATION_OPTIONS,
@@ -16,6 +27,7 @@ import {
   type FunctionIntegrationKind,
   type FunctionParamType,
   type FunctionResultField,
+  type FunctionResultFile,
   type FunctionToolDefinition,
   type FunctionToolParameter,
 } from "@/types/agent";
@@ -78,6 +90,8 @@ export default function FunctionEditorPage() {
   );
 
   const [draft, setDraft] = useState<FunctionToolDefinition | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const current = draft ?? source ?? null;
   const allFunctions = profile?.function_tools ?? [];
 
@@ -96,6 +110,40 @@ export default function FunctionEditorPage() {
 
   const update = (patch: Partial<FunctionToolDefinition>): void => {
     setDraft({ ...current, ...patch });
+  };
+
+  const resultFile: FunctionResultFile = current.result_file ?? {
+    method: "upload",
+    url: "",
+    filename: "",
+    mime_type: "",
+    message_mode: "text",
+    message: "",
+  };
+
+  const updateResultFile = (patch: Partial<FunctionResultFile>): void => {
+    update({ result_file: { ...resultFile, ...patch } });
+  };
+
+  const handleUploadResultFile = async (file: File): Promise<void> => {
+    setUploadingFile(true);
+    try {
+      const response = await uploadBotFunctionFile(botId, file);
+      updateResultFile({
+        method: "upload",
+        url: response.file_url,
+        filename: response.filename || file.name,
+        mime_type: response.mime_type || file.type || "",
+      });
+      showToast("Файл загружен.", "success");
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Не удалось загрузить файл."), "error");
+    } finally {
+      setUploadingFile(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   };
 
   const updateParam = (index: number, patch: Partial<FunctionToolParameter>): void => {
@@ -443,70 +491,207 @@ export default function FunctionEditorPage() {
                   )}
                 >
                   {opt.label}
+                  {active ? " ×" : ""}
                 </button>
               );
             })}
           </div>
         </div>
 
-        <div className="space-y-2">
-          <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-            <span>Имя</span>
-            <span>Действие</span>
-            <span>Значение</span>
-            <span />
-          </div>
-          {resultFields.map((field, index) => (
+        {resultIntegrations.includes("file") ? (
+          <div className="space-y-3">
             <div
-              key={field.id}
-              className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-2 rounded-xl border border-zinc-600 bg-[#0c0c0e] p-2"
+              data-slot="card"
+              className="flex flex-col gap-4 rounded-xl border border-zinc-600 bg-[#1a1a1e] p-4 text-zinc-100"
             >
-              <input
-                value={field.name}
-                onChange={(e) => updateField(index, { name: e.target.value })}
-                className={cn(fieldClass, "h-8 text-xs")}
-              />
-              <select
-                value={field.action}
-                onChange={(e) =>
-                  updateField(index, { action: e.target.value as "text" | "system" })
-                }
-                className={cn(fieldClass, "h-8 text-xs")}
-              >
-                <option value="text">Текст</option>
-                <option value="system">Системные параметры</option>
-              </select>
-              <input
-                value={field.value}
-                onChange={(e) => updateField(index, { value: e.target.value })}
-                className={cn(fieldClass, "h-8 text-xs")}
-              />
-              <button
-                type="button"
-                onClick={() =>
-                  update({ result_fields: resultFields.filter((_, i) => i !== index) })
-                }
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              <div>
+                <FieldLabel>Метод добавления файла</FieldLabel>
+                <select
+                  value={resultFile.method}
+                  onChange={(e) =>
+                    updateResultFile({
+                      method: e.target.value as FunctionResultFile["method"],
+                    })
+                  }
+                  className={fieldClass}
+                >
+                  <option value="upload">Загрузка файла</option>
+                  <option value="url">По ссылке</option>
+                </select>
+              </div>
+
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100/90">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                <span>Отправка файлов не работает в канале Instagram</span>
+              </div>
+
+              {resultFile.method === "url" ? (
+                <div className="space-y-2">
+                  <div>
+                    <FieldLabel>URL файла</FieldLabel>
+                    <input
+                      value={resultFile.url}
+                      onChange={(e) =>
+                        updateResultFile({
+                          url: e.target.value,
+                          filename:
+                            resultFile.filename ||
+                            e.target.value.split("/").pop()?.split("?")[0] ||
+                            "",
+                        })
+                      }
+                      placeholder="https://…"
+                      className={fieldClass}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>Имя файла</FieldLabel>
+                    <input
+                      value={resultFile.filename}
+                      onChange={(e) => updateResultFile({ filename: e.target.value })}
+                      className={fieldClass}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {resultFile.url ? (
+                    <div className="flex items-center gap-3 rounded-lg border border-zinc-600 bg-[#0c0c0e] px-3 py-2.5">
+                      <FileText className="h-4 w-4 shrink-0 text-violet-300" />
+                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
+                        {resultFile.filename || resultFile.url}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateResultFile({ url: "", filename: "", mime_type: "" })
+                        }
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20"
+                        aria-label="Удалить файл"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        void handleUploadResultFile(file);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingFile}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-600 bg-[#0c0c0e] px-4 py-2.5 text-sm font-medium text-zinc-100 transition hover:border-violet-500/50 hover:bg-zinc-900 disabled:opacity-50"
+                  >
+                    {uploadingFile ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-violet-300" />
+                    ) : (
+                      <Upload className="h-4 w-4 text-violet-300" />
+                    )}
+                    Загрузить файл
+                  </button>
+                </>
+              )}
             </div>
-          ))}
-          <button
-            type="button"
-            onClick={() =>
-              update({
-                result_fields: [
-                  ...resultFields,
-                  { id: crypto.randomUUID(), name: "", action: "text", value: "" },
-                ],
-              })
-            }
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-violet-600 text-white shadow-[0_0_0_1px_rgba(139,92,246,0.45)] hover:bg-violet-500"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-        </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <FieldLabel>Прикрепленное сообщение</FieldLabel>
+                <select
+                  value={resultFile.message_mode}
+                  onChange={(e) =>
+                    updateResultFile({
+                      message_mode: e.target.value as FunctionResultFile["message_mode"],
+                    })
+                  }
+                  className={fieldClass}
+                >
+                  <option value="text">Текст</option>
+                  <option value="none">Без сообщения</option>
+                </select>
+              </div>
+              {resultFile.message_mode === "text" ? (
+                <div className="sm:col-span-2">
+                  <FieldLabel>Сообщение</FieldLabel>
+                  <textarea
+                    value={resultFile.message}
+                    onChange={(e) => updateResultFile({ message: e.target.value })}
+                    rows={3}
+                    placeholder="Сообщение"
+                    className="w-full rounded-lg border border-zinc-600 bg-[#0c0c0e] px-2.5 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/40"
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <span>Имя</span>
+              <span>Действие</span>
+              <span>Значение</span>
+              <span />
+            </div>
+            {resultFields.map((field, index) => (
+              <div
+                key={field.id}
+                className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-2 rounded-xl border border-zinc-600 bg-[#0c0c0e] p-2"
+              >
+                <input
+                  value={field.name}
+                  onChange={(e) => updateField(index, { name: e.target.value })}
+                  className={cn(fieldClass, "h-8 text-xs")}
+                />
+                <select
+                  value={field.action}
+                  onChange={(e) =>
+                    updateField(index, { action: e.target.value as "text" | "system" })
+                  }
+                  className={cn(fieldClass, "h-8 text-xs")}
+                >
+                  <option value="text">Текст</option>
+                  <option value="system">Системные параметры</option>
+                </select>
+                <input
+                  value={field.value}
+                  onChange={(e) => updateField(index, { value: e.target.value })}
+                  className={cn(fieldClass, "h-8 text-xs")}
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    update({ result_fields: resultFields.filter((_, i) => i !== index) })
+                  }
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() =>
+                update({
+                  result_fields: [
+                    ...resultFields,
+                    { id: crypto.randomUUID(), name: "", action: "text", value: "" },
+                  ],
+                })
+              }
+              className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-violet-600 text-white shadow-[0_0_0_1px_rgba(139,92,246,0.45)] hover:bg-violet-500"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </Section>
 
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">

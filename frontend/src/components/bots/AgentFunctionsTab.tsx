@@ -30,6 +30,7 @@ function emptyFunction(): FunctionToolDefinition {
     integration: "none",
     result_integrations: [],
     result_fields: [],
+    result_file: null,
     post_scenario: "continue",
     nested_function_id: null,
     disable_delayed_messages: false,

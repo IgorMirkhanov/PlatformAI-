@@ -229,6 +229,8 @@ class LLMOrchestrator:
 
         tools_executed: list[str] = []
         booking_ok = False
+        collected_media: list[dict[str, Any]] = []
+        fixed_reply_text = ""
         booking_tool_names = {
             "create_calendar_event",
             "save_lead_to_crm",
@@ -297,6 +299,15 @@ class LLMOrchestrator:
                 tools_executed.append(tool_name)
             if tool_name in booking_tool_names and self._tool_result_ok(tool_result):
                 booking_ok = True
+            if isinstance(tool_result, dict):
+                media_items = tool_result.get("media_attachments")
+                if isinstance(media_items, list):
+                    for item in media_items:
+                        if isinstance(item, dict) and item.get("url"):
+                            collected_media.append(item)
+                fixed_reply = str(tool_result.get("fixed_reply") or "").strip()
+                if fixed_reply:
+                    fixed_reply_text = fixed_reply
 
             follow_up.append(
                 {
@@ -304,6 +315,18 @@ class LLMOrchestrator:
                     "tool_call_id": tc.get("id"),
                     "content": _json.dumps(tool_result, ensure_ascii=False),
                 }
+            )
+
+        if fixed_reply_text:
+            return LLMCompletion(
+                text=fixed_reply_text,
+                model=result.model,
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+                total_tokens=result.total_tokens,
+                tools_executed=tools_executed,
+                booking_tools_succeeded=booking_ok,
+                media_attachments=collected_media or None,
             )
 
         # Second completion — model reads tool output and replies to the user.
@@ -341,6 +364,7 @@ class LLMOrchestrator:
         final.tool_calls = None
         final.tools_executed = tools_executed
         final.booking_tools_succeeded = booking_ok
+        final.media_attachments = collected_media or None
 
         final.text = sanitize_outbound_text(
             final.text,

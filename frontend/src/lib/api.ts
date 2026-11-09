@@ -1350,6 +1350,29 @@ export async function uploadBotAvatar(
   });
 }
 
+export interface BotFunctionFileUploadResponse {
+  bot_id: string;
+  file_url: string;
+  filename: string;
+  mime_type?: string | null;
+  message?: string;
+}
+
+export async function uploadBotFunctionFile(
+  botId: string,
+  file: File,
+): Promise<BotFunctionFileUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiRequest<BotFunctionFileUploadResponse>(
+    `/api/v1/bots/${botId}/function-files`,
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+}
+
 export async function fetchBotChannels(botId: string): Promise<BotChannelsResponse> {
   return apiRequest<BotChannelsResponse>(`/api/v1/bots/${botId}/channel-integrations`);
 }

@@ -946,6 +946,14 @@ class BotAvatarUploadResponse(BaseModel):
     message: str = "Avatar uploaded successfully."
 
 
+class BotFunctionFileUploadResponse(BaseModel):
+    bot_id: uuid.UUID
+    file_url: str
+    filename: str
+    mime_type: str | None = None
+    message: str = "Function file uploaded successfully."
+
+
 class BotAgentProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

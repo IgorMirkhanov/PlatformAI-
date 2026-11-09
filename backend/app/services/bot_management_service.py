@@ -22,6 +22,7 @@ from app.schemas.core_schemas import (
     AgentUseCaseTemplate,
     BotAgentProfileRead,
     BotAvatarUploadResponse,
+    BotFunctionFileUploadResponse,
     BotChannelsResponse,
     BotFlowResponse,
     BotFunctionsUpdate,
@@ -108,6 +109,26 @@ AVATAR_CONTENT_TYPES: dict[str, str] = {
     "image/gif": ".gif",
 }
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
+MAX_FUNCTION_FILE_BYTES = 25 * 1024 * 1024
+FUNCTION_FILE_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".txt",
+    ".csv",
+    ".zip",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".mp4",
+    ".mp3",
+}
 
 OMNICHANNEL_DEFINITIONS: tuple[ChannelIntegrationType, ...] = (
     ChannelIntegrationType.TELEGRAM,
@@ -1075,6 +1096,52 @@ class BotManagementService:
         logger.info("BotManagement.avatar_uploaded | bot_id={bot_id}", bot_id=bot_id)
         return BotAvatarUploadResponse(bot_id=bot_id, avatar_url=avatar_url)
 
+    async def upload_function_result_file(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        file: UploadFile,
+    ) -> BotFunctionFileUploadResponse:
+        await self._get_bot(db, bot_id)
+
+        original_name = Path(file.filename or "file.bin").name
+        extension = Path(original_name).suffix.lower()
+        if extension not in FUNCTION_FILE_EXTENSIONS:
+            raise ValueError(
+                "Unsupported file type. Use PDF, Office, image, zip, txt/csv, mp3/mp4."
+            )
+
+        raw = await file.read()
+        if not raw:
+            raise ValueError("Empty upload.")
+        if len(raw) > MAX_FUNCTION_FILE_BYTES:
+            raise ValueError("File exceeds 25 MB limit.")
+
+        upload_dir = Path(settings.UPLOADS_DIR) / "bots" / str(bot_id) / "function-files"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        stored_name = f"{uuid.uuid4().hex}{extension}"
+        destination = upload_dir / stored_name
+        destination.write_bytes(raw)
+
+        relative_url = f"/uploads/bots/{bot_id}/function-files/{stored_name}"
+        public_base = (settings.WEBHOOK_BASE_URL or "").rstrip("/")
+        file_url = f"{public_base}{relative_url}" if public_base else relative_url
+        mime_type = (file.content_type or "").strip() or None
+
+        logger.info(
+            "BotManagement.function_file_uploaded | bot_id={bot_id} name={name} bytes={bytes}",
+            bot_id=bot_id,
+            name=original_name,
+            bytes=len(raw),
+        )
+        return BotFunctionFileUploadResponse(
+            bot_id=bot_id,
+            file_url=file_url,
+            filename=original_name,
+            mime_type=mime_type,
+        )
+
     async def get_bot_profile(
         self,
         db: AsyncSession,
@@ -1221,6 +1288,11 @@ class BotManagementService:
                         "integration": str(item.get("integration") or "none"),
                         "result_integrations": list(item.get("result_integrations") or []),
                         "result_fields": list(item.get("result_fields") or []),
+                        "result_file": (
+                            dict(item.get("result_file"))
+                            if isinstance(item.get("result_file"), dict)
+                            else None
+                        ),
                         "post_scenario": str(item.get("post_scenario") or "continue"),
                         "nested_function_id": item.get("nested_function_id") or None,
                         "disable_delayed_messages": bool(
