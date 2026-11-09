@@ -99,13 +99,6 @@ URL_IN_TEXT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MARKDOWN_IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\((https?://[^)\s]+)\)")
-WAIT_WITHOUT_ACTION_PATTERN = re.compile(
-    r"(?i)("
-    r"подожд(?:ите|и)|сейчас\s+(?:отправ|расчит|выполн)|"
-    r"выполню\s+расч[её]т|отправлю\s+(?:вам\s+)?(?:фото|файл)|"
-    r"please\s+wait|i(?:'| a)m\s+(?:sending|calculating)"
-    r")"
-)
 
 
 @dataclass
