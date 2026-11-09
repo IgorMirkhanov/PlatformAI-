@@ -970,6 +970,24 @@ class BotManagementService:
 
             set_control_config(bot, control_payload)
 
+        message_extra_fields = {
+            "follow_up_enabled",
+            "follow_up_delay_hours",
+            "split_delay_seconds",
+            "send_on_weekends",
+        }
+        message_patch = {
+            key: updates.pop(key)
+            for key in list(updates.keys())
+            if key in message_extra_fields
+        }
+        if message_patch:
+            from app.services.bot_message_extras import get_message_extras, set_message_extras
+
+            extras = get_message_extras(bot)
+            extras.update(message_patch)
+            set_message_extras(bot, extras)
+
         for field, value in updates.items():
             setattr(bot, field, value)
 

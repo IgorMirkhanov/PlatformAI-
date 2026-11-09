@@ -55,6 +55,14 @@ export interface BotAgentProfile {
   wallet_balance?: number;
   control_config?: BotControlConfig;
   llm_extras?: BotLlmExtras;
+  message_extras?: BotMessageExtras;
+}
+
+export interface BotMessageExtras {
+  follow_up_enabled?: boolean;
+  follow_up_delay_hours?: number;
+  split_delay_seconds?: number;
+  send_on_weekends?: boolean;
 }
 
 export interface BotLlmExtras {
@@ -116,6 +124,10 @@ export interface BotSettingsUpdate {
   message_split?: boolean;
   message_buffer_delay?: number;
   control_config?: BotControlConfig;
+  follow_up_enabled?: boolean;
+  follow_up_delay_hours?: number;
+  split_delay_seconds?: number;
+  send_on_weekends?: boolean;
 }
 
 export interface BotPromptingUpdate {

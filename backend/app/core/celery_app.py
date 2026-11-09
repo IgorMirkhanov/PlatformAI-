@@ -30,6 +30,7 @@ celery_app = Celery(
         "app.tasks.wazzup_tasks",
         "app.tasks.hub_queue_tasks",
         "app.tasks.process_message",
+        "app.tasks.follow_up_task",
     ],
 )
 

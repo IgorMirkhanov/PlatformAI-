@@ -274,6 +274,19 @@ class TelegramService:
             await self.answer_callback_query(bot_token, inbound.callback_query_id)
 
         try:
+            # New client message cancels a pending follow-up for this chat.
+            try:
+                from app.core.redis_client import get_redis_client
+                from app.core.celery_app import celery_app
+
+                follow_key = f"mpai:follow_up:{bot.id}:{inbound.chat_id}"
+                previous = get_redis_client().get(follow_key)
+                if previous:
+                    celery_app.control.revoke(previous, terminate=False)
+                    get_redis_client().delete(follow_key)
+            except Exception:
+                pass
+
             from app.services.bot_llm_extras import media_recognition_allowed
 
             on_ai_node = await self._client_on_ai_node(db, bot.id, inbound.chat_id)
@@ -352,15 +365,32 @@ class TelegramService:
                     client_id=result.client_id,
                 )
 
-            await self.send_message(
-                bot_token=bot_token,
-                chat_id=inbound.chat_id,
-                text=outbound_text,
-                buttons=[button.model_dump() for button in result.buttons],
-                bot_id=bot.id,
-                client_id=result.client_id,
-                db=db,
+            buffer_ms = int(getattr(bot, "message_buffer_delay", 0) or 0)
+            if buffer_ms > 0:
+                await asyncio.sleep(min(buffer_ms, 60_000) / 1000.0)
+
+            from app.services.bot_message_extras import get_message_extras, split_outbound_text
+
+            extras = get_message_extras(bot)
+            chunks = split_outbound_text(
+                outbound_text,
+                enabled=bool(getattr(bot, "message_split", False)),
             )
+            split_delay = float(extras.get("split_delay_seconds") or 0)
+            buttons_payload = [button.model_dump() for button in result.buttons]
+            for index, chunk in enumerate(chunks):
+                await self.send_message(
+                    bot_token=bot_token,
+                    chat_id=inbound.chat_id,
+                    text=chunk,
+                    buttons=buttons_payload if index == len(chunks) - 1 else [],
+                    bot_id=bot.id,
+                    client_id=result.client_id,
+                    db=db,
+                )
+                if index < len(chunks) - 1 and split_delay > 0:
+                    await asyncio.sleep(split_delay)
+
             if result.media_attachments:
                 await self.dispatch_media_attachments(
                     bot_token=bot_token,
@@ -370,6 +400,24 @@ class TelegramService:
                     client_id=result.client_id,
                     db=db,
                 )
+
+            if extras.get("follow_up_enabled"):
+                try:
+                    from app.tasks.follow_up_task import schedule_follow_up_message
+
+                    schedule_follow_up_message(
+                        bot_id=str(bot.id),
+                        chat_id=inbound.chat_id,
+                        client_id=str(result.client_id),
+                        delay_hours=int(extras.get("follow_up_delay_hours") or 24),
+                    )
+                except Exception as follow_exc:
+                    logger.warning(
+                        "TelegramService.follow_up_schedule_failed | bot_id={bot_id} error={error}",
+                        bot_id=bot.id,
+                        error=str(follow_exc),
+                    )
+
             return {
                 "status": "processed",
                 "client_id": str(result.client_id),

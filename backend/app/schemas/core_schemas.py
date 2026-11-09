@@ -868,6 +868,10 @@ class BotSettingsUpdate(BaseModel):
     message_split: bool | None = None
     message_buffer_delay: int | None = Field(default=None, ge=0, le=60000)
     control_config: BotControlConfig | None = None
+    follow_up_enabled: bool | None = None
+    follow_up_delay_hours: int | None = Field(default=None, ge=1, le=168)
+    split_delay_seconds: int | None = Field(default=None, ge=0, le=30)
+    send_on_weekends: bool | None = None
 
 
 class BotPromptingUpdate(BaseModel):
@@ -971,6 +975,7 @@ class BotAgentProfileRead(BaseModel):
     wallet_balance: int = 0
     control_config: dict[str, Any] = Field(default_factory=dict)
     llm_extras: dict[str, Any] = Field(default_factory=dict)
+    message_extras: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -979,6 +984,7 @@ class BotAgentProfileRead(BaseModel):
             return data
         from app.services.bot_control_config import get_control_config
         from app.services.bot_llm_extras import get_llm_extras
+        from app.services.bot_message_extras import get_message_extras
         from app.services.bot_workspace_config import get_workspace, openai_tools_for_bot
 
         credentials = getattr(data, "credentials", None) or {}
@@ -1015,6 +1021,7 @@ class BotAgentProfileRead(BaseModel):
         payload["openai_tools"] = openai_tools_for_bot(data)
         payload["control_config"] = get_control_config(data)
         payload["llm_extras"] = get_llm_extras(data)
+        payload["message_extras"] = get_message_extras(data)
         return payload
 
     @model_validator(mode="after")
