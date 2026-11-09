@@ -274,8 +274,30 @@ class TelegramService:
             await self.answer_callback_query(bot_token, inbound.callback_query_id)
 
         try:
+            from app.services.bot_llm_extras import media_recognition_allowed
+
             on_ai_node = await self._client_on_ai_node(db, bot.id, inbound.chat_id)
             operator_paused = await self._client_paused_by_operator(db, bot.id, inbound.chat_id)
+
+            if (
+                not operator_paused
+                and inbound.content_type != "text"
+                and inbound.content_type != "callback"
+                and not media_recognition_allowed(bot, inbound.content_type)
+            ):
+                disabled_text = (
+                    "Распознавание этого типа вложений сейчас выключено в настройках LLM. "
+                    "Отправьте текст или включите распознавание в разделе «LLM-Модели»."
+                )
+                await self.send_message(
+                    bot_token=bot_token,
+                    chat_id=inbound.chat_id,
+                    text=disabled_text,
+                    buttons=[],
+                    bot_id=bot.id,
+                    db=db,
+                )
+                return {"status": "processed", "response_text": disabled_text}
 
             if (
                 not operator_paused

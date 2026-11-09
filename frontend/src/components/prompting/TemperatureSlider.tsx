@@ -17,8 +17,8 @@ export function TemperatureSlider({ value, onChange, disabled = false }: Tempera
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-zinc-100">Temperature</p>
-          <p className="text-[11px] text-zinc-500">0.0 Strict RAG → 1.0 Creative Automation</p>
+          <p className="text-sm font-medium text-zinc-100">Температура</p>
+          <p className="text-[11px] text-zinc-500">0.0 точность → 1.0 креативность</p>
         </div>
         <div className="rounded-lg border border-violet-500/25 bg-violet-500/10 px-2.5 py-1 font-mono text-sm text-violet-200">
           {value.toFixed(2)}

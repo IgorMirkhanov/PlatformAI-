@@ -921,6 +921,14 @@ class OptimizeAIPromptResponse(BaseModel):
 class BotLLMConfigUpdate(BaseModel):
     llm_model_name: str = Field(default="gpt-4o-mini", min_length=1, max_length=128)
     llm_temperature: float = Field(default=0.5, ge=0.0, le=2.0)
+    use_custom_api_key: bool | None = None
+    recognize_audio: bool | None = None
+    recognize_images: bool | None = None
+    recognize_files: bool | None = None
+    audio_engine: str | None = Field(default=None, max_length=32)
+    audio_language: str | None = Field(default=None, max_length=32)
+    max_tokens: int | None = Field(default=None, ge=64, le=4096)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class BotFunctionsUpdate(BaseModel):
@@ -962,6 +970,7 @@ class BotAgentProfileRead(BaseModel):
     subscription_expires_at: datetime | None = None
     wallet_balance: int = 0
     control_config: dict[str, Any] = Field(default_factory=dict)
+    llm_extras: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -969,6 +978,7 @@ class BotAgentProfileRead(BaseModel):
         if isinstance(data, dict):
             return data
         from app.services.bot_control_config import get_control_config
+        from app.services.bot_llm_extras import get_llm_extras
         from app.services.bot_workspace_config import get_workspace, openai_tools_for_bot
 
         credentials = getattr(data, "credentials", None) or {}
@@ -1004,6 +1014,7 @@ class BotAgentProfileRead(BaseModel):
         payload["agent_rag"] = workspace["agent_rag"]
         payload["openai_tools"] = openai_tools_for_bot(data)
         payload["control_config"] = get_control_config(data)
+        payload["llm_extras"] = get_llm_extras(data)
         return payload
 
     @model_validator(mode="after")

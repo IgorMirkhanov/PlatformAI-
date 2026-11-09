@@ -57,21 +57,24 @@ export function temperatureModeLabel(value: number): {
   title: string;
   description: string;
 } {
-  if (value <= 0.25) {
+  if (value <= 0.3) {
     return {
-      title: "Strict RAG",
-      description: "0.0–0.25 · детерминированные ответы, минимальная креативность.",
+      title: "Низкая температура",
+      description:
+        "Ответы более точные и предсказуемые. Подходит для FAQ, скриптов продаж и работы по базе знаний.",
     };
   }
-  if (value <= 0.6) {
+  if (value <= 0.7) {
     return {
-      title: "Balanced Ops",
-      description: "0.26–0.60 · баланс точности и гибкости для support-сценариев.",
+      title: "Средняя температура",
+      description:
+        "Баланс точности и креативности. Хороший режим по умолчанию для большинства диалогов с клиентами.",
     };
   }
   return {
-    title: "Creative Automation",
-    description: "0.61–1.0 · свободная генерация для brainstorming и upsell.",
+    title: "Высокая температура",
+    description:
+      "Ответы свободнее и разнообразнее. Используйте для brainstorming, креативных сценариев и upsell.",
   };
 }
 

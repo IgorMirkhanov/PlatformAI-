@@ -54,6 +54,18 @@ export interface BotAgentProfile {
   subscription_expires_at?: string | null;
   wallet_balance?: number;
   control_config?: BotControlConfig;
+  llm_extras?: BotLlmExtras;
+}
+
+export interface BotLlmExtras {
+  use_custom_api_key?: boolean;
+  recognize_audio?: boolean;
+  recognize_images?: boolean;
+  recognize_files?: boolean;
+  audio_engine?: "whisper" | "gpt4o_audio" | string;
+  audio_language?: "universal" | "ru" | "en" | "kk" | string;
+  max_tokens?: number;
+  top_p?: number;
 }
 
 export interface BotControlHistorySettings {
@@ -128,6 +140,14 @@ export interface OptimizePromptResponse {
 export interface BotLLMConfigUpdate {
   llm_model_name: string;
   llm_temperature: number;
+  use_custom_api_key?: boolean;
+  recognize_audio?: boolean;
+  recognize_images?: boolean;
+  recognize_files?: boolean;
+  audio_engine?: string;
+  audio_language?: string;
+  max_tokens?: number;
+  top_p?: number;
 }
 
 export interface BotFunctionsUpdate {

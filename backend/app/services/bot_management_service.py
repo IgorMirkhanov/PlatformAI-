@@ -1139,9 +1139,28 @@ class BotManagementService:
         bot_id: uuid.UUID,
         payload: BotLLMConfigUpdate,
     ) -> BotAgentProfileRead:
+        from app.services.bot_llm_extras import get_llm_extras, set_llm_extras
+
         bot = await self._get_bot(db, bot_id)
         bot.llm_model_name = payload.llm_model_name
         bot.llm_temperature = payload.llm_temperature
+
+        extras = get_llm_extras(bot)
+        for field in (
+            "use_custom_api_key",
+            "recognize_audio",
+            "recognize_images",
+            "recognize_files",
+            "audio_engine",
+            "audio_language",
+            "max_tokens",
+            "top_p",
+        ):
+            value = getattr(payload, field, None)
+            if value is not None:
+                extras[field] = value
+        set_llm_extras(bot, extras)
+
         await db.flush()
         await db.refresh(bot)
         await llm_response_cache.invalidate_bot_cache(bot_id)
