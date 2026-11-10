@@ -300,6 +300,9 @@ class PipelineService:
                 status_code=400,
             )
         rows = await stages.list_for_pipeline(pipeline_id)
+        # Refresh so async ORM does not lazy-load server onupdate timestamps.
+        for row in rows:
+            await db.refresh(row)
         return [CrmStageRead.model_validate(row) for row in rows]
 
     async def _clear_default_flag(

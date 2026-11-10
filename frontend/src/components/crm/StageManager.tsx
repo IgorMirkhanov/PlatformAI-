@@ -1,10 +1,21 @@
 "use client";
 
-import { Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  DragDropContext,
+  Draggable,
+  Droppable,
+  type DropResult,
+} from "@hello-pangea/dnd";
+import { GripVertical, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useToast } from "@/hooks/useToast";
-import { createStage, deleteStage, updateStage } from "@/lib/crm/api";
+import {
+  createStage,
+  deleteStage,
+  reorderStages,
+  updateStage,
+} from "@/lib/crm/api";
 import type { CrmPipeline, CrmStage } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/store/useBotStore";
@@ -25,6 +36,10 @@ interface StageManagerProps {
   onChanged: () => Promise<void> | void;
 }
 
+function sortStages(stages: CrmStage[]): CrmStage[] {
+  return [...stages].sort((a, b) => a.position - b.position);
+}
+
 export function StageManager({ pipeline, onChanged }: StageManagerProps) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(false);
@@ -33,13 +48,21 @@ export function StageManager({ pipeline, onChanged }: StageManagerProps) {
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-
-  const stages = useMemo(
-    () => [...(pipeline.stages || [])].sort((a, b) => a.position - b.position),
-    [pipeline.stages],
+  const [orderedStages, setOrderedStages] = useState<CrmStage[]>(() =>
+    sortStages(pipeline.stages || []),
   );
 
-  const nextPosition = stages.length === 0 ? 0 : Math.max(...stages.map((s) => s.position)) + 1;
+  useEffect(() => {
+    setOrderedStages(sortStages(pipeline.stages || []));
+  }, [pipeline.stages]);
+
+  const nextPosition = useMemo(
+    () =>
+      orderedStages.length === 0
+        ? 0
+        : Math.max(...orderedStages.map((stage) => stage.position)) + 1,
+    [orderedStages],
+  );
 
   const onCreate = async () => {
     const trimmed = name.trim();
@@ -99,6 +122,41 @@ export function StageManager({ pipeline, onChanged }: StageManagerProps) {
     }
   };
 
+  const onDragEnd = async (result: DropResult) => {
+    const { destination, source } = result;
+    if (!destination) return;
+    if (destination.index === source.index) return;
+    if (busy || editingId) return;
+
+    const previous = orderedStages;
+    const next = [...orderedStages];
+    const [moved] = next.splice(source.index, 1);
+    if (!moved) return;
+    next.splice(destination.index, 0, moved);
+
+    const withPositions = next.map((stage, index) => ({
+      ...stage,
+      position: index,
+    }));
+    setOrderedStages(withPositions);
+    setBusy(true);
+    try {
+      await reorderStages(pipeline.id, {
+        stages: withPositions.map((stage) => ({
+          id: stage.id,
+          position: stage.position,
+        })),
+      });
+      showToast("Порядок этапов обновлён.", "success");
+      await onChanged();
+    } catch (error) {
+      setOrderedStages(previous);
+      showToast(getApiErrorMessage(error, "Не удалось изменить порядок этапов."), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="relative">
       <button
@@ -115,7 +173,9 @@ export function StageManager({ pipeline, onChanged }: StageManagerProps) {
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <p className="text-sm font-semibold text-zinc-100">Этапы · {pipeline.name}</p>
-              <p className="text-xs text-zinc-500">Добавляйте и переименовывайте колонки канбана</p>
+              <p className="text-xs text-zinc-500">
+                Перетащите этапы мышкой, чтобы изменить порядок колонок
+              </p>
             </div>
             <button
               type="button"
@@ -127,79 +187,114 @@ export function StageManager({ pipeline, onChanged }: StageManagerProps) {
             </button>
           </div>
 
-          <ul className="mb-3 max-h-56 space-y-1.5 overflow-y-auto">
-            {stages.map((stage) => (
-              <li
-                key={stage.id}
-                className="flex items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-2.5 py-2"
-              >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: stage.color || "#8B5CF6" }}
-                />
-                {editingId === stage.id ? (
-                  <input
-                    autoFocus
-                    value={editName}
-                    onChange={(event) => setEditName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void onRename(stage);
-                      }
-                      if (event.key === "Escape") setEditingId(null);
-                    }}
-                    className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-violet-500/50"
-                  />
-                ) : (
-                  <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">{stage.name}</span>
-                )}
-                {stage.is_won || stage.is_lost ? (
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                      stage.is_won && "bg-emerald-500/15 text-emerald-300",
-                      stage.is_lost && "bg-rose-500/15 text-rose-300",
-                    )}
-                  >
-                    {stage.is_won ? "Won" : "Lost"}
-                  </span>
-                ) : null}
-                {editingId === stage.id ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void onRename(stage)}
-                    className="rounded-lg bg-violet-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
-                  >
-                    OK
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingId(stage.id);
-                      setEditName(stage.name);
-                    }}
-                    className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                    aria-label={`Переименовать ${stage.name}`}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
-                )}
-                {!stage.is_won && !stage.is_lost ? (
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(stage)}
-                    className="rounded-lg p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-300"
-                    aria-label={`Удалить ${stage.name}`}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <DragDropContext onDragEnd={(result) => void onDragEnd(result)}>
+            <Droppable droppableId={`pipeline-stages-${pipeline.id}`}>
+              {(droppableProvided) => (
+                <ul
+                  ref={droppableProvided.innerRef}
+                  {...droppableProvided.droppableProps}
+                  className="mb-3 max-h-56 space-y-1.5 overflow-y-auto"
+                >
+                  {orderedStages.map((stage, index) => (
+                    <Draggable
+                      key={stage.id}
+                      draggableId={stage.id}
+                      index={index}
+                      isDragDisabled={busy || editingId === stage.id}
+                    >
+                      {(draggableProvided, snapshot) => (
+                        <li
+                          ref={draggableProvided.innerRef}
+                          {...draggableProvided.draggableProps}
+                          className={cn(
+                            "flex items-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-2.5 py-2",
+                            snapshot.isDragging && "border-violet-500/50 bg-zinc-900 shadow-lg shadow-black/40",
+                          )}
+                        >
+                          <button
+                            type="button"
+                            className="shrink-0 cursor-grab rounded-md p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+                            aria-label={`Переместить ${stage.name}`}
+                            disabled={busy || editingId === stage.id}
+                            {...draggableProvided.dragHandleProps}
+                          >
+                            <GripVertical className="h-3.5 w-3.5" />
+                          </button>
+                          <span
+                            className="h-2.5 w-2.5 shrink-0 rounded-full"
+                            style={{ backgroundColor: stage.color || "#8B5CF6" }}
+                          />
+                          {editingId === stage.id ? (
+                            <input
+                              autoFocus
+                              value={editName}
+                              onChange={(event) => setEditName(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  void onRename(stage);
+                                }
+                                if (event.key === "Escape") setEditingId(null);
+                              }}
+                              className="min-w-0 flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100 outline-none focus:border-violet-500/50"
+                            />
+                          ) : (
+                            <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
+                              {stage.name}
+                            </span>
+                          )}
+                          {stage.is_won || stage.is_lost ? (
+                            <span
+                              className={cn(
+                                "rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                                stage.is_won && "bg-emerald-500/15 text-emerald-300",
+                                stage.is_lost && "bg-rose-500/15 text-rose-300",
+                              )}
+                            >
+                              {stage.is_won ? "Won" : "Lost"}
+                            </span>
+                          ) : null}
+                          {editingId === stage.id ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void onRename(stage)}
+                              className="rounded-lg bg-violet-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                            >
+                              OK
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingId(stage.id);
+                                setEditName(stage.name);
+                              }}
+                              className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                              aria-label={`Переименовать ${stage.name}`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          {!stage.is_won && !stage.is_lost ? (
+                            <button
+                              type="button"
+                              onClick={() => void onDelete(stage)}
+                              className="rounded-lg p-1 text-zinc-500 hover:bg-rose-500/10 hover:text-rose-300"
+                              aria-label={`Удалить ${stage.name}`}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          ) : null}
+                        </li>
+                      )}
+                    </Draggable>
+                  ))}
+                  {droppableProvided.placeholder}
+                </ul>
+              )}
+            </Droppable>
+          </DragDropContext>
 
           <div className="space-y-2 border-t border-zinc-800 pt-3">
             <label className="block text-xs text-zinc-500">

@@ -343,3 +343,12 @@ export interface CrmStageUpdatePayload {
   is_won?: boolean;
   is_lost?: boolean;
 }
+
+export interface CrmStageReorderItem {
+  id: string;
+  position: number;
+}
+
+export interface CrmStageReorderPayload {
+  stages: CrmStageReorderItem[];
+}

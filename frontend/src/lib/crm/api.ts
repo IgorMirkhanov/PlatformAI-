@@ -27,6 +27,7 @@ import type {
   CrmPipeline,
   CrmStage,
   CrmStageCreatePayload,
+  CrmStageReorderPayload,
   CrmStageUpdatePayload,
   CrmTag,
   CrmTagListResponse,
@@ -104,6 +105,19 @@ export async function deleteStage(
   await apiRequest<void>(
     `/api/v1/crm/pipelines/${encodeURIComponent(pipelineId)}/stages/${encodeURIComponent(stageId)}`,
     { method: "DELETE" },
+  );
+}
+
+export async function reorderStages(
+  pipelineId: string,
+  payload: CrmStageReorderPayload,
+): Promise<CrmStage[]> {
+  return apiRequest<CrmStage[]>(
+    `/api/v1/crm/pipelines/${encodeURIComponent(pipelineId)}/stages/reorder`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
   );
 }
 
