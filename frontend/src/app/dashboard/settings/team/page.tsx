@@ -16,14 +16,7 @@ import {
 
 import { SettingsSectionNav } from "@/components/settings/SettingsSectionNav";
 import { QuotaProgressBar } from "@/components/dashboard/QuotaProgressBar";
-import {
-  createInvite,
-  getOrganizationInvites,
-  getOrganizationMembers,
-  revokeInvite,
-  type OrgInvite,
-  type OrgInviteRole,
-} from "@/lib/billing/api";
+import { getOrganizationMembers } from "@/lib/billing/api";
 import { canManageTeam } from "@/lib/permissions";
 import { useOrganizationStore } from "@/lib/stores/use-organization-store";
 import { cn } from "@/lib/utils";
@@ -34,10 +27,16 @@ import {
   INVITE_ROLE_OPTIONS,
   ROLE_BADGE_STYLES,
   ROLE_LABELS,
+  type TeamInvitation,
   type TeamMember,
   type UserRole,
 } from "@/types/team";
-import { revokeTeamMember, updateTeamMemberRole } from "@/lib/api";
+import {
+  cancelTeamInvitation,
+  inviteTeamMember,
+  revokeTeamMember,
+  updateTeamMemberRole,
+} from "@/lib/api";
 
 function displayRoleLabel(role: string): string {
   return ROLE_LABELS[role as UserRole] ?? role;
@@ -83,11 +82,11 @@ export default function DashboardTeamSettingsPage() {
   const { showToast } = useToast();
 
   const [members, setMembers] = useState<TeamMember[]>([]);
-  const [invites, setInvites] = useState<OrgInvite[]>([]);
+  const [invites, setInvites] = useState<TeamInvitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<OrgInviteRole>("MEMBER");
+  const [inviteRole, setInviteRole] = useState<Exclude<UserRole, "OWNER">>("MEMBER");
   const [lastInviteToken, setLastInviteToken] = useState<string | null>(null);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
   const [lastInviteEmail, setLastInviteEmail] = useState<string | null>(null);
@@ -102,18 +101,19 @@ export default function DashboardTeamSettingsPage() {
   const loadTeam = useCallback(async (): Promise<void> => {
     setLoading(true);
     try {
-      const [membersResponse, invitesResponse] = await Promise.all([
-        getOrganizationMembers(),
-        canManage ? getOrganizationInvites() : Promise.resolve({ items: [], total: 0 }),
-      ]);
+      const membersResponse = await getOrganizationMembers();
       setMembers(membersResponse.members);
-      setInvites(invitesResponse.items);
+      setInvites(
+        (membersResponse.pending_invitations || []).filter(
+          (invite) => invite.status === "PENDING",
+        ),
+      );
     } catch (error) {
       showToast(getApiErrorMessage(error, "Не удалось загрузить команду."), "error");
     } finally {
       setLoading(false);
     }
-  }, [canManage, showToast]);
+  }, [showToast]);
 
   useEffect(() => {
     void loadCurrentUser();
@@ -151,7 +151,7 @@ export default function DashboardTeamSettingsPage() {
     setSubmitting(true);
     try {
       const email = inviteEmail.trim();
-      const response = await createInvite(email, inviteRole);
+      const response = await inviteTeamMember({ email, role: inviteRole });
       const link = buildInviteLink(response.token, email);
       setLastInviteToken(response.token);
       setLastInviteLink(link);
@@ -201,10 +201,10 @@ export default function DashboardTeamSettingsPage() {
     }
   };
 
-  const handleCancelInvite = async (invite: OrgInvite): Promise<void> => {
+  const handleCancelInvite = async (invite: TeamInvitation): Promise<void> => {
     setBusyInviteId(invite.id);
     try {
-      await revokeInvite(invite.id);
+      await cancelTeamInvitation(invite.id);
       showToast("Приглашение отозвано.", "success");
       await loadTeam();
     } catch (error) {
@@ -512,7 +512,9 @@ export default function DashboardTeamSettingsPage() {
                 <span className="text-xs font-medium text-zinc-400">Роль</span>
                 <select
                   value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value as OrgInviteRole)}
+                  onChange={(e) =>
+                    setInviteRole(e.target.value as Exclude<UserRole, "OWNER">)
+                  }
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-zinc-600"
                 >
                   {inviteRoleOptions.map((option) => (

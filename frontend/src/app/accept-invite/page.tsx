@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Lock, Mail, UserRound } from "lucide-react";
 
+import { acceptOrganizationInvite } from "@/lib/billing/api";
 import { acceptTeamInvite } from "@/lib/api";
 import { loginWithPassword } from "@/lib/auth/session";
 import { useBotStore } from "@/store/useBotStore";
@@ -33,19 +34,38 @@ function AcceptInviteForm() {
     event.preventDefault();
     setError(null);
     setLoading(true);
+    const normalizedEmail = email.trim().toLowerCase();
+    const rawToken = token.trim();
     try {
-      await acceptTeamInvite({
-        email: email.trim().toLowerCase(),
-        token: token.trim(),
-        password,
-        full_name: fullName.trim() || undefined,
-      });
-      await loginWithPassword(email.trim().toLowerCase(), password);
+      try {
+        await acceptTeamInvite({
+          email: normalizedEmail,
+          token: rawToken,
+          password,
+          full_name: fullName.trim() || undefined,
+        });
+      } catch (teamError) {
+        const message =
+          teamError instanceof Error ? teamError.message : "Failed to accept invitation.";
+        // Legacy org invites: token lives in another table and needs an existing account.
+        if (!/invalid/i.test(message)) {
+          throw teamError;
+        }
+        try {
+          await loginWithPassword(normalizedEmail, password);
+          await acceptOrganizationInvite(rawToken);
+        } catch {
+          throw new Error(
+            "Токен приглашения недействителен. Создайте новое приглашение в разделе «Команда» и откройте свежую ссылку.",
+          );
+        }
+      }
+      await loginWithPassword(normalizedEmail, password);
       await loadCurrentUser();
       router.replace("/dashboard");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to accept invitation.");
+      setError(err instanceof Error ? err.message : "Не удалось принять приглашение.");
     } finally {
       setLoading(false);
     }
@@ -55,14 +75,15 @@ function AcceptInviteForm() {
     <div className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-4 py-10">
       <div className="rounded-2xl border border-zinc-800 bg-[#0d0d0f] p-6 shadow-xl">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">MP.AI</p>
-        <h1 className="mt-2 text-2xl font-semibold text-zinc-50">Accept invitation</h1>
+        <h1 className="mt-2 text-2xl font-semibold text-zinc-50">Принять приглашение</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Create your account to join the workspace.
+          Создайте аккаунт, чтобы войти в workspace. Лучше открыть ссылку в режиме инкогнито,
+          если вы уже залогинены под другим пользователем.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-zinc-400">Invite token</span>
+            <span className="text-xs font-medium text-zinc-400">Токен приглашения</span>
             <input
               type="text"
               required
@@ -70,7 +91,7 @@ function AcceptInviteForm() {
               value={token}
               onChange={(e) => setToken(e.target.value)}
               className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-              placeholder="Paste invite token"
+              placeholder="Вставьте токен"
             />
           </label>
 
@@ -91,7 +112,7 @@ function AcceptInviteForm() {
           </label>
 
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-zinc-400">Full name</span>
+            <span className="text-xs font-medium text-zinc-400">Имя</span>
             <div className="relative">
               <UserRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
               <input
@@ -99,13 +120,13 @@ function AcceptInviteForm() {
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2.5 pl-10 pr-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                placeholder="Optional"
+                placeholder="Необязательно"
               />
             </div>
           </label>
 
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-zinc-400">Password</span>
+            <span className="text-xs font-medium text-zinc-400">Пароль</span>
             <div className="relative">
               <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
               <input
@@ -116,7 +137,7 @@ function AcceptInviteForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2.5 pl-10 pr-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                placeholder="At least 8 characters"
+                placeholder="Минимум 8 символов"
               />
             </div>
           </label>
@@ -133,14 +154,14 @@ function AcceptInviteForm() {
             className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Join workspace
+            Войти в workspace
           </button>
         </form>
 
         <p className="mt-4 text-center text-xs text-zinc-500">
-          Already have an account?{" "}
+          Уже есть аккаунт?{" "}
           <Link href="/login" className="text-zinc-300 underline">
-            Sign in
+            Войти
           </Link>
         </p>
       </div>
