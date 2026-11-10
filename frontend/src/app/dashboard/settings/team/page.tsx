@@ -104,9 +104,12 @@ export default function DashboardTeamSettingsPage() {
       const membersResponse = await getOrganizationMembers();
       setMembers(membersResponse.members);
       setInvites(
-        (membersResponse.pending_invitations || []).filter(
-          (invite) => invite.status === "PENDING",
-        ),
+        (membersResponse.pending_invitations || [])
+          .filter((invite) => invite.status === "PENDING")
+          .map((invite) => ({
+            ...invite,
+            status: invite.status as TeamInvitation["status"],
+          })),
       );
     } catch (error) {
       showToast(getApiErrorMessage(error, "Не удалось загрузить команду."), "error");
