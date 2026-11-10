@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,46 @@ from app.services.llm.types import (
     LLMCompletion,
     TransientLLMError,
     format_execution_failure_message,
+)
+
+WaitIntent = Literal["calc", "photo", "both", "wait", "none"]
+
+_WAIT_PATTERN = re.compile(
+    r"(?i)("
+    r"подожд(?:ите|и)|сейчас\s+(?:отправ|расчит|выполн)|"
+    r"выполню\s+расч[её]т|отправлю\s+(?:вам\s+)?(?:фото|файл|изображен)|"
+    r"please\s+wait|i(?:'| a)m\s+(?:sending|calculating)"
+    r")"
+)
+_CALC_INTENT_PATTERN = re.compile(
+    r"(?i)("
+    r"расч[её]т|рассчит|калькуляц|стоимост|смет[аыу]|itemization|"
+    r"calculate|quot(?:e|ation)|estimate|pricing"
+    r")"
+)
+_PHOTO_INTENT_PATTERN = re.compile(
+    r"(?i)("
+    r"фото|изображен|картинк|образц|файл|галере|каталог|"
+    r"photo|image|sample|file|catalog|gallery"
+    r")"
+)
+_CALC_RESULT_PATTERN = re.compile(
+    r"(?i)("
+    r"₸|тенге|итого|предварительн\w*\s+стоимост|"
+    r"TOTAL_|PIECES\s*=|ONE_SIDE_COST|DOUBLE-?SIDED\s+COST"
+    r")"
+)
+_MEDIA_TOOL_PATTERN = re.compile(
+    r"(?i)(фото|изображен|картинк|образц|файл|photo|image|sample|file|catalog|gallery|цвет)"
+)
+_CALC_TOOL_PATTERN = re.compile(
+    r"(?i)(расч[её]т|рассчит|calc|quote|estimate|pricing|cost|price|смет)"
+)
+_CALC_NUDGE = (
+    "Не обещай «подождите» и не вызывай tools. Сейчас же выведи клиенту полный "
+    "расчёт на русском с итоговой суммой. Сохраняй дробные значения точно "
+    "(высота 3,5 м → 3.5, никогда не округляй до 3). Если каких-то параметров "
+    "не хватает — коротко переспроси, но не откладывай расчёт на потом."
 )
 
 
@@ -252,6 +293,7 @@ class LLMOrchestrator:
             "save_lead_to_crm",
             "check_calendar_availability",
         }
+        suppress_media = self._user_turn_suppresses_media_resend(messages)
 
         normalized_calls: list[dict[str, Any]] = []
         for tc in result.tool_calls:
@@ -317,10 +359,16 @@ class LLMOrchestrator:
                 booking_ok = True
             if isinstance(tool_result, dict):
                 media_items = tool_result.get("media_attachments")
-                if isinstance(media_items, list):
+                if isinstance(media_items, list) and not suppress_media:
                     for item in media_items:
                         if isinstance(item, dict) and item.get("url"):
                             collected_media.append(item)
+                elif isinstance(media_items, list) and suppress_media and media_items:
+                    logger.info(
+                        "LLMOrchestrator.suppress_media_resend | bot_id={bot_id} tool={tool}",
+                        bot_id=bot_id,
+                        tool=tool_name,
+                    )
                 fixed_reply = str(tool_result.get("fixed_reply") or "").strip()
                 if fixed_reply:
                     fixed_reply_text = fixed_reply
@@ -455,7 +503,31 @@ class LLMOrchestrator:
                 tools=tools_executed,
                 n=len(final.text),
             )
-        return final
+
+        # Photo tools often leave a «подождите, выполню расчёт» narration with no sum.
+        # Height/calc corrections that suppressed media also need an immediate quote.
+        ensured = await self._ensure_calc_delivered(
+            final,
+            messages=follow_up,
+            model=model,
+            temperature=temperature,
+        )
+        if (
+            suppress_media
+            and not self._text_has_calc_result(ensured.text or "")
+            and self._user_turn_suppresses_media_resend(messages)
+        ):
+            ensured = await self._force_immediate_calc_text(
+                ensured,
+                messages=follow_up,
+                model=model,
+                temperature=temperature,
+            )
+        ensured.tools_executed = tools_executed
+        ensured.booking_tools_succeeded = booking_ok
+        if ensured.media_attachments is None and collected_media:
+            ensured.media_attachments = collected_media
+        return ensured
 
     @staticmethod
     def _tool_result_ok(tool_result: dict[str, Any] | Any) -> bool:
@@ -470,6 +542,165 @@ class LLMOrchestrator:
             return True
         return False
 
+    @staticmethod
+    def _latest_user_text(messages: list[dict[str, Any]]) -> str:
+        for item in reversed(messages):
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") != "user":
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                parts: list[str] = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        parts.append(str(block.get("text") or ""))
+                    elif isinstance(block, str):
+                        parts.append(block)
+                return " ".join(parts).strip()
+        return ""
+
+    @classmethod
+    def _user_turn_suppresses_media_resend(cls, messages: list[dict[str, Any]]) -> bool:
+        """
+        Height/length/color corrections and «отправьте расчёт» must not re-fire
+        the catalog photo tool that was already used earlier in the dialog.
+        """
+        user_text = cls._latest_user_text(messages)
+        if not user_text:
+            return False
+        if _PHOTO_INTENT_PATTERN.search(user_text) and not _CALC_INTENT_PATTERN.search(
+            user_text
+        ):
+            return False
+        correction = re.compile(
+            r"(?i)("
+            r"высот|длин[аыуе]|"
+            r"расч[её]т|стоимост|отправ(?:ьте|и)\s+расч|"
+            r"\d+[.,]\d+\s*м?(?:\b|$)|"
+            r"\b\d{2,}\s*м(?:етр)?\b"
+            r")"
+        )
+        return bool(correction.search(user_text))
+
+    @staticmethod
+    def _tool_fn_meta(tool: dict[str, Any]) -> tuple[str, str]:
+        fn = tool.get("function") if isinstance(tool.get("function"), dict) else tool
+        if not isinstance(fn, dict):
+            return "", ""
+        return str(fn.get("name") or ""), str(fn.get("description") or "")
+
+    @classmethod
+    def _classify_wait_intent(cls, text: str) -> WaitIntent:
+        raw = (text or "").strip()
+        if not raw or not _WAIT_PATTERN.search(raw):
+            return "none"
+        wants_calc = bool(_CALC_INTENT_PATTERN.search(raw))
+        wants_photo = bool(_PHOTO_INTENT_PATTERN.search(raw))
+        if wants_calc and wants_photo:
+            return "both"
+        if wants_calc:
+            return "calc"
+        if wants_photo:
+            return "photo"
+        return "wait"
+
+    @classmethod
+    def _text_has_calc_result(cls, text: str) -> bool:
+        return bool(_CALC_RESULT_PATTERN.search(text or ""))
+
+    @classmethod
+    def _is_calc_tool(cls, tool: dict[str, Any]) -> bool:
+        name, description = cls._tool_fn_meta(tool)
+        blob = f"{name} {description}"
+        return bool(_CALC_TOOL_PATTERN.search(blob))
+
+    @classmethod
+    def _is_media_tool(cls, tool: dict[str, Any]) -> bool:
+        name, description = cls._tool_fn_meta(tool)
+        blob = f"{name} {description}"
+        if _MEDIA_TOOL_PATTERN.search(blob):
+            return True
+        # Workspace photo tools are annotated to "Call … for photos/files/samples".
+        return "same turn whenever the user asks for photos" in description.lower()
+
+    async def _force_immediate_calc_text(
+        self,
+        result: LLMCompletion,
+        *,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> LLMCompletion:
+        """Replace a wait-for-calc narration with an actual quote in the same turn."""
+        text = (result.text or "").strip()
+        nudge = list(messages)
+        if text:
+            nudge.append({"role": "assistant", "content": text})
+        nudge.append({"role": "user", "content": _CALC_NUDGE})
+        try:
+            forced = await self._client.chat_completion(
+                messages=nudge,
+                model=model,
+                temperature=min(temperature, 0.3),
+                tools=None,
+                api_key=api_key,
+                base_url=base_url,
+                max_tokens=2048,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "LLMOrchestrator.force_calc_text_failed | model={model} error={error}",
+                model=model,
+                error=str(exc),
+            )
+            return result
+        out_text = (forced.text or "").strip()
+        if not out_text:
+            return result
+        logger.info(
+            "LLMOrchestrator.force_calc_text_ok | model={model} reply_len={n}",
+            model=model,
+            n=len(out_text),
+        )
+        forced.tool_calls = None
+        forced.media_attachments = result.media_attachments
+        forced.tools_executed = result.tools_executed
+        forced.booking_tools_succeeded = result.booking_tools_succeeded
+        return forced
+
+    async def _ensure_calc_delivered(
+        self,
+        result: LLMCompletion,
+        *,
+        messages: list[dict[str, Any]],
+        model: str,
+        temperature: float,
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> LLMCompletion:
+        text = (result.text or "").strip()
+        intent = self._classify_wait_intent(text)
+        if intent not in {"calc", "both", "wait"}:
+            return result
+        if intent == "wait" and not _CALC_INTENT_PATTERN.search(text):
+            # Generic «подождите» after photo send without calc wording — leave as is.
+            return result
+        if self._text_has_calc_result(text):
+            return result
+        return await self._force_immediate_calc_text(
+            result,
+            messages=messages,
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=base_url,
+        )
+
     async def _maybe_force_tool_call(
         self,
         result: LLMCompletion,
@@ -483,23 +714,68 @@ class LLMOrchestrator:
     ) -> LLMCompletion:
         """
         If the model narrates «подождите / отправлю фото / выполню расчет»
-        without tool_calls while tools exist, force one tool round.
+        without tool_calls, force the matching delivery in this turn.
+
+        Calc promises must NOT re-fire photo tools (that duplicated samples and
+        never produced the quote). When no calc tool exists, force a text quote.
         """
-        if not tools or result.tool_calls:
+        if result.tool_calls:
             return result
         text = (result.text or "").strip()
         if not text:
             return result
-        import re
+        intent = self._classify_wait_intent(text)
+        if intent == "none":
+            return result
 
-        wait_pattern = re.compile(
-            r"(?i)("
-            r"подожд(?:ите|и)|сейчас\s+(?:отправ|расчит|выполн)|"
-            r"выполню\s+расч[её]т|отправлю\s+(?:вам\s+)?(?:фото|файл|изображен)|"
-            r"please\s+wait|i(?:'| a)m\s+(?:sending|calculating)"
-            r")"
-        )
-        if not wait_pattern.search(text):
+        # Calculation promised → deliver numbers now (prefer calc tools, else text).
+        if intent in {"calc", "both"}:
+            calc_tools = [t for t in (tools or []) if self._is_calc_tool(t)]
+            if not calc_tools:
+                return await self._force_immediate_calc_text(
+                    result,
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+            tools = calc_tools
+        elif intent == "photo":
+            media_tools = [t for t in (tools or []) if self._is_media_tool(t)]
+            if media_tools:
+                tools = media_tools
+            elif not tools:
+                return result
+        else:
+            # Generic wait: only force tools if we have media tools AND photo wording
+            # was absent — otherwise avoid re-sending files.
+            if not tools:
+                return await self._force_immediate_calc_text(
+                    result,
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+            media_tools = [t for t in tools if self._is_media_tool(t)]
+            calc_tools = [t for t in tools if self._is_calc_tool(t)]
+            if calc_tools:
+                tools = calc_tools
+            elif media_tools and len(media_tools) == len(tools):
+                # Only photo tools exist for a vague wait → ask for the quote in text
+                # so we do not spam the last catalog image again.
+                return await self._force_immediate_calc_text(
+                    result,
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+
+        if not tools:
             return result
 
         nudge = list(messages)
@@ -509,7 +785,11 @@ class LLMOrchestrator:
                 "role": "user",
                 "content": (
                     "Не обещай отправку позже. Сейчас же вызови нужную function "
-                    "(фото/файл/расчет) через tool call в этом же ходе."
+                    "через tool call в этом же ходе. Для расчёта сохраняй дробную "
+                    "высоту точно (3,5 → 3.5)."
+                    if intent in {"calc", "both", "wait"}
+                    else "Не обещай отправку позже. Сейчас же вызови function "
+                    "для фото/файла через tool call в этом же ходе."
                 ),
             }
         )
@@ -530,14 +810,33 @@ class LLMOrchestrator:
                 model=model,
                 error=str(exc),
             )
+            if intent in {"calc", "both", "wait"}:
+                return await self._force_immediate_calc_text(
+                    result,
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
             return result
         if forced.tool_calls:
             logger.info(
-                "LLMOrchestrator.force_tool_ok | model={model} tools={n}",
+                "LLMOrchestrator.force_tool_ok | model={model} intent={intent} tools={n}",
                 model=model,
+                intent=intent,
                 n=len(forced.tool_calls),
             )
             return forced
+        if intent in {"calc", "both", "wait"}:
+            return await self._force_immediate_calc_text(
+                result,
+                messages=messages,
+                model=model,
+                temperature=temperature,
+                api_key=api_key,
+                base_url=base_url,
+            )
         return result
 
     async def _handle_exhaustion(

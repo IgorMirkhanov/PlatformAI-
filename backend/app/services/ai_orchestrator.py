@@ -1843,6 +1843,24 @@ class AIOrchestrator:
                         name = str((fn or {}).get("name") if fn else tc.get("name") or "")
                         if name:
                             tools_executed.append(name)
+            else:
+                # Calc wait with no tools (or forced text quote) — keep the reply.
+                ensured = await llm_orchestrator._ensure_calc_delivered(
+                    interim,
+                    messages=list(messages),
+                    model=response.model_name or model_name,
+                    temperature=temperature,
+                )
+                text = (ensured.text or "").strip() or text
+                raw_media = list(getattr(ensured, "media_attachments", None) or [])
+                for item in raw_media:
+                    try:
+                        if isinstance(item, MediaAttachment):
+                            tool_media.append(item)
+                        elif isinstance(item, dict):
+                            tool_media.append(MediaAttachment.model_validate(item))
+                    except Exception:
+                        continue
 
         if not text and (
             booking_ok or any(name in self.BOOKING_TOOL_NAMES for name in tools_executed)
