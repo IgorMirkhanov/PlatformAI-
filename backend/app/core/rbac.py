@@ -77,6 +77,7 @@ ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
             Permission.DASHBOARD_READ,
             Permission.FLOW_WRITE,
             Permission.MANAGE_FLOWS,
+            Permission.MANAGE_CRM,
         }
     ),
     UserRole.PROMPT_ENGINEER: frozenset(
@@ -91,6 +92,7 @@ ROLE_PERMISSIONS: dict[UserRole, frozenset[Permission]] = {
             Permission.DASHBOARD_READ,
             Permission.FLOW_WRITE,
             Permission.MANAGE_FLOWS,
+            Permission.MANAGE_CRM,
         }
     ),
     UserRole.OPERATOR: frozenset(

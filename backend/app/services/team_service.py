@@ -42,7 +42,7 @@ from app.services.security_audit_service import security_audit_service
 
 # Seat quotas mirrored by /organizations/usage.
 TEAM_SEAT_LIMITS: dict[SubscriptionPlanName, int] = {
-    SubscriptionPlanName.FREE: 3,
+    SubscriptionPlanName.FREE: 8,
     SubscriptionPlanName.PRO: 15,
     SubscriptionPlanName.ENTERPRISE: 999,
 }
@@ -68,10 +68,17 @@ class TeamService:
         *,
         current_user: User,
     ) -> OrganizationsListResponse:
+        # Keep legacy single-company accounts and owned orgs visible in the switcher.
+        await self._ensure_primary_company(db, current_user)
+        await self._backfill_owned_company_memberships(db, current_user)
+
         result = await db.execute(
             select(UserCompanyWorkspace, Company)
             .join(Company, Company.id == UserCompanyWorkspace.company_id)
-            .where(UserCompanyWorkspace.user_id == current_user.id)
+            .where(
+                UserCompanyWorkspace.user_id == current_user.id,
+                Company.deleted_at.is_(None),
+            )
             .order_by(Company.created_at.asc())
         )
         rows = result.all()
@@ -111,6 +118,10 @@ class TeamService:
         current_user: User,
         payload: CreateCompanyRequest,
     ) -> CreateCompanyResponse:
+        # Preserve membership on the previous active org before switching away.
+        await self._ensure_primary_company(db, current_user)
+        await self._backfill_owned_company_memberships(db, current_user)
+
         company = Company(
             name=payload.name.strip(),
             owner_user_id=current_user.id,
@@ -732,11 +743,14 @@ class TeamService:
                 )
             )
             if existing.scalar_one_or_none() is None:
+                role = user.role if user.role else UserRole.OWNER
+                if company.owner_user_id == user.id:
+                    role = UserRole.OWNER
                 db.add(
                     UserCompanyWorkspace(
                         user_id=user.id,
                         company_id=company.id,
-                        role=user.role,
+                        role=role,
                     )
                 )
                 await db.flush()
@@ -754,7 +768,7 @@ class TeamService:
             UserCompanyWorkspace(
                 user_id=user.id,
                 company_id=company.id,
-                role=user.role,
+                role=user.role or UserRole.OWNER,
             )
         )
         await db.flush()
@@ -763,6 +777,43 @@ class TeamService:
 
         await pipeline_service.create_default_pipeline(db, company.id)
         return company
+
+    async def _backfill_owned_company_memberships(
+        self,
+        db: AsyncSession,
+        user: User,
+    ) -> None:
+        """Restore switcher entries for companies the user owns but lost membership on."""
+        owned = (
+            await db.scalars(
+                select(Company).where(
+                    Company.owner_user_id == user.id,
+                    Company.deleted_at.is_(None),
+                )
+            )
+        ).all()
+        if not owned:
+            return
+
+        changed = False
+        for company in owned:
+            existing = await db.scalar(
+                select(UserCompanyWorkspace.id).where(
+                    UserCompanyWorkspace.user_id == user.id,
+                    UserCompanyWorkspace.company_id == company.id,
+                )
+            )
+            if existing is None:
+                db.add(
+                    UserCompanyWorkspace(
+                        user_id=user.id,
+                        company_id=company.id,
+                        role=UserRole.OWNER,
+                    )
+                )
+                changed = True
+        if changed:
+            await db.flush()
 
     async def _expire_stale_invites(self, db: AsyncSession, company_id: uuid.UUID) -> None:
         result = await db.execute(

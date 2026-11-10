@@ -29,6 +29,7 @@ import {
   canAccessFlowBuilder,
   canAccessSandbox,
   canManageBilling,
+  canManageCrm,
   canManageSettings,
   canManageTeam,
   hasPermission,
@@ -152,7 +153,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       return hasPermission(userRole, "dashboard:read");
     }
     if (item.href === "/dashboard/crm") {
-      return userRole === "OWNER" || userRole === "ADMIN";
+      return canManageCrm(userRole) || hasPermission(userRole, "dashboard:read");
     }
     if (item.href === "/dashboard/flows") {
       return canAccessFlowBuilder(userRole);

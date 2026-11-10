@@ -348,35 +348,39 @@ export default function DashboardTeamSettingsPage() {
                       </td>
                       <td className="px-4 py-3 text-zinc-400">{formatJoined(member.created_at)}</td>
                       <td className="px-4 py-3">
-                        {canManage && !isOwner && !isSelf ? (
+                        {canManage && !isSelf ? (
                           <div className="flex flex-wrap items-center gap-2">
-                            <select
-                              value={member.role}
-                              disabled={busyMemberId === member.id}
-                              onChange={(e) =>
-                                void handleRoleChange(member, e.target.value as UserRole)
-                              }
-                              className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200"
-                            >
-                              {inviteRoleOptions.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              disabled={busyMemberId === member.id}
-                              onClick={() => void handleRevoke(member)}
-                              className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
-                            >
-                              {busyMemberId === member.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Trash2 className="h-3 w-3" />
-                              )}
-                              Удалить
-                            </button>
+                            {!isOwner ? (
+                              <select
+                                value={member.role}
+                                disabled={busyMemberId === member.id}
+                                onChange={(e) =>
+                                  void handleRoleChange(member, e.target.value as UserRole)
+                                }
+                                className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200"
+                              >
+                                {inviteRoleOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
+                            {(!isOwner || currentUser?.role === "OWNER") ? (
+                              <button
+                                type="button"
+                                disabled={busyMemberId === member.id || (isOwner && currentUser?.role !== "OWNER")}
+                                onClick={() => void handleRevoke(member)}
+                                className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                              >
+                                {busyMemberId === member.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3 w-3" />
+                                )}
+                                Удалить
+                              </button>
+                            ) : null}
                           </div>
                         ) : (
                           <span className="text-xs text-zinc-600">—</span>

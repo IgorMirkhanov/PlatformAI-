@@ -72,6 +72,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "dashboard:read",
     "flow:write",
     "manage:flows",
+    "manage:crm",
   ],
   PROMPT_ENGINEER: [
     "bot:prompting",
@@ -84,6 +85,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     "dashboard:read",
     "flow:write",
     "manage:flows",
+    "manage:crm",
   ],
   OPERATOR: ["inbox:read", "dashboard:read", "manage:crm"],
 };
