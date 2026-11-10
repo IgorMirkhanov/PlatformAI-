@@ -196,6 +196,15 @@ class WhatsAppService:
                 part for part in (inbound.first_name, inbound.last_name) if part
             ).strip() or inbound.first_name
 
+            try:
+                from app.tasks.follow_up_task import cancel_follow_up_message
+
+                cancel_follow_up_message(
+                    bot_id=str(bot.id), chat_id=str(inbound.external_id)
+                )
+            except Exception:
+                pass
+
             result = await process_inbound_message(
                 db=db,
                 bot_id=bot.id,
@@ -238,6 +247,28 @@ class WhatsAppService:
                             bot_id=bot.id,
                             client_id=result.client_id,
                             db=db,
+                        )
+                    try:
+                        from app.services.bot_message_extras import (
+                            follow_up_delay_seconds,
+                            get_message_extras,
+                        )
+                        from app.tasks.follow_up_task import schedule_follow_up_message
+
+                        extras = get_message_extras(bot)
+                        if extras.get("follow_up_enabled") and result.client_id is not None:
+                            schedule_follow_up_message(
+                                bot_id=str(bot.id),
+                                chat_id=str(inbound.external_id),
+                                client_id=str(result.client_id),
+                                delay_seconds=follow_up_delay_seconds(extras),
+                                channel="whatsapp",
+                            )
+                    except Exception as follow_exc:
+                        logger.warning(
+                            "WhatsApp.follow_up_schedule_failed | bot_id={bot_id} error={error}",
+                            bot_id=bot.id,
+                            error=str(follow_exc),
                         )
                 except MessengerAPIError:
                     # Abort remaining outbound sends; diagnostic already persisted.

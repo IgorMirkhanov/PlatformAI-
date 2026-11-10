@@ -277,14 +277,11 @@ class TelegramService:
         try:
             # New client message cancels a pending follow-up for this chat.
             try:
-                from app.core.redis_client import get_redis_client
-                from app.core.celery_app import celery_app
+                from app.tasks.follow_up_task import cancel_follow_up_message
 
-                follow_key = f"mpai:follow_up:{bot.id}:{inbound.chat_id}"
-                previous = get_redis_client().get(follow_key)
-                if previous:
-                    celery_app.control.revoke(previous, terminate=False)
-                    get_redis_client().delete(follow_key)
+                cancel_follow_up_message(
+                    bot_id=str(bot.id), chat_id=str(inbound.chat_id)
+                )
             except Exception:
                 pass
 
@@ -416,13 +413,15 @@ class TelegramService:
 
             if extras.get("follow_up_enabled"):
                 try:
+                    from app.services.bot_message_extras import follow_up_delay_seconds
                     from app.tasks.follow_up_task import schedule_follow_up_message
 
                     schedule_follow_up_message(
                         bot_id=str(bot.id),
                         chat_id=inbound.chat_id,
                         client_id=str(result.client_id),
-                        delay_hours=int(extras.get("follow_up_delay_hours") or 24),
+                        delay_seconds=follow_up_delay_seconds(extras),
+                        channel="telegram",
                     )
                 except Exception as follow_exc:
                     logger.warning(

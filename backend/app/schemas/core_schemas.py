@@ -869,7 +869,13 @@ class BotSettingsUpdate(BaseModel):
     message_buffer_delay: int | None = Field(default=None, ge=0, le=60000)
     control_config: BotControlConfig | None = None
     follow_up_enabled: bool | None = None
-    follow_up_delay_hours: int | None = Field(default=None, ge=1, le=168)
+    follow_up_delay_days: int | None = Field(default=None, ge=0, le=30)
+    follow_up_delay_hours: int | None = Field(default=None, ge=0, le=168)
+    follow_up_delay_minutes: int | None = Field(default=None, ge=0, le=59)
+    follow_up_send_count: int | None = Field(default=None, ge=1, le=5)
+    follow_up_frequency: str | None = Field(default=None, max_length=40)
+    follow_up_instructions: str | None = Field(default=None, max_length=4000)
+    follow_up_off_hours_mode: str | None = Field(default=None, max_length=40)
     split_delay_seconds: int | None = Field(default=None, ge=0, le=30)
     send_on_weekends: bool | None = None
 

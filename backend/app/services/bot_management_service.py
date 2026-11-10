@@ -993,7 +993,13 @@ class BotManagementService:
 
         message_extra_fields = {
             "follow_up_enabled",
+            "follow_up_delay_days",
             "follow_up_delay_hours",
+            "follow_up_delay_minutes",
+            "follow_up_send_count",
+            "follow_up_frequency",
+            "follow_up_instructions",
+            "follow_up_off_hours_mode",
             "split_delay_seconds",
             "send_on_weekends",
         }

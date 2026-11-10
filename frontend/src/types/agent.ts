@@ -58,9 +58,21 @@ export interface BotAgentProfile {
   message_extras?: BotMessageExtras;
 }
 
+export type FollowUpFrequency = "once_per_dialogue" | "every_silence";
+export type FollowUpOffHoursMode =
+  | "defer_next_window"
+  | "send_anyway"
+  | "skip";
+
 export interface BotMessageExtras {
   follow_up_enabled?: boolean;
+  follow_up_delay_days?: number;
   follow_up_delay_hours?: number;
+  follow_up_delay_minutes?: number;
+  follow_up_send_count?: number;
+  follow_up_frequency?: FollowUpFrequency | string;
+  follow_up_instructions?: string;
+  follow_up_off_hours_mode?: FollowUpOffHoursMode | string;
   split_delay_seconds?: number;
   send_on_weekends?: boolean;
 }
@@ -125,7 +137,13 @@ export interface BotSettingsUpdate {
   message_buffer_delay?: number;
   control_config?: BotControlConfig;
   follow_up_enabled?: boolean;
+  follow_up_delay_days?: number;
   follow_up_delay_hours?: number;
+  follow_up_delay_minutes?: number;
+  follow_up_send_count?: number;
+  follow_up_frequency?: FollowUpFrequency | string;
+  follow_up_instructions?: string;
+  follow_up_off_hours_mode?: FollowUpOffHoursMode | string;
   split_delay_seconds?: number;
   send_on_weekends?: boolean;
 }

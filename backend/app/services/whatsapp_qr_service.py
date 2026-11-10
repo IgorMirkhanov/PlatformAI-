@@ -191,6 +191,13 @@ class WhatsAppQrService:
         except ValueError:
             return {"status": "ignored", "reason": "invalid_bot_id"}
 
+        try:
+            from app.tasks.follow_up_task import cancel_follow_up_message
+
+            cancel_follow_up_message(bot_id=str(bot_id), chat_id=from_phone)
+        except Exception:
+            pass
+
         result = await process_inbound_message(
             db=db,
             bot_id=bot_id,
@@ -226,6 +233,30 @@ class WhatsAppQrService:
                 attachments=list(result.media_attachments),
                 client_id=result.client_id,
                 db=db,
+            )
+        try:
+            from app.models.core_models import Bot
+            from app.services.bot_message_extras import (
+                follow_up_delay_seconds,
+                get_message_extras,
+            )
+            from app.tasks.follow_up_task import schedule_follow_up_message
+
+            bot = await db.get(Bot, bot_id)
+            extras = get_message_extras(bot)
+            if extras.get("follow_up_enabled") and result.client_id is not None:
+                schedule_follow_up_message(
+                    bot_id=str(bot_id),
+                    chat_id=from_phone,
+                    client_id=str(result.client_id),
+                    delay_seconds=follow_up_delay_seconds(extras),
+                    channel="whatsapp_qr",
+                )
+        except Exception as follow_exc:
+            logger.warning(
+                "WhatsAppQr.follow_up_schedule_failed | bot_id={bot_id} error={error}",
+                bot_id=bot_id,
+                error=str(follow_exc),
             )
         return {
             "status": "processed",
