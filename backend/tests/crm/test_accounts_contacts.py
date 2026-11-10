@@ -306,6 +306,7 @@ async def test_get_or_create_from_client_idempotent() -> None:
     assert first.linked_client_id == client_id
     assert first.first_name == "Ada"
     assert first.source == "whatsapp"
+    assert first.phone == "+77001234567"
     assert len(store.contacts) == 1
 
 

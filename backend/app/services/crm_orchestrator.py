@@ -1331,23 +1331,49 @@ class CRMOrchestrator:
                 return None
 
             contact_id = None
+            lead_phone: str | None = None
             try:
                 from app.services.crm.contact_service import (
                     ContactServiceError,
                     contact_service,
+                    phone_from_whatsapp_client,
                 )
+                from app.utils.phone_utils import clean_phone_number
 
                 contact = await contact_service.get_or_create_from_client(db, client.id)
                 contact_id = contact.id
                 # Prefer channel on the deal; keep contact.source if empty.
                 if not (contact.source or "").strip():
                     contact.source = (channel_type or "")[:50] or contact.source
+                channel_is_whatsapp = (channel_type or "").lower().startswith("whatsapp")
+                lead_phone = (contact.phone or "").strip() or phone_from_whatsapp_client(
+                    client, source=channel_type
+                )
+                if not lead_phone and channel_is_whatsapp:
+                    lead_phone = clean_phone_number(external_chat_id)
+                if lead_phone and not (contact.phone or "").strip():
+                    contact.phone = lead_phone
             except ContactServiceError as exc:
                 logger.warning(
                     "CRM.handle_new_message_contact_failed | client_id={client_id} error={error}",
                     client_id=client.id,
                     error=exc.message,
                 )
+                from app.utils.phone_utils import clean_phone_number
+
+                lead_phone = (
+                    clean_phone_number(external_chat_id)
+                    if (channel_type or "").lower().startswith("whatsapp")
+                    else None
+                )
+
+            deal_fields: dict[str, Any] = {
+                "conversation_id": str(client.id),
+                "external_chat_id": external_chat_id,
+                "channel_type": channel_type,
+            }
+            if lead_phone:
+                deal_fields["phone"] = lead_phone
 
             dedup = compute_dedup_key(org_id, channel_type, external_chat_id)
             title = (client.first_name or client.username or external_chat_id or "Lead")[:255]
@@ -1361,11 +1387,7 @@ class CRMOrchestrator:
                 contact_id=contact_id,
                 crm_integration_id=getattr(bot, "crm_integration_id", None),
                 source=channel_type[:50],
-                custom_fields={
-                    "conversation_id": str(client.id),
-                    "external_chat_id": external_chat_id,
-                    "channel_type": channel_type,
-                },
+                custom_fields=deal_fields,
             )
             await self._mirror_new_deal_to_external_crms(
                 db,

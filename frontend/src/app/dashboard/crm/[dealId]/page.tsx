@@ -7,8 +7,10 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 
 import { CrmSubNav } from "@/components/crm/CrmSubNav";
 import { DealCustomFieldsPanel } from "@/components/crm/DealCustomFieldsPanel";
+import { DealOrderFieldsPanel } from "@/components/crm/DealOrderFieldsPanel";
 import { DealTimeline } from "@/components/crm/DealTimeline";
 import { useToast } from "@/hooks/useToast";
+import { fetchTeamMembers } from "@/lib/api";
 import {
   addNote,
   attachDealTag,
@@ -24,6 +26,11 @@ import {
   removeDealTag,
   updateDeal,
 } from "@/lib/crm/api";
+import {
+  emptyOrderDraft,
+  orderDraftFromDeal,
+  type DealOrderDraft,
+} from "@/lib/crm/orderFields";
 import type {
   CrmContact,
   CrmCustomFieldDefinition,
@@ -33,6 +40,7 @@ import type {
   CrmTag,
   CrmTimelineEvent,
 } from "@/lib/crm/types";
+import type { TeamMember } from "@/types/team";
 import { getApiErrorMessage } from "@/store/useBotStore";
 
 function formatAmount(amount: string | number, currency: string): string {
@@ -94,6 +102,10 @@ export default function CrmDealDetailPage() {
   const [contactResults, setContactResults] = useState<CrmContact[]>([]);
   const [contactBusy, setContactBusy] = useState(false);
   const [closeBusy, setCloseBusy] = useState(false);
+  const [orderDraft, setOrderDraft] = useState<DealOrderDraft>(emptyOrderDraft);
+  const [managerId, setManagerId] = useState("");
+  const [managers, setManagers] = useState<TeamMember[]>([]);
+  const [savingOrder, setSavingOrder] = useState(false);
 
   const loadFeed = useCallback(async (id: string) => {
     const [nextNotes, nextEvents] = await Promise.all([
@@ -109,15 +121,19 @@ export default function CrmDealDetailPage() {
     if (!dealId) return;
     setLoading(true);
     try {
-      const [nextDeal, tags, defs, pipelines] = await Promise.all([
+      const [nextDeal, tags, defs, pipelines, team] = await Promise.all([
         getDeal(dealId),
         listCrmTags().catch(() => [] as CrmTag[]),
         listCustomFields("deal").catch(() => [] as CrmCustomFieldDefinition[]),
         getPipelines().catch(() => []),
+        fetchTeamMembers().catch(() => null),
       ]);
       setDeal(nextDeal);
       setTitleDraft(nextDeal.title);
       setAmountDraft(String(nextDeal.amount ?? ""));
+      setOrderDraft(orderDraftFromDeal(nextDeal));
+      setManagerId(nextDeal.assigned_user_id || "");
+      setManagers(team?.members ?? []);
       setAllTags(tags);
       setFieldDefs(defs.sort((a, b) => a.position - b.position));
       const pipeline = pipelines.find((item) => item.id === nextDeal.pipeline_id);
@@ -304,11 +320,43 @@ export default function CrmDealDetailPage() {
       }
       const updated = await updateDeal(dealId, { custom_fields });
       setDeal(updated);
+      setOrderDraft(orderDraftFromDeal(updated));
       showToast("Поля сохранены.", "success");
     } catch (error) {
       showToast(getApiErrorMessage(error, "Не удалось сохранить поля."), "error");
     } finally {
       setSavingFields(false);
+    }
+  };
+
+  const onSaveOrderFields = async () => {
+    if (!dealId || !deal || savingOrder) return;
+    setSavingOrder(true);
+    try {
+      const custom_fields: Record<string, unknown> = {
+        ...(deal.custom_fields || {}),
+        phone: orderDraft.phone.trim(),
+        ordered_items: orderDraft.ordered_items.trim(),
+        order_date: orderDraft.order_date,
+        manufacturing_date: orderDraft.manufacturing_date,
+        install_object: orderDraft.install_object.trim(),
+        install_deadline: orderDraft.install_deadline.trim(),
+      };
+      const updated = await updateDeal(dealId, {
+        custom_fields,
+        assigned_user_id: managerId || null,
+      });
+      setDeal(updated);
+      setOrderDraft(orderDraftFromDeal(updated));
+      setManagerId(updated.assigned_user_id || "");
+      showToast("Данные заказа сохранены.", "success");
+    } catch (error) {
+      showToast(
+        getApiErrorMessage(error, "Не удалось сохранить данные заказа."),
+        "error",
+      );
+    } finally {
+      setSavingOrder(false);
     }
   };
 
@@ -363,6 +411,18 @@ export default function CrmDealDetailPage() {
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]">
         <section className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+          <DealOrderFieldsPanel
+            draft={orderDraft}
+            managerId={managerId}
+            managers={managers}
+            saving={savingOrder}
+            onDraftChange={(key, value) =>
+              setOrderDraft((prev) => ({ ...prev, [key]: value }))
+            }
+            onManagerChange={setManagerId}
+            onSave={() => void onSaveOrderFields()}
+          />
+
           <div className="flex gap-2 border-b border-zinc-800/80 pb-3 text-sm">
             <span className="rounded-lg bg-violet-500/15 px-3 py-1.5 font-medium text-violet-100">
               Лента
@@ -570,7 +630,9 @@ export default function CrmDealDetailPage() {
             <dl className="mt-3 space-y-2 text-sm">
               <div className="flex justify-between gap-3">
                 <dt className="text-zinc-500">Телефон</dt>
-                <dd className="text-zinc-200">{deal.contact?.phone || "—"}</dd>
+                <dd className="text-zinc-200">
+                  {orderDraft.phone || deal.contact?.phone || "—"}
+                </dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-zinc-500">Email</dt>

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.models.core_models import Bot, Client
+from app.models.core_models import Bot, Client, PlatformType
 from app.models.crm.contact import CrmContact
 from app.repositories.crm.account_repository import account_repository
 from app.repositories.crm.contact_repository import contact_repository
@@ -19,6 +19,35 @@ from app.schemas.crm.accounts_contacts import (
     CrmContactRead,
     CrmContactUpdate,
 )
+from app.utils.phone_utils import clean_phone_number
+
+_WHATSAPP_SOURCES = frozenset(
+    {"whatsapp", "whatsapp_qr", "whatsapp_cloud", "whatsapp-cloud"}
+)
+
+
+def phone_from_whatsapp_client(
+    client: Client, *, source: str | None = None
+) -> str | None:
+    """Prefer WhatsApp chat id / username as E.164 phone when channel is WhatsApp."""
+    platform = getattr(getattr(client, "bot", None), "platform_type", None)
+    platform_value = (
+        platform.value if hasattr(platform, "value") else str(platform or "")
+    ).lower()
+    source_value = (source or "").lower()
+    is_whatsapp = (
+        platform == PlatformType.WHATSAPP
+        or platform_value == "whatsapp"
+        or source_value in _WHATSAPP_SOURCES
+        or source_value.startswith("whatsapp")
+    )
+    if not is_whatsapp:
+        return None
+    return (
+        clean_phone_number(client.external_id)
+        or clean_phone_number(client.username)
+        or None
+    )
 
 
 class ContactServiceError(Exception):
@@ -198,6 +227,11 @@ class ContactService:
         repo = self._contacts(db, organization_id)
         existing = await repo.get_by_linked_client_id(client.id)
         if existing is not None:
+            if not (existing.phone or "").strip():
+                phone = phone_from_whatsapp_client(client, source=existing.source)
+                if phone:
+                    existing.phone = phone
+                    await db.flush()
             return existing
 
         from app.services.quota_service import QuotaExceeded, quota_service
@@ -223,17 +257,25 @@ class ContactService:
         await pg_advisory_xact_lock_uuid(db, LOCK_NS_CRM_CAPTURE, client.id)
         existing = await repo.get_by_linked_client_id(client.id)
         if existing is not None:
+            if not (existing.phone or "").strip():
+                phone = phone_from_whatsapp_client(client, source=existing.source)
+                if phone:
+                    existing.phone = phone
+                    await db.flush()
             return existing
 
         platform = bot.platform_type
         source = platform.value if hasattr(platform, "value") else str(platform)
+        source_normalized = source.lower() if source else None
+        phone = phone_from_whatsapp_client(client, source=source_normalized)
 
         contact = CrmContact(
             organization_id=organization_id,
             linked_client_id=client.id,
             first_name=(client.first_name or "").strip() or (client.username or "").strip() or "",
             last_name="",
-            source=source.lower() if source else None,
+            phone=phone,
+            source=source_normalized,
             custom_fields={},
         )
         try:
