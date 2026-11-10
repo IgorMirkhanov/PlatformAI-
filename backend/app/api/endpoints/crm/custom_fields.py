@@ -1,4 +1,4 @@
-"""Native CRM — custom field definitions HTTP API (OWNER/ADMIN)."""
+"""Native CRM — custom field definitions HTTP API (org-scoped)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,12 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.endpoints.crm.deps import (
+    crm_org_id,
+    require_crm_deal_access,
+    require_crm_deal_admin,
+)
 from app.core.database import get_db
-from app.core.rbac import require_roles
-from app.models.core_models import UserRole
 from app.models.crm.custom_field import CrmEntityType
 from app.models.users import User
 from app.schemas.crm.tags_fields import (
@@ -21,16 +24,6 @@ from app.schemas.crm.tags_fields import (
 from app.services.crm.custom_field_service import CustomFieldServiceError, custom_field_service
 
 router = APIRouter(prefix="/crm/custom-fields", tags=["crm-custom-fields"])
-
-
-def _org_id(user: User) -> uuid.UUID:
-    org_id = getattr(user, "company_id", None)
-    if org_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Active organization is required.",
-        )
-    return uuid.UUID(str(org_id))
 
 
 def _http_error(exc: CustomFieldServiceError) -> HTTPException:
@@ -46,15 +39,20 @@ async def list_custom_fields(
     entity_type: CrmEntityType | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    ensure_defaults: bool = Query(
+        default=True,
+        description="Seed starter deal fields once for this organization when none exist.",
+    ),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+    current_user: User = Depends(require_crm_deal_access),
 ) -> CrmCustomFieldListResponse:
     return await custom_field_service.list_definitions(
         db,
-        _org_id(current_user),
+        crm_org_id(current_user),
         entity_type=entity_type,
         limit=limit,
         offset=offset,
+        ensure_defaults=ensure_defaults,
     )
 
 
@@ -66,10 +64,12 @@ async def list_custom_fields(
 async def get_custom_field(
     field_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+    current_user: User = Depends(require_crm_deal_access),
 ) -> CrmCustomFieldRead:
     try:
-        return await custom_field_service.get_definition(db, _org_id(current_user), field_id)
+        return await custom_field_service.get_definition(
+            db, crm_org_id(current_user), field_id
+        )
     except CustomFieldServiceError as exc:
         raise _http_error(exc) from exc
 
@@ -83,10 +83,12 @@ async def get_custom_field(
 async def create_custom_field(
     payload: CrmCustomFieldCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+    current_user: User = Depends(require_crm_deal_admin),
 ) -> CrmCustomFieldRead:
     try:
-        return await custom_field_service.create_definition(db, _org_id(current_user), payload)
+        return await custom_field_service.create_definition(
+            db, crm_org_id(current_user), payload
+        )
     except CustomFieldServiceError as exc:
         raise _http_error(exc) from exc
 
@@ -100,11 +102,11 @@ async def update_custom_field(
     field_id: uuid.UUID,
     payload: CrmCustomFieldUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+    current_user: User = Depends(require_crm_deal_admin),
 ) -> CrmCustomFieldRead:
     try:
         return await custom_field_service.update_definition(
-            db, _org_id(current_user), field_id, payload
+            db, crm_org_id(current_user), field_id, payload
         )
     except CustomFieldServiceError as exc:
         raise _http_error(exc) from exc
@@ -118,9 +120,11 @@ async def update_custom_field(
 async def delete_custom_field(
     field_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_roles(UserRole.OWNER, UserRole.ADMIN)),
+    current_user: User = Depends(require_crm_deal_admin),
 ) -> None:
     try:
-        await custom_field_service.delete_definition(db, _org_id(current_user), field_id)
+        await custom_field_service.delete_definition(
+            db, crm_org_id(current_user), field_id
+        )
     except CustomFieldServiceError as exc:
         raise _http_error(exc) from exc

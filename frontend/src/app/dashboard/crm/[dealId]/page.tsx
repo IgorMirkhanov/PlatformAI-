@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 
 import { CrmSubNav } from "@/components/crm/CrmSubNav";
 import { DealCustomFieldsPanel } from "@/components/crm/DealCustomFieldsPanel";
-import { DealOrderFieldsPanel } from "@/components/crm/DealOrderFieldsPanel";
 import { DealTimeline } from "@/components/crm/DealTimeline";
 import { useToast } from "@/hooks/useToast";
 import { fetchTeamMembers } from "@/lib/api";
@@ -26,11 +25,6 @@ import {
   removeDealTag,
   updateDeal,
 } from "@/lib/crm/api";
-import {
-  emptyOrderDraft,
-  orderDraftFromDeal,
-  type DealOrderDraft,
-} from "@/lib/crm/orderFields";
 import type {
   CrmContact,
   CrmCustomFieldDefinition,
@@ -102,10 +96,8 @@ export default function CrmDealDetailPage() {
   const [contactResults, setContactResults] = useState<CrmContact[]>([]);
   const [contactBusy, setContactBusy] = useState(false);
   const [closeBusy, setCloseBusy] = useState(false);
-  const [orderDraft, setOrderDraft] = useState<DealOrderDraft>(emptyOrderDraft);
   const [managerId, setManagerId] = useState("");
   const [managers, setManagers] = useState<TeamMember[]>([]);
-  const [savingOrder, setSavingOrder] = useState(false);
 
   const loadFeed = useCallback(async (id: string) => {
     const [nextNotes, nextEvents] = await Promise.all([
@@ -131,7 +123,6 @@ export default function CrmDealDetailPage() {
       setDeal(nextDeal);
       setTitleDraft(nextDeal.title);
       setAmountDraft(String(nextDeal.amount ?? ""));
-      setOrderDraft(orderDraftFromDeal(nextDeal));
       setManagerId(nextDeal.assigned_user_id || "");
       setManagers(team?.members ?? []);
       setAllTags(tags);
@@ -144,6 +135,13 @@ export default function CrmDealDetailPage() {
       for (const def of defs) {
         const raw = nextDeal.custom_fields?.[def.field_key];
         draft[def.field_key] = raw == null ? "" : String(raw);
+      }
+      // Prefill org phone field from WhatsApp/contact when empty.
+      if (
+        defs.some((def) => def.field_key === "phone") &&
+        !(draft.phone || "").trim()
+      ) {
+        draft.phone = (nextDeal.contact?.phone || "").trim();
       }
       setFieldDraft(draft);
       await loadFeed(dealId);
@@ -318,45 +316,23 @@ export default function CrmDealDetailPage() {
           custom_fields[def.field_key] = raw;
         }
       }
-      const updated = await updateDeal(dealId, { custom_fields });
-      setDeal(updated);
-      setOrderDraft(orderDraftFromDeal(updated));
-      showToast("Поля сохранены.", "success");
-    } catch (error) {
-      showToast(getApiErrorMessage(error, "Не удалось сохранить поля."), "error");
-    } finally {
-      setSavingFields(false);
-    }
-  };
-
-  const onSaveOrderFields = async () => {
-    if (!dealId || !deal || savingOrder) return;
-    setSavingOrder(true);
-    try {
-      const custom_fields: Record<string, unknown> = {
-        ...(deal.custom_fields || {}),
-        phone: orderDraft.phone.trim(),
-        ordered_items: orderDraft.ordered_items.trim(),
-        order_date: orderDraft.order_date,
-        manufacturing_date: orderDraft.manufacturing_date,
-        install_object: orderDraft.install_object.trim(),
-        install_deadline: orderDraft.install_deadline.trim(),
-      };
       const updated = await updateDeal(dealId, {
         custom_fields,
         assigned_user_id: managerId || null,
       });
       setDeal(updated);
-      setOrderDraft(orderDraftFromDeal(updated));
       setManagerId(updated.assigned_user_id || "");
-      showToast("Данные заказа сохранены.", "success");
+      const draft: Record<string, string> = {};
+      for (const def of fieldDefs) {
+        const raw = updated.custom_fields?.[def.field_key];
+        draft[def.field_key] = raw == null ? "" : String(raw);
+      }
+      setFieldDraft(draft);
+      showToast("Поля организации сохранены.", "success");
     } catch (error) {
-      showToast(
-        getApiErrorMessage(error, "Не удалось сохранить данные заказа."),
-        "error",
-      );
+      showToast(getApiErrorMessage(error, "Не удалось сохранить поля."), "error");
     } finally {
-      setSavingOrder(false);
+      setSavingFields(false);
     }
   };
 
@@ -411,16 +387,33 @@ export default function CrmDealDetailPage() {
 
       <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.85fr)]">
         <section className="flex min-h-0 flex-col gap-4 overflow-y-auto rounded-2xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-          <DealOrderFieldsPanel
-            draft={orderDraft}
+          <DealCustomFieldsPanel
+            title="Данные заказа"
+            fieldDefs={fieldDefs}
+            fieldDraft={fieldDraft}
+            savingFields={savingFields}
             managerId={managerId}
-            managers={managers}
-            saving={savingOrder}
-            onDraftChange={(key, value) =>
-              setOrderDraft((prev) => ({ ...prev, [key]: value }))
-            }
+            managers={managers.map((member) => ({
+              id: member.id,
+              label: member.full_name || member.email,
+            }))}
             onManagerChange={setManagerId}
-            onSave={() => void onSaveOrderFields()}
+            onDraftChange={(key, value) =>
+              setFieldDraft((prev) => ({ ...prev, [key]: value }))
+            }
+            onSave={() => void onSaveCustomFields()}
+            onFieldDefsChange={(defs) => {
+              setFieldDefs(defs);
+              setFieldDraft((prev) => {
+                const next = { ...prev };
+                for (const def of defs) {
+                  if (next[def.field_key] === undefined) {
+                    next[def.field_key] = "";
+                  }
+                }
+                return next;
+              });
+            }}
           />
 
           <div className="flex gap-2 border-b border-zinc-800/80 pb-3 text-sm">
@@ -602,28 +595,6 @@ export default function CrmDealDetailPage() {
             ) : null}
           </div>
 
-          <DealCustomFieldsPanel
-            fieldDefs={fieldDefs}
-            fieldDraft={fieldDraft}
-            savingFields={savingFields}
-            onDraftChange={(key, value) =>
-              setFieldDraft((prev) => ({ ...prev, [key]: value }))
-            }
-            onSave={() => void onSaveCustomFields()}
-            onFieldDefsChange={(defs) => {
-              setFieldDefs(defs);
-              setFieldDraft((prev) => {
-                const next = { ...prev };
-                for (const def of defs) {
-                  if (next[def.field_key] === undefined) {
-                    next[def.field_key] = "";
-                  }
-                }
-                return next;
-              });
-            }}
-          />
-
           <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Контакт</p>
             <p className="mt-2 text-lg font-semibold text-zinc-100">{contactName(deal)}</p>
@@ -631,7 +602,7 @@ export default function CrmDealDetailPage() {
               <div className="flex justify-between gap-3">
                 <dt className="text-zinc-500">Телефон</dt>
                 <dd className="text-zinc-200">
-                  {orderDraft.phone || deal.contact?.phone || "—"}
+                  {fieldDraft.phone || deal.contact?.phone || "—"}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">

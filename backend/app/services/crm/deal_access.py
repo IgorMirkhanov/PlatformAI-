@@ -14,9 +14,15 @@ CRM_GLOBAL_DEAL_ROLES: frozenset[UserRole] = frozenset(
     {UserRole.OWNER, UserRole.ADMIN}
 )
 
-# Roles allowed to read/create/move CRM deals (PROMPT_ENGINEER has no CRM access).
+# Roles with manage:crm — can read/create/move deals and view field schemas.
 CRM_DEAL_ACCESS_ROLES: frozenset[UserRole] = frozenset(
-    {UserRole.OWNER, UserRole.ADMIN, UserRole.OPERATOR}
+    {
+        UserRole.OWNER,
+        UserRole.ADMIN,
+        UserRole.MEMBER,
+        UserRole.PROMPT_ENGINEER,
+        UserRole.OPERATOR,
+    }
 )
 
 # Roles allowed to delete deals / manage CRM admin surfaces.

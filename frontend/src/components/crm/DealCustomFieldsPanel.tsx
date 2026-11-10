@@ -125,7 +125,8 @@ export function AddCustomFieldModal({
           <div>
             <h3 className="text-lg font-semibold text-zinc-50">Новое поле сделки</h3>
             <p className="mt-1 text-xs text-zinc-500">
-              Как в Bitrix24 — поле появится во всех сделках организации.
+              Поле появится только в сделках этой организации и не затронет другие
+              компании.
             </p>
           </div>
           <button
@@ -213,6 +214,11 @@ export function AddCustomFieldModal({
   );
 }
 
+interface ManagerOption {
+  id: string;
+  label: string;
+}
+
 interface DealCustomFieldsPanelProps {
   fieldDefs: CrmCustomFieldDefinition[];
   fieldDraft: Record<string, string>;
@@ -220,6 +226,13 @@ interface DealCustomFieldsPanelProps {
   onDraftChange: (key: string, value: string) => void;
   onSave: () => void;
   onFieldDefsChange: (defs: CrmCustomFieldDefinition[]) => void;
+  /** System assignee — not a custom field definition. */
+  managerId?: string;
+  managers?: ManagerOption[];
+  onManagerChange?: (userId: string) => void;
+  canManageSchema?: boolean;
+  title?: string;
+  className?: string;
 }
 
 export function DealCustomFieldsPanel({
@@ -229,20 +242,26 @@ export function DealCustomFieldsPanel({
   onDraftChange,
   onSave,
   onFieldDefsChange,
+  managerId,
+  managers,
+  onManagerChange,
+  canManageSchema = true,
+  title = "Поля организации",
+  className,
 }: DealCustomFieldsPanelProps) {
   const { showToast } = useToast();
   const [addOpen, setAddOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const onDeleteField = async (field: CrmCustomFieldDefinition) => {
-    if (!window.confirm(`Удалить поле «${field.label}»? Значения в сделках сохранятся в JSON.`)) {
+    if (!window.confirm(`Удалить поле «${field.label}» у этой организации?`)) {
       return;
     }
     setDeletingId(field.id);
     try {
       await deleteCustomField(field.id);
       onFieldDefsChange(fieldDefs.filter((item) => item.id !== field.id));
-      showToast("Поле удалено.", "success");
+      showToast("Поле удалено для этой организации.", "success");
     } catch (error) {
       showToast(getApiErrorMessage(error, "Не удалось удалить поле."), "error");
     } finally {
@@ -250,47 +269,66 @@ export function DealCustomFieldsPanel({
     }
   };
 
+  const showManager = typeof onManagerChange === "function";
+
   return (
     <>
-      <div className="rounded-2xl border border-zinc-800/90 bg-zinc-950/60 p-4">
+      <div
+        className={cn(
+          "rounded-2xl border border-zinc-800/90 bg-zinc-950/50 p-4",
+          className,
+        )}
+      >
         <div className="mb-3 flex items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Поля сделки
-          </p>
-          <button
-            type="button"
-            onClick={() => setAddOpen(true)}
-            className="inline-flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] font-medium text-violet-200 hover:bg-violet-500/20"
-          >
-            <Plus className="h-3 w-3" />
-            Добавить поле
-          </button>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              {title}
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-600">
+              Набор полей только для текущей организации
+            </p>
+          </div>
+          {canManageSchema ? (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="inline-flex items-center gap-1 rounded-lg border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[11px] font-medium text-violet-200 hover:bg-violet-500/20"
+            >
+              <Plus className="h-3 w-3" />
+              Добавить поле
+            </button>
+          ) : null}
         </div>
 
-        {fieldDefs.length === 0 ? (
+        {fieldDefs.length === 0 && !showManager ? (
           <p className="text-xs leading-relaxed text-zinc-500">
-            Нет пользовательских полей. Нажмите «Добавить поле», чтобы создать поля как в Bitrix24
-            (источник, бюджет, менеджер и т.д.).
+            Нет полей. Добавьте поля для этой организации — изменения не затронут другие
+            компании.
           </p>
         ) : (
           <div className="space-y-3">
             {fieldDefs.map((def) => (
-              <div key={def.id} className="group relative rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3">
+              <div
+                key={def.id}
+                className="group relative rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3"
+              >
                 <div className="mb-1 flex items-start justify-between gap-2">
                   <span className="text-xs font-medium text-zinc-300">{def.label}</span>
-                  <button
-                    type="button"
-                    title="Удалить определение поля"
-                    disabled={deletingId === def.id}
-                    onClick={() => void onDeleteField(def)}
-                    className="rounded p-1 text-zinc-600 opacity-0 transition hover:bg-red-500/10 hover:text-red-300 group-hover:opacity-100"
-                  >
-                    {deletingId === def.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3.5 w-3.5" />
-                    )}
-                  </button>
+                  {canManageSchema ? (
+                    <button
+                      type="button"
+                      title="Удалить поле у этой организации"
+                      disabled={deletingId === def.id}
+                      onClick={() => void onDeleteField(def)}
+                      className="rounded p-1 text-zinc-600 opacity-0 transition hover:bg-red-500/10 hover:text-red-300 group-hover:opacity-100"
+                    >
+                      {deletingId === def.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  ) : null}
                 </div>
                 {def.field_type === "boolean" ? (
                   <select
@@ -315,6 +353,14 @@ export function DealCustomFieldsPanel({
                       </option>
                     ))}
                   </select>
+                ) : def.field_type === "text" &&
+                  !["phone", "email", "url"].includes(def.field_key) ? (
+                  <textarea
+                    value={fieldDraft[def.field_key] ?? ""}
+                    onChange={(e) => onDraftChange(def.field_key, e.target.value)}
+                    rows={2}
+                    className="w-full resize-y rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/40"
+                  />
                 ) : (
                   <input
                     type={
@@ -324,15 +370,46 @@ export function DealCustomFieldsPanel({
                           ? "date"
                           : def.field_type === "url"
                             ? "url"
-                            : "text"
+                            : def.field_key === "phone"
+                              ? "tel"
+                              : "text"
                     }
                     value={fieldDraft[def.field_key] ?? ""}
                     onChange={(e) => onDraftChange(def.field_key, e.target.value)}
+                    placeholder={
+                      def.field_key === "phone"
+                        ? "Подтягивается из WhatsApp"
+                        : undefined
+                    }
                     className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none focus:border-violet-500/40"
                   />
                 )}
               </div>
             ))}
+
+            {showManager ? (
+              <label className="block rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3 text-xs font-medium text-zinc-300">
+                Ответственный менеджер
+                <select
+                  value={managerId || ""}
+                  onChange={(e) => onManagerChange?.(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm font-normal text-zinc-100"
+                >
+                  <option value="">Не назначен</option>
+                  {managerId &&
+                  managers &&
+                  !managers.some((m) => m.id === managerId) ? (
+                    <option value={managerId}>Назначенный менеджер</option>
+                  ) : null}
+                  {(managers || []).map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
             <button
               type="button"
               onClick={onSave}
@@ -343,7 +420,7 @@ export function DealCustomFieldsPanel({
               )}
             >
               {savingFields ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Сохранить значения полей
+              Сохранить
             </button>
           </div>
         )}
@@ -355,7 +432,9 @@ export function DealCustomFieldsPanel({
         nextPosition={fieldDefs.length}
         onClose={() => setAddOpen(false)}
         onCreated={(field) => {
-          onFieldDefsChange([...fieldDefs, field].sort((a, b) => a.position - b.position));
+          onFieldDefsChange(
+            [...fieldDefs, field].sort((a, b) => a.position - b.position),
+          );
           onDraftChange(field.field_key, "");
         }}
       />

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Sequence
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,17 @@ from app.schemas.crm.tags_fields import (
     CrmCustomFieldListResponse,
     CrmCustomFieldRead,
     CrmCustomFieldUpdate,
+)
+
+# Suggested starter schema for an org that has never configured deal fields.
+# Inserted once per organization; later add/edit/delete stays tenant-local.
+_DEFAULT_DEAL_FIELD_TEMPLATES: Sequence[tuple[str, str, CrmFieldType, int]] = (
+    ("phone", "Номер телефона", CrmFieldType.TEXT, 0),
+    ("ordered_items", "Что заказали", CrmFieldType.TEXT, 1),
+    ("order_date", "Дата заказа", CrmFieldType.DATE, 2),
+    ("manufacturing_date", "Примерная дата изготовления", CrmFieldType.DATE, 3),
+    ("install_object", "Объект, где устанавливается", CrmFieldType.TEXT, 4),
+    ("install_deadline", "Сроки установки", CrmFieldType.TEXT, 5),
 )
 
 
@@ -28,6 +40,39 @@ class CustomFieldService:
     def _repo(self, db: AsyncSession, organization_id: uuid.UUID):
         return custom_field_repository(db, organization_id=organization_id)
 
+    async def ensure_default_deal_fields(
+        self,
+        db: AsyncSession,
+        organization_id: uuid.UUID,
+    ) -> None:
+        """
+        Seed starter deal fields for *this* organization only when it has none.
+
+        Edits/deletes after seeding never propagate to other organizations.
+        """
+        repo = self._repo(db, organization_id)
+        existing = await repo.count_filtered(entity_type=CrmEntityType.DEAL)
+        if existing > 0:
+            return
+        for field_key, label, field_type, position in _DEFAULT_DEAL_FIELD_TEMPLATES:
+            entity = CrmCustomFieldDefinition(
+                organization_id=organization_id,
+                entity_type=CrmEntityType.DEAL,
+                field_key=field_key,
+                label=label,
+                field_type=field_type,
+                options=None,
+                is_required=False,
+                position=position,
+            )
+            try:
+                async with db.begin_nested():
+                    await repo.add(entity)
+                    await db.flush()
+            except IntegrityError:
+                # Concurrent first-time seed for the same org — ignore.
+                continue
+
     async def list_definitions(
         self,
         db: AsyncSession,
@@ -36,7 +81,10 @@ class CustomFieldService:
         entity_type: CrmEntityType | None = None,
         limit: int = 200,
         offset: int = 0,
+        ensure_defaults: bool = False,
     ) -> CrmCustomFieldListResponse:
+        if ensure_defaults and entity_type in {None, CrmEntityType.DEAL}:
+            await self.ensure_default_deal_fields(db, organization_id)
         repo = self._repo(db, organization_id)
         items = await repo.list_filtered(entity_type=entity_type, limit=limit, offset=offset)
         total = await repo.count_filtered(entity_type=entity_type)

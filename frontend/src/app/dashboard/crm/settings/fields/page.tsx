@@ -54,8 +54,8 @@ export default function CrmFieldsSettingsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-zinc-50">Поля сделок</h1>
           <p className="mt-1 max-w-2xl text-sm text-zinc-500">
-            Настройка пользовательских полей CRM — аналог раздела «Настройки → CRM → Поля» в
-            Bitrix24. Созданные поля доступны во всех карточках сделок.
+            Поля настраиваются отдельно для каждой организации. Изменения здесь не
+            затрагивают другие компании — только сделки текущей организации.
           </p>
         </div>
         <button
