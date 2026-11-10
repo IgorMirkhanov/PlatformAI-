@@ -156,7 +156,7 @@ async def get_organization_usage(
         active_bots=int(bots_count or 0),
         active_bots_limit=int(billing.active_agents_limit or PLAN_AGENT_LIMITS[plan]),
         team_slots_used=int(seats_used or 0),
-        team_slots_limit=PLAN_TEAM_SEAT_LIMITS.get(plan, 3),
+        team_slots_limit=PLAN_TEAM_SEAT_LIMITS.get(plan, 8),
         wallet_balance_kzt=float(billing.balance),
         is_low_balance=bool(billing.is_low_balance),
         low_balance_threshold_kzt=float(billing.low_balance_threshold_kzt),
