@@ -13,9 +13,15 @@ interface KanbanColumnProps {
   stage: CrmStage;
   deals: CrmDeal[];
   pipelineId: string;
+  managerNames?: Record<string, string>;
 }
 
-export function KanbanColumn({ stage, deals, pipelineId }: KanbanColumnProps) {
+export function KanbanColumn({
+  stage,
+  deals,
+  pipelineId,
+  managerNames,
+}: KanbanColumnProps) {
   const createDealInStage = useCrmStore((state) => state.createDealInStage);
   const [isCreating, setIsCreating] = useState(false);
   const [title, setTitle] = useState("");
@@ -144,7 +150,12 @@ export function KanbanColumn({ stage, deals, pipelineId }: KanbanColumnProps) {
             )}
           >
             {deals.map((deal, index) => (
-              <DealCard key={deal.id} deal={deal} index={index} />
+              <DealCard
+                key={deal.id}
+                deal={deal}
+                index={index}
+                managerNames={managerNames}
+              />
             ))}
             {provided.placeholder}
             {deals.length === 0 ? (

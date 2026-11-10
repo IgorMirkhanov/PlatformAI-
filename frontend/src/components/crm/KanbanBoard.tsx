@@ -4,9 +4,10 @@ import {
   DragDropContext,
   type DropResult,
 } from "@hello-pangea/dnd";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { KanbanColumn } from "@/components/crm/KanbanColumn";
+import { fetchTeamMembers } from "@/lib/api";
 import type { CrmDeal, CrmStage } from "@/lib/crm/types";
 import { useCrmStore } from "@/store/useCrmStore";
 
@@ -18,6 +19,26 @@ interface KanbanBoardProps {
 
 export function KanbanBoard({ stages, deals, pipelineId }: KanbanBoardProps) {
   const moveDealOptimistic = useCrmStore((state) => state.moveDealOptimistic);
+  const [managerNames, setManagerNames] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchTeamMembers()
+      .then((team) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const member of team.members) {
+          map[member.id] = member.full_name || member.email;
+        }
+        setManagerNames(map);
+      })
+      .catch(() => {
+        if (!cancelled) setManagerNames({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
@@ -73,6 +94,7 @@ export function KanbanBoard({ stages, deals, pipelineId }: KanbanBoardProps) {
             stage={stage}
             deals={dealsByStage.get(stage.id) ?? []}
             pipelineId={pipelineId}
+            managerNames={managerNames}
           />
         ))}
       </div>

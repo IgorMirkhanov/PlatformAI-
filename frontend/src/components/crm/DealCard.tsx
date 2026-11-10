@@ -7,30 +7,46 @@ import Link from "next/link";
 import type { CrmDeal } from "@/lib/crm/types";
 import { cn } from "@/lib/utils";
 
-function formatAmount(amount: string | number, currency: string): string {
-  const value = typeof amount === "number" ? amount : Number(amount);
-  if (!Number.isFinite(value)) return `${amount} ${currency}`;
-  return new Intl.NumberFormat("ru-RU", {
-    style: "currency",
-    currency: currency || "KZT",
-    maximumFractionDigits: 0,
-  }).format(value);
+function leadName(deal: CrmDeal): string {
+  const contact = deal.contact;
+  if (contact) {
+    const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
+    if (name) return name;
+  }
+  return deal.title?.trim() || "Без имени";
 }
 
-function contactLabel(deal: CrmDeal): string | null {
-  const contact = deal.contact;
-  if (!contact) return null;
-  const name = `${contact.first_name || ""} ${contact.last_name || ""}`.trim();
-  return name || contact.phone || contact.email || null;
+function leadPhone(deal: CrmDeal): string | null {
+  const fromFields =
+    deal.custom_fields?.phone == null
+      ? ""
+      : String(deal.custom_fields.phone).trim();
+  const fromContact = (deal.contact?.phone || "").trim();
+  return fromFields || fromContact || null;
+}
+
+function formatLeadDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date);
 }
 
 interface DealCardProps {
   deal: CrmDeal;
   index: number;
+  managerNames?: Record<string, string>;
 }
 
-export function DealCard({ deal, index }: DealCardProps) {
-  const contact = contactLabel(deal);
+export function DealCard({ deal, index, managerNames }: DealCardProps) {
+  const name = leadName(deal);
+  const phone = leadPhone(deal);
+  const manager =
+    (deal.assigned_user_id && managerNames?.[deal.assigned_user_id]) || null;
+  const receivedAt = formatLeadDate(deal.created_at);
 
   return (
     <Draggable draggableId={deal.id} index={index}>
@@ -58,21 +74,26 @@ export function DealCard({ deal, index }: DealCardProps) {
             className="block space-y-2 pr-6 outline-none focus-visible:ring-2 focus-visible:ring-violet-500/40"
           >
             <h3 className="line-clamp-2 text-sm font-semibold text-zinc-100 transition group-hover:text-violet-100">
-              {deal.title}
+              {name}
             </h3>
-            <p className="text-sm font-medium text-emerald-300/90">
-              {formatAmount(deal.amount, deal.currency)}
-            </p>
-            {contact ? (
-              <p className="truncate text-xs text-zinc-400">{contact}</p>
-            ) : (
-              <p className="text-xs text-zinc-600">Без контакта</p>
-            )}
-            {deal.source ? (
-              <p className="truncate text-[10px] uppercase tracking-wide text-zinc-600">
-                {deal.source}
-              </p>
-            ) : null}
+            <dl className="space-y-1.5 text-xs">
+              <div className="flex items-start justify-between gap-2">
+                <dt className="shrink-0 text-zinc-500">Телефон</dt>
+                <dd className="truncate text-right text-zinc-200">
+                  {phone || "—"}
+                </dd>
+              </div>
+              <div className="flex items-start justify-between gap-2">
+                <dt className="shrink-0 text-zinc-500">Менеджер</dt>
+                <dd className="truncate text-right text-zinc-200">
+                  {manager || "Не назначен"}
+                </dd>
+              </div>
+              <div className="flex items-start justify-between gap-2">
+                <dt className="shrink-0 text-zinc-500">Поступил</dt>
+                <dd className="truncate text-right text-zinc-300">{receivedAt}</dd>
+              </div>
+            </dl>
           </Link>
         </article>
       )}
