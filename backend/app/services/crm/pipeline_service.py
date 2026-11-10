@@ -231,6 +231,8 @@ class PipelineService:
         try:
             await stages.add(stage)
             await db.flush()
+            # Reload server-side timestamps; async sessions cannot lazy-load onupdate.
+            await db.refresh(stage)
         except IntegrityError as exc:
             await db.rollback()
             raise PipelineServiceError(
@@ -256,6 +258,8 @@ class PipelineService:
             setattr(stage, key, value)
         try:
             await db.flush()
+            # Reload server-side timestamps; async sessions cannot lazy-load onupdate.
+            await db.refresh(stage)
         except IntegrityError as exc:
             await db.rollback()
             raise PipelineServiceError(
