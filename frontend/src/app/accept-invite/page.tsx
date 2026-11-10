@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, Lock, Mail, UserRound } from "lucide-react";
 
-import { acceptOrganizationInvite } from "@/lib/billing/api";
 import { acceptTeamInvite } from "@/lib/api";
 import { loginWithPassword } from "@/lib/auth/session";
 import { useBotStore } from "@/store/useBotStore";
@@ -37,35 +36,31 @@ function AcceptInviteForm() {
     const normalizedEmail = email.trim().toLowerCase();
     const rawToken = token.trim();
     try {
-      try {
-        await acceptTeamInvite({
-          email: normalizedEmail,
-          token: rawToken,
-          password,
-          full_name: fullName.trim() || undefined,
-        });
-      } catch (teamError) {
-        const message =
-          teamError instanceof Error ? teamError.message : "Failed to accept invitation.";
-        // Legacy org invites: token lives in another table and needs an existing account.
-        if (!/invalid/i.test(message)) {
-          throw teamError;
-        }
-        try {
-          await loginWithPassword(normalizedEmail, password);
-          await acceptOrganizationInvite(rawToken);
-        } catch {
-          throw new Error(
-            "Токен приглашения недействителен. Создайте новое приглашение в разделе «Команда» и откройте свежую ссылку.",
-          );
-        }
-      }
+      await acceptTeamInvite({
+        email: normalizedEmail,
+        token: rawToken,
+        password,
+        full_name: fullName.trim() || undefined,
+      });
       await loginWithPassword(normalizedEmail, password);
       await loadCurrentUser();
       router.replace("/dashboard");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось принять приглашение.");
+      const message = err instanceof Error ? err.message : "Не удалось принять приглашение.";
+      if (/already exists/i.test(message)) {
+        setError("Пользователь с этим email уже есть. Войдите, затем откройте ссылку приглашения снова.");
+      } else if (/email does not match/i.test(message)) {
+        setError("Email не совпадает с приглашением.");
+      } else if (/expired/i.test(message)) {
+        setError("Срок приглашения истёк. Создайте новое в разделе «Команда».");
+      } else if (/invalid/i.test(message)) {
+        setError(
+          "Токен приглашения недействителен. Создайте новое приглашение в разделе «Команда» и откройте свежую ссылку.",
+        );
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }

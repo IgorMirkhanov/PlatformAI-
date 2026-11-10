@@ -16,7 +16,6 @@ import {
 
 import { SettingsSectionNav } from "@/components/settings/SettingsSectionNav";
 import { QuotaProgressBar } from "@/components/dashboard/QuotaProgressBar";
-import { getOrganizationMembers } from "@/lib/billing/api";
 import { canManageTeam } from "@/lib/permissions";
 import { useOrganizationStore } from "@/lib/stores/use-organization-store";
 import { cn } from "@/lib/utils";
@@ -33,6 +32,7 @@ import {
 } from "@/types/team";
 import {
   cancelTeamInvitation,
+  fetchTeamMembers,
   inviteTeamMember,
   revokeTeamMember,
   updateTeamMemberRole,
@@ -101,15 +101,12 @@ export default function DashboardTeamSettingsPage() {
   const loadTeam = useCallback(async (): Promise<void> => {
     setLoading(true);
     try {
-      const membersResponse = await getOrganizationMembers();
+      const membersResponse = await fetchTeamMembers();
       setMembers(membersResponse.members);
       setInvites(
-        (membersResponse.pending_invitations || [])
-          .filter((invite) => invite.status === "PENDING")
-          .map((invite) => ({
-            ...invite,
-            status: invite.status as TeamInvitation["status"],
-          })),
+        (membersResponse.pending_invitations || []).filter(
+          (invite) => invite.status === "PENDING",
+        ),
       );
     } catch (error) {
       showToast(getApiErrorMessage(error, "Не удалось загрузить команду."), "error");

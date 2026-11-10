@@ -398,12 +398,18 @@ class TeamService:
         raw_token = payload.token.strip()
         invitation = await self._find_invitation_by_token(db, raw_token)
         if invitation is None:
+            # Billing UI may still mint organization_invites; bridge them into signup.
+            invitation = await self._mirror_org_invite_to_team(db, raw_token)
+        if invitation is None:
             raise ValueError("Invitation token is invalid.")
 
         if invitation.status != TeamInvitationStatus.PENDING:
             raise ValueError("Invitation is no longer active.")
 
-        if invitation.expires_at < datetime.now(UTC):
+        expires_at = invitation.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at < datetime.now(UTC):
             invitation.status = TeamInvitationStatus.EXPIRED
             await db.flush()
             raise ValueError("Invitation token has expired.")
@@ -415,7 +421,9 @@ class TeamService:
 
         existing = await db.execute(select(User).where(User.email == normalized_email))
         if existing.scalar_one_or_none() is not None:
-            raise ValueError("A user with this email already exists.")
+            raise ValueError(
+                "A user with this email already exists. Sign in, then open the invite link again."
+            )
 
         company = await self._get_company(db, invitation.company_id)
         company_name = company.name if company is not None else "MP.AI Workspace"
@@ -444,6 +452,7 @@ class TeamService:
         # Normalize legacy plaintext tokens to hash at accept time.
         if invitation.token == raw_token:
             invitation.token = _hash_invite_token(raw_token)
+        await self._mark_org_invite_accepted(db, raw_token)
         await db.flush()
 
         logger.info(
@@ -459,6 +468,57 @@ class TeamService:
             email=user.email,
             role=user.role,
         )
+
+    async def _mirror_org_invite_to_team(
+        self,
+        db: AsyncSession,
+        raw_token: str,
+    ) -> TeamInvitation | None:
+        """Accept tokens that only exist in organization_invites."""
+        from app.models.billing.organization_invite import OrganizationInvite
+        from app.services.billing.invite_service import hash_invite_token
+
+        digest = hash_invite_token(raw_token)
+        org_invite = await db.scalar(
+            select(OrganizationInvite).where(OrganizationInvite.token_hash == digest)
+        )
+        if org_invite is None or org_invite.is_accepted:
+            return None
+
+        expires_at = org_invite.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at <= datetime.now(UTC):
+            return None
+
+        try:
+            role = UserRole(str(org_invite.role).strip().upper())
+        except ValueError:
+            role = UserRole.MEMBER
+
+        mirrored = TeamInvitation(
+            company_id=org_invite.organization_id,
+            email=org_invite.email.strip().lower(),
+            role=role,
+            token=digest,
+            expires_at=expires_at,
+            status=TeamInvitationStatus.PENDING,
+            invited_by_user_id=org_invite.invited_by_id,
+        )
+        db.add(mirrored)
+        await db.flush()
+        return mirrored
+
+    async def _mark_org_invite_accepted(self, db: AsyncSession, raw_token: str) -> None:
+        from app.models.billing.organization_invite import OrganizationInvite
+        from app.services.billing.invite_service import hash_invite_token
+
+        digest = hash_invite_token(raw_token)
+        org_invite = await db.scalar(
+            select(OrganizationInvite).where(OrganizationInvite.token_hash == digest)
+        )
+        if org_invite is not None and not org_invite.is_accepted:
+            org_invite.is_accepted = True
 
     async def update_member_role(
         self,

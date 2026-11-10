@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.billing.organization_invite import OrganizationInvite
-from app.models.core_models import UserCompanyWorkspace, UserRole
+from app.models.core_models import (
+    TeamInvitation,
+    TeamInvitationStatus,
+    UserCompanyWorkspace,
+    UserRole,
+)
 from app.models.users import User
 from app.schemas.billing.invites import (
     AcceptOrganizationInviteResponse,
@@ -93,17 +98,44 @@ class InviteService:
             )
 
         raw_token = generate_raw_invite_token()
+        token_digest = hash_invite_token(raw_token)
         expires_at = datetime.now(timezone.utc) + timedelta(days=self.INVITE_TTL_DAYS)
         invite = OrganizationInvite(
             organization_id=organization_id,
             email=normalized_email,
             role=role_value,
-            token_hash=hash_invite_token(raw_token),
+            token_hash=token_digest,
             expires_at=expires_at,
             is_accepted=False,
             invited_by_id=inviter_user_id,
         )
         db.add(invite)
+
+        # Mirror into team_invitations so /team/accept-invite (signup page) works
+        # even when the UI still creates invites via the billing org endpoint.
+        role_enum = self._parse_role(role_value)
+        pending_team = (
+            await db.scalars(
+                select(TeamInvitation).where(
+                    TeamInvitation.company_id == organization_id,
+                    TeamInvitation.email == normalized_email,
+                    TeamInvitation.status == TeamInvitationStatus.PENDING,
+                )
+            )
+        ).all()
+        for stale in pending_team:
+            stale.status = TeamInvitationStatus.EXPIRED
+        db.add(
+            TeamInvitation(
+                company_id=organization_id,
+                email=normalized_email,
+                role=role_enum,
+                token=token_digest,
+                expires_at=expires_at,
+                status=TeamInvitationStatus.PENDING,
+                invited_by_user_id=inviter_user_id,
+            )
+        )
         await db.flush()
 
         from app.services.security_audit_service import security_audit_service
