@@ -212,7 +212,9 @@ class Settings:
     MAX_CHAT_HISTORY_MESSAGES: int = int(os.getenv("MAX_CHAT_HISTORY_MESSAGES", "10"))
     MAX_PROMPT_CHARS: int = int(os.getenv("MAX_PROMPT_CHARS", "48000"))
     RAG_TOP_K: int = int(os.getenv("RAG_TOP_K", "3"))
-    RAG_MIN_SIMILARITY_SCORE: float = float(os.getenv("RAG_MIN_SIMILARITY_SCORE", "0.35"))
+    # text-embedding-3-small cosine scores for product KB queries often land ~0.15–0.30;
+    # 0.35 was discarding every hit (bot answered as if the catalog was empty).
+    RAG_MIN_SIMILARITY_SCORE: float = float(os.getenv("RAG_MIN_SIMILARITY_SCORE", "0.18"))
     RAG_SEARCH_TIMEOUT_SECONDS: float = float(os.getenv("RAG_SEARCH_TIMEOUT_SECONDS", "8.0"))
     LLM_FALLBACK_TIMEOUT_SECONDS: float = float(os.getenv("LLM_FALLBACK_TIMEOUT_SECONDS", "25.0"))
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -12,6 +11,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from app.core.celery_app import celery_app
+from app.core.database import run_celery_async
 
 FOLLOW_UP_TEXT = (
     "Здравствуйте! Не получил ответа. Подскажите, остались ли у вас вопросы? "
@@ -277,7 +277,7 @@ def send_follow_up_message(
     sent_count: int = 0,
     channel: str = "telegram",
 ) -> dict[str, str]:
-    return asyncio.run(
+    return run_celery_async(
         _send_follow_up_async(
             bot_id=bot_id,
             chat_id=chat_id,

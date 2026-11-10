@@ -251,7 +251,7 @@ class RAGService:
 
         k = int(top_k if top_k is not None else getattr(settings, "RAG_TOP_K", 3))
         k = max(1, min(k, 50))
-        threshold = float(getattr(settings, "RAG_MIN_SIMILARITY_SCORE", 0.35))
+        threshold = float(getattr(settings, "RAG_MIN_SIMILARITY_SCORE", 0.18))
 
         query_vectors = await self._embed([cleaned])
         query_vec = query_vectors[0]

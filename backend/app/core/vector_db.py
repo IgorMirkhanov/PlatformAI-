@@ -330,6 +330,38 @@ def _build_document_only_where(
     return {}
 
 
+# Lexical expanders so short product queries (водосток, сайдинг) surface the
+# right price-list chunks even when cosine similarity alone is middling.
+_RAG_QUERY_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "водосток": ("водосток", "водостоки", "водосточн", "желоб", "воронка", "колено"),
+    "водостоки": ("водосток", "водостоки", "водосточн", "желоб", "воронка", "колено"),
+    "сайдинг": ("сайдинг", "l-брус", "европанель", "водосайдинг"),
+    "штакетник": ("штакетник", "евроштакетник", "забор"),
+    "евроштакетник": ("штакетник", "евроштакетник", "забор"),
+}
+
+
+def _rag_query_terms(query: str) -> set[str]:
+    raw = (query or "").lower()
+    tokens = set(re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9-]{3,}", raw))
+    expanded: set[str] = set(tokens)
+    for key, synonyms in _RAG_QUERY_SYNONYMS.items():
+        if key in raw or any(tok.startswith(key[:5]) for tok in tokens):
+            expanded.update(synonyms)
+    return expanded
+
+
+def _lexical_boost(query: str, text: str) -> float:
+    terms = _rag_query_terms(query)
+    if not terms:
+        return 0.0
+    hay = (text or "").lower()
+    hits = sum(1 for term in terms if term in hay)
+    if hits <= 0:
+        return 0.0
+    return min(0.35, 0.10 + hits * 0.08)
+
+
 def _hits_from_query_result(results: dict[str, Any]) -> list[RAGSearchHit]:
     documents_nested = results.get("documents") or [[]]
     documents = documents_nested[0] if documents_nested else []
@@ -380,14 +412,25 @@ def _merge_rag_hits(
     hits: list[RAGSearchHit],
     top_k: int,
     min_score: float | None = None,
+    query: str | None = None,
 ) -> list[RAGSearchHit]:
     from app.core.config import settings
 
     threshold = settings.RAG_MIN_SIMILARITY_SCORE if min_score is None else float(min_score)
+    adjusted: list[RAGSearchHit] = []
+    for hit in hits:
+        score = float(hit["similarity_score"])
+        if query:
+            score = min(1.0, score + _lexical_boost(query, hit["text"]))
+        bumped = dict(hit)
+        bumped["similarity_score"] = round(score, 4)
+        adjusted.append(bumped)  # type: ignore[arg-type]
+
     seen: set[tuple[str | None, int | None, str]] = set()
     unique: list[RAGSearchHit] = []
     dropped = 0
-    for hit in sorted(hits, key=lambda item: item["similarity_score"], reverse=True):
+    ranked = sorted(adjusted, key=lambda item: item["similarity_score"], reverse=True)
+    for hit in ranked:
         if hit["similarity_score"] < threshold:
             dropped += 1
             continue
@@ -398,7 +441,30 @@ def _merge_rag_hits(
         unique.append(hit)
         if len(unique) >= top_k:
             break
-    if dropped:
+
+    # Soft fallback: never return an empty set when Chroma ranked neighbors exist
+    # but all sit just under the threshold (common for catalog/price-list KBs).
+    if not unique and ranked:
+        floor = max(0.05, threshold * 0.5)
+        for hit in ranked:
+            if hit["similarity_score"] < floor:
+                continue
+            key = (hit.get("document_id"), hit.get("chunk_index"), hit["text"][:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(hit)
+            if len(unique) >= top_k:
+                break
+        if unique:
+            logger.info(
+                "VectorDB.relevance_soft_fallback | kept={kept} floor={floor} threshold={threshold}",
+                kept=len(unique),
+                floor=floor,
+                threshold=threshold,
+            )
+
+    if dropped and not unique:
         logger.debug(
             "VectorDB.relevance_filter | dropped={dropped} threshold={threshold}",
             dropped=dropped,
@@ -536,6 +602,7 @@ def _sync_query_chunks_detailed(
     excluded_document_ids: list[str] | None = None,
     organization_id: str | None = None,
     min_score: float | None = None,
+    query: str | None = None,
 ) -> list[RAGSearchHit]:
     merged: list[RAGSearchHit] = []
     fetch_k = max(top_k * 3, top_k + 2)
@@ -613,7 +680,7 @@ def _sync_query_chunks_detailed(
                 error=str(exc),
             )
 
-    hits = _merge_rag_hits(merged, top_k, min_score=min_score)
+    hits = _merge_rag_hits(merged, top_k, min_score=min_score, query=query)
     logger.info(
         "VectorDB.search_detailed | knowledge_base_id={kb_id} hits={count} top_k={top_k} org={org}",
         kb_id=knowledge_base_id,
@@ -947,6 +1014,7 @@ async def similarity_search_detailed(
                 excluded_document_ids,
                 organization_id,
                 min_score,
+                query,
             ),
             timeout=timeout,
         )
