@@ -48,8 +48,8 @@ function AcceptInviteForm() {
       router.refresh();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось принять приглашение.";
-      if (/already exists/i.test(message)) {
-        setError("Пользователь с этим email уже есть. Войдите, затем откройте ссылку приглашения снова.");
+      if (/invalid email or password/i.test(message)) {
+        setError("Неверный пароль для этого email. Введите текущий пароль аккаунта.");
       } else if (/email does not match/i.test(message)) {
         setError("Email не совпадает с приглашением.");
       } else if (/expired/i.test(message)) {
@@ -72,8 +72,9 @@ function AcceptInviteForm() {
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">MP.AI</p>
         <h1 className="mt-2 text-2xl font-semibold text-zinc-50">Принять приглашение</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          Создайте аккаунт, чтобы войти в workspace. Лучше открыть ссылку в режиме инкогнито,
-          если вы уже залогинены под другим пользователем.
+          Новый аккаунт создастся автоматически. Если email уже зарегистрирован — введите его
+          текущий пароль. Лучше открыть ссылку в инкогнито, если вы залогинены под другим
+          пользователем.
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
@@ -132,7 +133,7 @@ function AcceptInviteForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2.5 pl-10 pr-3 text-sm text-zinc-100 outline-none focus:border-zinc-600"
-                placeholder="Минимум 8 символов"
+                placeholder="Пароль аккаунта (мин. 8)"
               />
             </div>
           </label>

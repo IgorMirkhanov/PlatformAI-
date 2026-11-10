@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.models.core_models import (
     Company,
     SubscriptionPlanName,
@@ -336,9 +336,16 @@ class TeamService:
 
         normalized_email = payload.email.strip().lower()
 
-        existing_user = await db.execute(select(User).where(User.email == normalized_email))
-        if existing_user.scalar_one_or_none() is not None:
-            raise ValueError("A user with this email already exists on the platform.")
+        existing_user = await db.scalar(select(User).where(User.email == normalized_email))
+        if existing_user is not None:
+            already_member = await db.scalar(
+                select(UserCompanyWorkspace.id).where(
+                    UserCompanyWorkspace.user_id == existing_user.id,
+                    UserCompanyWorkspace.company_id == current_user.company_id,
+                )
+            )
+            if already_member is not None:
+                raise ValueError("This user is already a member of the workspace.")
 
         pending = await db.execute(
             select(TeamInvitation).where(
@@ -417,35 +424,58 @@ class TeamService:
         if invitation.email != normalized_email:
             raise ValueError("Invitation email does not match.")
 
-        await self._ensure_seat_available(db, invitation.company_id)
-
-        existing = await db.execute(select(User).where(User.email == normalized_email))
-        if existing.scalar_one_or_none() is not None:
-            raise ValueError(
-                "A user with this email already exists. Sign in, then open the invite link again."
-            )
-
         company = await self._get_company(db, invitation.company_id)
         company_name = company.name if company is not None else "MP.AI Workspace"
+        provided_name = payload.full_name.strip()
 
-        user = User(
-            email=normalized_email,
-            hashed_password=hash_password(payload.password),
-            company_name=company_name,
-            full_name=payload.full_name.strip() or normalized_email.split("@")[0],
-            company_id=invitation.company_id,
-            role=invitation.role,
-        )
-        db.add(user)
-        await db.flush()
+        existing_user = await db.scalar(select(User).where(User.email == normalized_email))
+        if existing_user is not None:
+            if not verify_password(payload.password, existing_user.hashed_password or ""):
+                raise ValueError("Invalid email or password.")
 
-        db.add(
-            UserCompanyWorkspace(
-                user_id=user.id,
+            membership = await db.scalar(
+                select(UserCompanyWorkspace).where(
+                    UserCompanyWorkspace.user_id == existing_user.id,
+                    UserCompanyWorkspace.company_id == invitation.company_id,
+                )
+            )
+            if membership is None:
+                await self._ensure_seat_available(db, invitation.company_id)
+                db.add(
+                    UserCompanyWorkspace(
+                        user_id=existing_user.id,
+                        company_id=invitation.company_id,
+                        role=invitation.role,
+                    )
+                )
+            else:
+                membership.role = invitation.role
+
+            existing_user.company_id = invitation.company_id
+            existing_user.role = invitation.role
+            existing_user.company_name = company_name
+            if provided_name:
+                existing_user.full_name = provided_name
+            user = existing_user
+        else:
+            await self._ensure_seat_available(db, invitation.company_id)
+            user = User(
+                email=normalized_email,
+                hashed_password=hash_password(payload.password),
+                company_name=company_name,
+                full_name=provided_name or normalized_email.split("@")[0],
                 company_id=invitation.company_id,
                 role=invitation.role,
             )
-        )
+            db.add(user)
+            await db.flush()
+            db.add(
+                UserCompanyWorkspace(
+                    user_id=user.id,
+                    company_id=invitation.company_id,
+                    role=invitation.role,
+                )
+            )
 
         invitation.status = TeamInvitationStatus.ACCEPTED
         invitation.accepted_at = datetime.now(UTC)
