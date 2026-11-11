@@ -18,6 +18,8 @@ from app.schemas.core_schemas import (
     BotFlowResponse,
     BotFunctionsUpdate,
     BotLLMConfigUpdate,
+    TelegramReportBindRead,
+    TelegramReportChatRequest,
     BotPromptingUpdate,
     BotSettingsUpdate,
     ChannelIntegrationType,
@@ -601,6 +603,82 @@ async def update_bot_functions(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update custom functions.",
         ) from exc
+
+
+@router.post(
+    "/{bot_id}/functions/telegram-bind",
+    response_model=TelegramReportBindRead,
+    summary="Issue a one-time /set_ command that binds a Telegram chat",
+)
+async def issue_telegram_report_bind(
+    bot_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_bot_access(Permission.BOT_FUNCTIONS)),
+) -> TelegramReportBindRead:
+    try:
+        return await bot_management_service.issue_telegram_report_bind(db=db, bot_id=bot_id)
+    except ValueError as exc:
+        text = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if text.startswith("Bot ")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=text) from exc
+
+
+@router.post(
+    "/{bot_id}/functions/telegram-chats",
+    response_model=BotAgentProfileRead,
+    summary="Connect a Telegram chat that receives function reports",
+)
+async def connect_telegram_report_chat(
+    bot_id: uuid.UUID,
+    payload: TelegramReportChatRequest,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_bot_access(Permission.BOT_FUNCTIONS)),
+) -> BotAgentProfileRead:
+    try:
+        return await bot_management_service.connect_telegram_report_chat(
+            db=db,
+            bot_id=bot_id,
+            chat_id=payload.chat_id,
+        )
+    except ValueError as exc:
+        text = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if text.startswith("Bot ")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=text) from exc
+
+
+@router.delete(
+    "/{bot_id}/functions/telegram-chats",
+    response_model=BotAgentProfileRead,
+    summary="Disconnect a Telegram chat from function reports",
+)
+async def delete_telegram_report_chat(
+    bot_id: uuid.UUID,
+    chat_id: str,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_bot_access(Permission.BOT_FUNCTIONS)),
+) -> BotAgentProfileRead:
+    try:
+        return await bot_management_service.delete_telegram_report_chat(
+            db=db,
+            bot_id=bot_id,
+            chat_id=chat_id,
+        )
+    except ValueError as exc:
+        text = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if text.startswith("Bot ")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=text) from exc
 
 
 @router.post(

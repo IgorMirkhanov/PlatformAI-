@@ -202,6 +202,86 @@ async def execute_tool_call(
                 integrations.append("file")
                 result["result_integrations"] = integrations
 
+        if "telegram" in integrations:
+            report_chat = str(fn.get("telegram_report_chat_id") or "").strip()
+            if report_chat:
+                result["telegram_report_chat_id"] = report_chat
+                try:
+                    await _send_function_telegram_report(
+                        bot,
+                        chat_id=report_chat,
+                        tool_name=tool_name,
+                        arguments=args,
+                        message=str(result.get("message") or ""),
+                    )
+                    result["telegram_report"] = "sent"
+                except Exception as exc:
+                    result["telegram_report"] = "error"
+                    logger.warning(
+                        "ToolExecutor.telegram_report_failed | bot_id={bot_id} name={name} error={error}",
+                        bot_id=bot.id,
+                        name=tool_name,
+                        error=str(exc),
+                    )
+
+        if "custom_api" in integrations:
+            api_cfg = fn.get("custom_api") if isinstance(fn.get("custom_api"), dict) else {}
+            try:
+                api_result = await _call_function_custom_api(api_cfg, arguments=args)
+                result["custom_api"] = api_result
+            except Exception as exc:
+                result["custom_api"] = {"status": "error", "message": str(exc)[:300]}
+                logger.warning(
+                    "ToolExecutor.custom_api_failed | bot_id={bot_id} name={name} error={error}",
+                    bot_id=bot.id,
+                    name=tool_name,
+                    error=str(exc),
+                )
+
+        if "delayed" in integrations:
+            delayed_cfg = fn.get("delayed") if isinstance(fn.get("delayed"), dict) else {}
+            chat_id = str(channel_user_id or "").strip()
+            client_id = str(getattr(client, "id", "") or "").strip()
+            if chat_id and client_id:
+                try:
+                    delayed_result = _schedule_function_delayed_message(
+                        bot_id=str(bot.id),
+                        chat_id=chat_id,
+                        client_id=client_id,
+                        channel=channel,
+                        config=delayed_cfg,
+                        arguments=args,
+                    )
+                    result["delayed"] = delayed_result
+                except Exception as exc:
+                    result["delayed"] = {"status": "error", "message": str(exc)[:300]}
+                    logger.warning(
+                        "ToolExecutor.delayed_failed | bot_id={bot_id} name={name} error={error}",
+                        bot_id=bot.id,
+                        name=tool_name,
+                        error=str(exc),
+                    )
+            else:
+                result["delayed"] = {
+                    "status": "skipped",
+                    "reason": "missing_chat_or_client",
+                }
+
+        if "whatsapp" in integrations:
+            group_id = str(fn.get("whatsapp_group_id") or "").strip()
+            result["whatsapp_group_id"] = group_id or None
+            if not group_id:
+                result["whatsapp"] = {
+                    "status": "skipped",
+                    "reason": "group_not_configured",
+                }
+            else:
+                # Group delivery depends on channel binding; persist target for downstream.
+                result["whatsapp"] = {
+                    "status": "configured",
+                    "group_id": group_id,
+                }
+
         logger.info(
             "ToolExecutor.workspace_fn | bot_id={bot_id} name={name}",
             bot_id=bot.id,
@@ -228,4 +308,147 @@ def parse_tool_calls(message: Any) -> list[dict[str, Any]]:
                 "arguments": str(getattr(fn, "arguments", "") or "{}"),
             }
         )
-    return parsed
+        return parsed
+
+
+async def _send_function_telegram_report(
+    bot: Bot,
+    *,
+    chat_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    message: str,
+) -> None:
+    from app.models.bot import get_telegram_bot_token
+    from app.services.telegram_service import telegram_service
+
+    token = get_telegram_bot_token(bot)
+    lines = [f"Отчёт функции {tool_name}"]
+    text = (message or "").strip()
+    if text:
+        lines.append(text)
+    for key, value in list((arguments or {}).items())[:12]:
+        rendered = str(value).replace("\n", " ").strip()
+        if rendered:
+            lines.append(f"{key}: {rendered[:300]}")
+    await telegram_service.send_message(token, chat_id, "\n".join(lines)[:3500], [])
+
+
+def _interpolate_template(template: str, arguments: dict[str, Any]) -> str:
+    text = str(template or "")
+    for key, value in (arguments or {}).items():
+        text = text.replace(f"{{{{{key}}}}}", str(value))
+        text = text.replace(f"{{{key}}}", str(value))
+    return text
+
+
+def _kv_map(rows: object, arguments: dict[str, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not isinstance(rows, list):
+        return out
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("enabled") is False:
+            continue
+        key = str(row.get("key") or "").strip()
+        if not key:
+            continue
+        value = _interpolate_template(str(row.get("value") or ""), arguments)
+        out[key] = value
+    return out
+
+
+async def _call_function_custom_api(
+    config: dict[str, Any],
+    *,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    import httpx
+
+    from app.core.url_safety import assert_safe_public_https_url
+
+    raw_url = _interpolate_template(str(config.get("url") or "").strip(), arguments)
+    if not raw_url:
+        return {"status": "skipped", "reason": "url_missing"}
+    safe_url = assert_safe_public_https_url(raw_url)
+    method = str(config.get("method") or "GET").strip().upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        method = "GET"
+    params = _kv_map(config.get("params"), arguments)
+    headers = _kv_map(config.get("headers"), arguments)
+    body = _kv_map(config.get("body"), arguments)
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.request(
+            method,
+            safe_url,
+            params=params or None,
+            headers=headers or None,
+            json=body if body and method != "GET" else None,
+        )
+
+    preview = (response.text or "")[:500]
+    return {
+        "status": "ok" if response.is_success else "error",
+        "status_code": int(response.status_code),
+        "method": method,
+        "url": safe_url,
+        "body_preview": preview,
+    }
+
+
+def _schedule_function_delayed_message(
+    *,
+    bot_id: str,
+    chat_id: str,
+    client_id: str,
+    channel: str,
+    config: dict[str, Any],
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    from datetime import UTC, datetime, timedelta
+
+    from app.tasks.follow_up_task import send_function_delayed_message
+
+    message = _interpolate_template(str(config.get("message") or "").strip(), arguments)
+    if not message:
+        return {"status": "skipped", "reason": "empty_message"}
+
+    mode = str(config.get("mode") or "absolute").strip().lower()
+    countdown = 300
+    if mode == "relative":
+        try:
+            countdown = max(1, int(config.get("delay_minutes") or 5) * 60)
+        except (TypeError, ValueError):
+            countdown = 300
+    else:
+        date_s = str(config.get("date") or "").strip()
+        time_s = str(config.get("time") or "00:00").strip() or "00:00"
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo("Asia/Almaty")
+            target = datetime.strptime(f"{date_s} {time_s}", "%Y-%m-%d %H:%M").replace(
+                tzinfo=tz
+            )
+            countdown = max(1, int((target - datetime.now(tz)).total_seconds()))
+        except ValueError:
+            countdown = max(1, int(config.get("delay_minutes") or 5) * 60)
+
+    async_result = send_function_delayed_message.apply_async(
+        kwargs={
+            "bot_id": bot_id,
+            "chat_id": chat_id,
+            "client_id": client_id,
+            "channel": channel,
+            "message": message[:3500],
+        },
+        countdown=countdown,
+    )
+    return {
+        "status": "scheduled",
+        "countdown": countdown,
+        "task_id": async_result.id,
+        "eta": (datetime.now(UTC) + timedelta(seconds=countdown)).isoformat(),
+    }

@@ -31,9 +31,13 @@ function emptyFunction(): FunctionToolDefinition {
     result_integrations: [],
     result_fields: [],
     result_file: null,
+    custom_api: null,
+    delayed: null,
+    whatsapp_group_id: null,
     post_scenario: "continue",
     nested_function_id: null,
     disable_delayed_messages: false,
+    telegram_report_chat_id: null,
     is_active: true,
   };
 }

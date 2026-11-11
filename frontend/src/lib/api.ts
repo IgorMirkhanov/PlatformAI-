@@ -919,6 +919,40 @@ export async function updateBotFunctions(
   });
 }
 
+export interface TelegramReportBind {
+  command: string;
+  expires_at: string;
+  telegram_url: string;
+  bot_username: string | null;
+}
+
+export async function createTelegramReportBind(botId: string): Promise<TelegramReportBind> {
+  return apiRequest<TelegramReportBind>(`/api/v1/bots/${botId}/functions/telegram-bind`, {
+    method: "POST",
+  });
+}
+
+export async function connectTelegramReportChat(
+  botId: string,
+  chatId: string,
+): Promise<BotAgentProfile> {
+  return apiRequest<BotAgentProfile>(`/api/v1/bots/${botId}/functions/telegram-chats`, {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chatId }),
+  });
+}
+
+export async function deleteTelegramReportChat(
+  botId: string,
+  chatId: string,
+): Promise<BotAgentProfile> {
+  const query = new URLSearchParams({ chat_id: chatId });
+  return apiRequest<BotAgentProfile>(
+    `/api/v1/bots/${botId}/functions/telegram-chats?${query.toString()}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function fetchAgentRagCollections(
   botId: string,
 ): Promise<{ bot_id: string; items: import("@/types/agent").AgentRagCollection[] }> {

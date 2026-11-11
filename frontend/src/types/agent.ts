@@ -44,6 +44,7 @@ export interface BotAgentProfile {
   message_buffer_delay: number;
   custom_code_snippet: string;
   function_tools?: FunctionToolDefinition[];
+  telegram_report_chats?: TelegramReportChat[];
   agent_rag?: AgentRagCollection[];
   openai_tools?: OpenAIToolSchema[];
   show_username_visibility: boolean;
@@ -214,6 +215,40 @@ export interface FunctionResultFile {
   message: string;
 }
 
+export interface FunctionKeyValueRow {
+  id: string;
+  key: string;
+  value: string;
+  enabled?: boolean;
+}
+
+export type FunctionCustomApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface FunctionCustomApiConfig {
+  method: FunctionCustomApiMethod;
+  url: string;
+  params: FunctionKeyValueRow[];
+  headers: FunctionKeyValueRow[];
+  body: FunctionKeyValueRow[];
+}
+
+export type FunctionDelayedMode = "absolute" | "relative";
+export type FunctionDelayedSource = "static";
+export type FunctionDelayedContentMode = "message";
+
+export interface FunctionDelayedConfig {
+  mode: FunctionDelayedMode;
+  source: FunctionDelayedSource;
+  /** Local date YYYY-MM-DD when mode=absolute */
+  date?: string;
+  /** Local time HH:mm when mode=absolute */
+  time?: string;
+  /** Minutes from now when mode=relative */
+  delay_minutes?: number;
+  content_mode: FunctionDelayedContentMode;
+  message: string;
+}
+
 export interface FunctionToolDefinition {
   id: string;
   name: string;
@@ -225,10 +260,45 @@ export interface FunctionToolDefinition {
   result_integrations?: FunctionIntegrationKind[];
   result_fields?: FunctionResultField[];
   result_file?: FunctionResultFile | null;
+  custom_api?: FunctionCustomApiConfig | null;
+  delayed?: FunctionDelayedConfig | null;
+  whatsapp_group_id?: string | null;
   post_scenario?: "continue" | "end";
   nested_function_id?: string | null;
   disable_delayed_messages?: boolean;
+  telegram_report_chat_id?: string | null;
   is_active: boolean;
+}
+
+export function emptyCustomApiConfig(): FunctionCustomApiConfig {
+  return {
+    method: "GET",
+    url: "",
+    params: [],
+    headers: [],
+    body: [],
+  };
+}
+
+export function emptyDelayedConfig(): FunctionDelayedConfig {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    mode: "absolute",
+    source: "static",
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    delay_minutes: 5,
+    content_mode: "message",
+    message: "",
+  };
+}
+
+export interface TelegramReportChat {
+  chat_id: string;
+  title: string;
+  connected_at: string;
+  active: boolean;
 }
 
 export type FunctionIntegrationKind =
@@ -265,7 +335,7 @@ export const FUNCTION_INTEGRATION_OPTIONS: Array<{
   label: string;
 }> = [
   { id: "none", label: "Не отправлять" },
-  { id: "telegram", label: "Telegram отчёт" },
+  { id: "telegram", label: "Telegram отчет" },
   { id: "whatsapp", label: "WhatsApp-группа" },
   { id: "google_sheets", label: "Google Sheets" },
   { id: "custom_api", label: "Custom API" },
@@ -273,6 +343,20 @@ export const FUNCTION_INTEGRATION_OPTIONS: Array<{
   { id: "python", label: "Python" },
   { id: "tags", label: "Теги" },
   { id: "delayed", label: "Отложенные" },
+];
+
+/** Menu on the function page. Order matches the delivery picker. */
+export const FUNCTION_RESULT_INTEGRATION_MENU: Array<{
+  id: FunctionIntegrationKind;
+  label: string;
+}> = [
+  { id: "telegram", label: "Telegram отчет" },
+  { id: "whatsapp", label: "WhatsApp-группа" },
+  { id: "custom_api", label: "Custom API" },
+  { id: "file", label: "Отправка файла" },
+  { id: "delayed", label: "Отложенные" },
+  { id: "python", label: "Python" },
+  { id: "tags", label: "Теги" },
 ];
 
 

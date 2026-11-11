@@ -19,11 +19,21 @@ import { PageSkeleton } from "@/components/ui/Skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/useToast";
 import { useAgentWorkspace } from "@/hooks/useAgentWorkspace";
-import { uploadBotFunctionFile } from "@/lib/api";
+import { FunctionIntegrationPicker, TelegramReportChatCard } from "@/components/bots/FunctionIntegrationsField";
+import { FunctionResultDeliveryPanels } from "@/components/bots/FunctionResultDeliveryPanels";
+import {
+  connectTelegramReportChat,
+  createTelegramReportBind,
+  deleteTelegramReportChat,
+  uploadBotFunctionFile,
+} from "@/lib/api";
 import { getApiErrorMessage, useBotStore } from "@/store/useBotStore";
 import {
-  FUNCTION_INTEGRATION_OPTIONS,
   FUNCTION_NAME_PATTERN,
+  emptyCustomApiConfig,
+  emptyDelayedConfig,
+  type FunctionCustomApiConfig,
+  type FunctionDelayedConfig,
   type FunctionIntegrationKind,
   type FunctionParamType,
   type FunctionResultField,
@@ -38,8 +48,6 @@ const PARAM_TYPES: Array<{ id: FunctionParamType; label: string }> = [
   { id: "number", label: "Числовой" },
   { id: "boolean", label: "Логический" },
 ];
-
-const RESULT_INTEGRATION_PICKER = FUNCTION_INTEGRATION_OPTIONS.filter((o) => o.id !== "none");
 
 const fieldClass =
   "h-9 w-full rounded-lg border border-zinc-600 bg-[#0c0c0e] px-2.5 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-500 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/40";
@@ -81,6 +89,8 @@ export default function FunctionEditorPage() {
   const router = useRouter();
   const { profile, loading } = useAgentWorkspace(botId);
   const saveAgentFunctions = useBotStore((state) => state.saveAgentFunctions);
+  const setAgentProfile = useBotStore((state) => state.setAgentProfile);
+  const loadAgentProfile = useBotStore((state) => state.loadAgentProfile);
   const saving = useBotStore((state) => state.profileSaving[botId] ?? false);
   const { showToast } = useToast();
 
@@ -91,6 +101,7 @@ export default function FunctionEditorPage() {
 
   const [draft, setDraft] = useState<FunctionToolDefinition | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [connectingChat, setConnectingChat] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const current = draft ?? source ?? null;
   const allFunctions = profile?.function_tools ?? [];
@@ -164,15 +175,63 @@ export default function FunctionEditorPage() {
     current.integration !== "none" ? [current.integration] : []
   );
   const resultFields = current.result_fields ?? [];
+  const hasDedicatedResultPanel =
+    resultIntegrations.includes("telegram") ||
+    resultIntegrations.includes("file") ||
+    resultIntegrations.includes("custom_api") ||
+    resultIntegrations.includes("whatsapp") ||
+    resultIntegrations.includes("delayed");
 
   const toggleIntegration = (id: FunctionIntegrationKind): void => {
     const next = resultIntegrations.includes(id)
       ? resultIntegrations.filter((x) => x !== id)
       : [...resultIntegrations, id];
-    update({
+    const patch: Partial<FunctionToolDefinition> = {
       result_integrations: next,
       integration: next[0] ?? "none",
-    });
+    };
+    if (next.includes("custom_api") && !current.custom_api) {
+      patch.custom_api = emptyCustomApiConfig();
+    }
+    if (next.includes("delayed") && !current.delayed) {
+      patch.delayed = emptyDelayedConfig();
+    }
+    update(patch);
+  };
+
+  const updateCustomApi = (next: FunctionCustomApiConfig): void => {
+    update({ custom_api: next });
+  };
+
+  const updateDelayed = (next: FunctionDelayedConfig): void => {
+    update({ delayed: next });
+  };
+
+  const handleConnectChat = async (chatId: string): Promise<void> => {
+    setConnectingChat(true);
+    try {
+      const nextProfile = await connectTelegramReportChat(botId, chatId);
+      setAgentProfile(nextProfile);
+      update({ telegram_report_chat_id: chatId.trim().replace(/\s/g, "") });
+      showToast("Чат подключён. Нажмите «Сохранить», чтобы отчёт шёл в него.", "success");
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Не удалось подключить чат."), "error");
+      throw error;
+    } finally {
+      setConnectingChat(false);
+    }
+  };
+
+  const handleDeleteChat = async (chatId: string): Promise<void> => {
+    try {
+      const nextProfile = await deleteTelegramReportChat(botId, chatId);
+      setAgentProfile(nextProfile);
+      if ((current.telegram_report_chat_id || "") === chatId) {
+        update({ telegram_report_chat_id: null });
+      }
+    } catch (error) {
+      showToast(getApiErrorMessage(error, "Не удалось отключить чат."), "error");
+    }
   };
 
   const updateField = (index: number, patch: Partial<FunctionResultField>): void => {
@@ -475,28 +534,47 @@ export default function FunctionEditorPage() {
       <Section title="Отправка результатов">
         <div>
           <FieldLabel>Интеграции</FieldLabel>
-          <div className="mt-1.5 flex flex-wrap gap-2">
-            {RESULT_INTEGRATION_PICKER.map((opt) => {
-              const active = resultIntegrations.includes(opt.id);
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => toggleIntegration(opt.id)}
-                  className={cn(
-                    "rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
-                    active
-                      ? "border-violet-400/60 bg-violet-600 text-white shadow-[0_0_0_1px_rgba(167,139,250,0.35)]"
-                      : "border-zinc-600 bg-[#0c0c0e] text-zinc-300 hover:border-zinc-400 hover:text-white",
-                  )}
-                >
-                  {opt.label}
-                  {active ? " ×" : ""}
-                </button>
-              );
-            })}
-          </div>
+          <FunctionIntegrationPicker
+            selected={resultIntegrations}
+            onToggle={toggleIntegration}
+            onClear={() => update({ result_integrations: [], integration: "none" })}
+          />
         </div>
+
+        {resultIntegrations.includes("telegram") ? (
+          <TelegramReportChatCard
+            chats={profile.telegram_report_chats ?? []}
+            selectedChatId={current.telegram_report_chat_id ?? null}
+            onSelect={(chatId) => update({ telegram_report_chat_id: chatId })}
+            onConnect={handleConnectChat}
+            onDelete={handleDeleteChat}
+            onIssueBind={async () => {
+              try {
+                return await createTelegramReportBind(botId);
+              } catch (error) {
+                throw new Error(getApiErrorMessage(error, "Не удалось создать команду."));
+              }
+            }}
+            onRefreshChats={async () => {
+              const next = await loadAgentProfile(botId);
+              return next?.telegram_report_chats ?? [];
+            }}
+            onBound={() => {
+              showToast("Чат подключён. Нажмите «Сохранить», чтобы отчёт шёл в него.", "success");
+            }}
+            connecting={connectingChat}
+          />
+        ) : null}
+
+        <FunctionResultDeliveryPanels
+          integrations={resultIntegrations}
+          customApi={current.custom_api}
+          delayed={current.delayed}
+          whatsappGroupId={current.whatsapp_group_id}
+          onCustomApiChange={updateCustomApi}
+          onDelayedChange={updateDelayed}
+          onWhatsappGroupChange={(value) => update({ whatsapp_group_id: value || null })}
+        />
 
         {resultIntegrations.includes("file") ? (
           <div className="space-y-3">
@@ -632,7 +710,30 @@ export default function FunctionEditorPage() {
               ) : null}
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {!hasDedicatedResultPanel && resultFields.length === 0 ? (
+          <div className="rounded-xl border border-zinc-700 bg-[#121214] px-4 py-8 text-center">
+            <p className="text-sm text-zinc-500">Нет параметров для настройки</p>
+            <button
+              type="button"
+              aria-label="Добавить параметр результата"
+              onClick={() =>
+                update({
+                  result_fields: [
+                    ...resultFields,
+                    { id: crypto.randomUUID(), name: "", action: "text", value: "" },
+                  ],
+                })
+              }
+              className="mx-auto mt-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-violet-600 text-white shadow-[0_0_0_1px_rgba(139,92,246,0.45)] hover:bg-violet-500"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        ) : null}
+
+        {resultFields.length > 0 ? (
           <div className="space-y-2">
             <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               <span>Имя</span>
@@ -691,7 +792,7 @@ export default function FunctionEditorPage() {
               <Plus className="h-4 w-4" />
             </button>
           </div>
-        )}
+        ) : null}
       </Section>
 
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">

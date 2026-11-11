@@ -257,6 +257,55 @@ class TelegramService:
             )
             return {"status": "ignored", "reason": "unknown_bot"}
 
+        # Polling path never hits the FastAPI webhook handler, so /set_ bind
+        # must be claimed here before the message reaches the AI agent.
+        if isinstance(update, dict):
+            try:
+                from app.services.bot_workspace_config import (
+                    absorb_telegram_report_chat,
+                    claim_telegram_bind_command,
+                )
+
+                bound_chat_id = claim_telegram_bind_command(bot, update)
+                if bound_chat_id is None:
+                    absorb_telegram_report_chat(bot, update)
+                else:
+                    await db.flush()
+                    if bound_chat_id:
+                        try:
+                            token = self.extract_bot_token(bot)
+                            await self.send_message(
+                                bot_token=token,
+                                chat_id=bound_chat_id,
+                                text="Чат подключён для отчётов.",
+                                buttons=[],
+                                bot_id=bot.id,
+                                db=db,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "TelegramService.bind_ack_failed | bot_id={bot_id} error={error}",
+                                bot_id=bot.id,
+                                error=str(exc),
+                            )
+                        logger.info(
+                            "TelegramService.report_chat_bound | bot_id={bot_id} chat_id={chat_id}",
+                            bot_id=bot.id,
+                            chat_id=bound_chat_id,
+                        )
+                        return {
+                            "status": "processed",
+                            "reason": "telegram_report_bound",
+                            "chat_id": bound_chat_id,
+                        }
+                    return {"status": "ignored", "reason": "telegram_report_bind_expired"}
+            except Exception as exc:
+                logger.warning(
+                    "TelegramService.report_chat_skip | bot_id={bot_id} error={error}",
+                    bot_id=bot.id,
+                    error=str(exc),
+                )
+
         inbound = self.parse_update(update)
         if inbound is None:
             return {"status": "ignored", "reason": "unsupported_update"}
@@ -452,6 +501,33 @@ class TelegramService:
                 with suppress(Exception):
                     await db.rollback()
             raise
+
+    async def get_chat(self, bot_token: str, chat_id: str) -> dict[str, Any]:
+        """Resolve a chat the bot can post to. Raises ValueError with a user-facing message."""
+        url = f"{settings.TELEGRAM_API_BASE}/bot{bot_token}/getChat"
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url, params={"chat_id": chat_id})
+        except httpx.HTTPError as exc:
+            raise ValueError("Telegram сейчас не отвечает. Попробуйте ещё раз.") from exc
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if response.status_code < 400 and isinstance(data, dict) and data.get("ok"):
+            result = data.get("result")
+            return result if isinstance(result, dict) else {}
+        description = ""
+        if isinstance(data, dict):
+            description = str(data.get("description") or "")
+        lowered = description.lower()
+        if "unauthorized" in lowered:
+            raise ValueError("Токен Telegram-бота недействителен. Подключите бота заново в каналах.")
+        if "not found" in lowered or "chat not found" in lowered:
+            raise ValueError("Telegram не нашёл этот чат. Добавьте бота в группу и проверьте ID.")
+        if "kicked" in lowered or "forbidden" in lowered:
+            raise ValueError("Бота удалили из этого чата. Добавьте его снова и повторите.")
+        raise ValueError(description or "Не удалось подключить чат Telegram.")
 
     async def send_message(
         self,

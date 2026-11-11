@@ -266,6 +266,43 @@ async def telegram_webhook(
             # Acknowledge to Telegram so it does not retry malformed noise forever.
             return Response(status_code=status.HTTP_200_OK)
 
+        bound_chat_id: str | None = None
+        if isinstance(raw_body, dict):
+            try:
+                from app.services.bot_workspace_config import (
+                    absorb_telegram_report_chat,
+                    claim_telegram_bind_command,
+                )
+
+                bound_chat_id = claim_telegram_bind_command(bot, raw_body)
+                if bound_chat_id is None:
+                    absorb_telegram_report_chat(bot, raw_body)
+            except Exception as exc:
+                logger.warning(
+                    "WebhookEndpoint.telegram_report_chat_skip | bot_id={bot_id} error={error}",
+                    bot_id=bot.id,
+                    error=str(exc),
+                )
+        if bound_chat_id is not None:
+            if bound_chat_id:
+                try:
+                    from app.models.bot import get_telegram_bot_token
+
+                    token = get_telegram_bot_token(bot)
+                    await telegram_service.send_message(
+                        token,
+                        bound_chat_id,
+                        "Чат подключён для отчётов.",
+                        [],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "WebhookEndpoint.telegram_bind_ack_failed | bot_id={bot_id} error={error}",
+                        bot_id=bot.id,
+                        error=str(exc),
+                    )
+            return Response(status_code=status.HTTP_200_OK)
+
         parsed = telegram_service.extract_inbound_fields(update)
         logger.debug(
             "WebhookEndpoint.telegram_received | bot_id={bot_id} chat_id={chat_id} text_len={length}",

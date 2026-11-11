@@ -946,6 +946,17 @@ class BotFunctionsUpdate(BaseModel):
     function_tools: list[dict[str, Any]] | None = None
 
 
+class TelegramReportChatRequest(BaseModel):
+    chat_id: str = Field(min_length=1, max_length=32)
+
+
+class TelegramReportBindRead(BaseModel):
+    command: str
+    expires_at: datetime
+    telegram_url: str
+    bot_username: str | None = None
+
+
 class BotAvatarUploadResponse(BaseModel):
     bot_id: uuid.UUID
     avatar_url: str
@@ -978,6 +989,7 @@ class BotAgentProfileRead(BaseModel):
     message_buffer_delay: int
     custom_code_snippet: str
     function_tools: list[dict[str, Any]] = Field(default_factory=list)
+    telegram_report_chats: list[dict[str, Any]] = Field(default_factory=list)
     agent_rag: list[dict[str, Any]] = Field(default_factory=list)
     openai_tools: list[dict[str, Any]] = Field(default_factory=list)
     show_username_visibility: bool = False
@@ -1031,6 +1043,7 @@ class BotAgentProfileRead(BaseModel):
             str(credentials["avatar_url"]) if credentials.get("avatar_url") else None
         )
         payload["function_tools"] = workspace["functions"]
+        payload["telegram_report_chats"] = list(workspace.get("telegram_report_chats") or [])
         payload["agent_rag"] = workspace["agent_rag"]
         payload["openai_tools"] = openai_tools_for_bot(data)
         payload["control_config"] = get_control_config(data)

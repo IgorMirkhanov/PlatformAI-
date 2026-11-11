@@ -619,3 +619,78 @@ async def _send_follow_up_async(
         max_n=max_sends,
     )
     return {"status": "sent", "sent_count": str(next_sent)}
+
+
+@celery_app.task(
+    name="app.tasks.follow_up_task.send_function_delayed_message",
+    bind=True,
+    max_retries=2,
+)
+def send_function_delayed_message(
+    self,
+    *,
+    bot_id: str,
+    chat_id: str,
+    client_id: str,
+    message: str,
+    channel: str = "telegram",
+) -> dict[str, str]:
+    """One-shot delayed delivery configured on an agent function."""
+    return run_celery_async(
+        _send_function_delayed_async(
+            bot_id=bot_id,
+            chat_id=chat_id,
+            client_id=client_id,
+            message=message,
+            channel=(channel or "telegram").strip().lower() or "telegram",
+        )
+    )
+
+
+async def _send_function_delayed_async(
+    *,
+    bot_id: str,
+    chat_id: str,
+    client_id: str,
+    message: str,
+    channel: str,
+) -> dict[str, str]:
+    from app.core.database import async_session_factory
+    from app.models.core_models import Bot
+
+    text = (message or "").strip()
+    if not text:
+        return {"status": "skipped", "reason": "empty_message"}
+
+    async with async_session_factory() as db:
+        bot = await db.get(Bot, uuid.UUID(bot_id))
+        if bot is None or not bot.is_active:
+            return {"status": "skipped", "reason": "bot_inactive"}
+        try:
+            await _deliver_channel_text(
+                db,
+                bot=bot,
+                channel=channel,
+                chat_id=chat_id,
+                client_id=uuid.UUID(client_id),
+                text=text[:3500],
+            )
+            await _persist_follow_up_message(
+                db, client_id=uuid.UUID(client_id), text=text[:3500]
+            )
+            await db.commit()
+        except Exception as exc:
+            logger.warning(
+                "FunctionDelayed.deliver_failed | bot_id={bot_id} channel={channel} error={error}",
+                bot_id=bot_id,
+                channel=channel,
+                error=str(exc),
+            )
+            return {"status": "skipped", "reason": "deliver_failed"}
+
+    logger.info(
+        "FunctionDelayed.sent | bot_id={bot_id} chat_id={chat_id}",
+        bot_id=bot_id,
+        chat_id=chat_id,
+    )
+    return {"status": "sent"}

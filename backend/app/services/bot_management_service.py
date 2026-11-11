@@ -139,6 +139,81 @@ OMNICHANNEL_DEFINITIONS: tuple[ChannelIntegrationType, ...] = (
 )
 
 
+def _normalize_kv_rows(raw: object) -> list[dict]:
+    rows: list[dict] = []
+    if not isinstance(raw, list):
+        return rows
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        value = str(item.get("value") or "")
+        row_id = str(item.get("id") or "").strip() or str(uuid.uuid4())
+        rows.append(
+            {
+                "id": row_id,
+                "key": key,
+                "value": value,
+                "enabled": bool(item.get("enabled", True)),
+            }
+        )
+    return rows
+
+
+def _normalize_function_custom_api(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    method = str(raw.get("method") or "GET").strip().upper()
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        method = "GET"
+    return {
+        "method": method,
+        "url": str(raw.get("url") or "").strip(),
+        "params": _normalize_kv_rows(raw.get("params")),
+        "headers": _normalize_kv_rows(raw.get("headers")),
+        "body": _normalize_kv_rows(raw.get("body")),
+    }
+
+
+def _normalize_function_delayed(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    mode = str(raw.get("mode") or "absolute").strip().lower()
+    if mode not in {"absolute", "relative"}:
+        mode = "absolute"
+    delay_minutes = raw.get("delay_minutes")
+    try:
+        delay_minutes_i = max(1, int(delay_minutes or 5))
+    except (TypeError, ValueError):
+        delay_minutes_i = 5
+    return {
+        "mode": mode,
+        "source": "static",
+        "date": str(raw.get("date") or "").strip() or None,
+        "time": str(raw.get("time") or "").strip() or None,
+        "delay_minutes": delay_minutes_i,
+        "content_mode": "message",
+        "message": str(raw.get("message") or ""),
+    }
+
+
+def _telegram_username(bot: Bot) -> str | None:
+    credentials = bot.credentials if isinstance(bot.credentials, dict) else {}
+    username = credentials.get("telegram_username")
+    if not username:
+        channels = credentials.get("channels")
+        channels = channels if isinstance(channels, dict) else {}
+        for key in ("telegram", "telegram_business"):
+            block = channels.get(key)
+            if isinstance(block, dict) and block.get("telegram_username"):
+                username = block.get("telegram_username")
+                break
+    if not isinstance(username, str):
+        return None
+    cleaned = username.strip().lstrip("@")
+    return cleaned or None
+
+
 class BotManagementService:
     """Lifecycle management for bots, channel credentials, and published flows."""
 
@@ -1299,10 +1374,20 @@ class BotManagementService:
                             if isinstance(item.get("result_file"), dict)
                             else None
                         ),
+                        "custom_api": _normalize_function_custom_api(
+                            item.get("custom_api")
+                        ),
+                        "delayed": _normalize_function_delayed(item.get("delayed")),
+                        "whatsapp_group_id": (
+                            str(item.get("whatsapp_group_id") or "").strip() or None
+                        ),
                         "post_scenario": str(item.get("post_scenario") or "continue"),
                         "nested_function_id": item.get("nested_function_id") or None,
                         "disable_delayed_messages": bool(
                             item.get("disable_delayed_messages", False)
+                        ),
+                        "telegram_report_chat_id": (
+                            str(item.get("telegram_report_chat_id") or "").strip() or None
                         ),
                         "is_active": bool(item.get("is_active", True)),
                     }
@@ -1319,6 +1404,91 @@ class BotManagementService:
             bot_id=bot_id,
             length=len(payload.custom_code_snippet or ""),
         )
+        return BotAgentProfileRead.model_validate(bot)
+
+    async def connect_telegram_report_chat(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        chat_id: str,
+    ) -> BotAgentProfileRead:
+        from app.models.bot import get_telegram_bot_token
+        from app.services.bot_workspace_config import (
+            normalize_report_chat_id,
+            upsert_telegram_report_chat,
+        )
+        from app.services.telegram_service import telegram_service
+
+        bot = await self._get_bot(db, bot_id)
+        cleaned = normalize_report_chat_id(chat_id)
+        try:
+            token = get_telegram_bot_token(bot)
+        except ValueError as exc:
+            raise ValueError("Сначала подключите Telegram-бота в разделе каналов.") from exc
+        chat = await telegram_service.get_chat(token, cleaned)
+        title = str(chat.get("title") or chat.get("username") or "Telegram-чат").strip()
+        upsert_telegram_report_chat(bot, chat_id=cleaned, title=title or "Telegram-чат")
+        await db.flush()
+        await db.refresh(bot)
+        return BotAgentProfileRead.model_validate(bot)
+
+    async def issue_telegram_report_bind(self, db: AsyncSession, bot_id: uuid.UUID):
+        from urllib.parse import quote
+
+        from app.models.bot import get_telegram_bot_token
+        from app.schemas.core_schemas import TelegramReportBindRead
+        from app.services.bot_workspace_config import issue_telegram_report_bind
+
+        bot = await self._get_bot(db, bot_id)
+        try:
+            get_telegram_bot_token(bot)
+        except ValueError as exc:
+            raise ValueError("Сначала подключите Telegram-бота в разделе каналов.") from exc
+        issued = issue_telegram_report_bind(bot)
+        username = _telegram_username(bot)
+        text = quote(issued["command"])
+        if username:
+            link = quote(f"https://t.me/{username}")
+            telegram_url = f"https://t.me/share/url?url={link}&text={text}"
+        else:
+            telegram_url = f"https://t.me/share/url?text={text}"
+        await db.flush()
+        return TelegramReportBindRead(
+            command=issued["command"],
+            expires_at=datetime.fromisoformat(issued["expires_at"]),
+            telegram_url=telegram_url,
+            bot_username=username,
+        )
+
+    async def delete_telegram_report_chat(
+        self,
+        db: AsyncSession,
+        bot_id: uuid.UUID,
+        chat_id: str,
+    ) -> BotAgentProfileRead:
+        from app.services.bot_workspace_config import (
+            normalize_report_chat_id,
+            remove_telegram_report_chat,
+        )
+
+        bot = await self._get_bot(db, bot_id)
+        cleaned = normalize_report_chat_id(chat_id)
+        remove_telegram_report_chat(bot, cleaned)
+        workspace_functions = []
+        from app.services.bot_workspace_config import get_workspace, set_workspace
+
+        workspace = get_workspace(bot)
+        changed = False
+        for item in workspace.get("functions") or []:
+            if isinstance(item, dict) and str(item.get("telegram_report_chat_id") or "") == cleaned:
+                item["telegram_report_chat_id"] = None
+                changed = True
+            workspace_functions.append(item)
+        if changed:
+            workspace["functions"] = workspace_functions
+            set_workspace(bot, workspace)
+        await db.flush()
+        await db.refresh(bot)
         return BotAgentProfileRead.model_validate(bot)
 
     async def toggle_knowledge_document_context(
