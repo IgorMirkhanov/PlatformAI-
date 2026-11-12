@@ -160,7 +160,7 @@ export default function WazzupChannelPage() {
       ) : null}
       <ChannelActionButtons
         connected={Boolean(status?.connected)}
-        pending={isPending}
+        isPending={isPending}
         onConnect={() => void handleConnect()}
         onDisconnect={() => void handleDisconnect()}
       />
