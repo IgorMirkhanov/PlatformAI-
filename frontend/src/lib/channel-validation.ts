@@ -57,15 +57,16 @@ export function validateHubWabaForm(values: {
 export function validateHubWazzupForm(values: {
   api_key: string;
   channel_id?: string;
+  require_channel_id?: boolean;
 }): string | null {
   if (!values.api_key.trim()) {
     return "Укажите API-ключ Wazzup.";
   }
-  if (values.api_key.trim().length < 16) {
+  if (values.api_key.trim().length < 8) {
     return "API-ключ Wazzup слишком короткий.";
   }
-  if (!values.channel_id?.trim()) {
-    return "Укажите Channel ID.";
+  if (values.require_channel_id && !values.channel_id?.trim()) {
+    return "Выберите канал Wazzup.";
   }
   return null;
 }

@@ -9,7 +9,9 @@ import {
   connectHubChannel,
   disconnectHubChannel,
   patchHubChannelEnabled,
+  previewWazzupChannels,
   startInstagramOAuth,
+  type WazzupPreviewChannel,
 } from "@/lib/api";
 import { rememberInstagramOAuthReturn } from "@/lib/integrations/hubOAuthPopup";
 import {
@@ -119,11 +121,12 @@ function buildConnectPayload(
     const validationError = validateHubWazzupForm({
       api_key: fields.apiKey,
       channel_id: fields.referenceId,
+      require_channel_id: Boolean(fields.referenceId.trim()) || undefined,
     });
     if (validationError) throw new Error(validationError);
     return {
       api_key: fields.apiKey.trim(),
-      reference_id: fields.referenceId.trim(),
+      reference_id: fields.referenceId.trim() || undefined,
     };
   }
 
@@ -205,6 +208,8 @@ export function ChannelConfigModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [wazzupChannels, setWazzupChannels] = useState<WazzupPreviewChannel[]>([]);
+  const [loadingWazzupChannels, setLoadingWazzupChannels] = useState(false);
 
   const [token, setToken] = useState("");
   const [apiId, setApiId] = useState("");
@@ -227,6 +232,8 @@ export function ChannelConfigModal({
       setError(null);
       setSaving(false);
       setQrOpen(false);
+      setWazzupChannels([]);
+      setLoadingWazzupChannels(false);
       setToken("");
       setApiId("");
       setApiHash("");
@@ -244,6 +251,40 @@ export function ChannelConfigModal({
       setSipPort("5060");
     }
   }, [open]);
+
+  const loadWazzupChannels = useCallback(async () => {
+    const key = apiKey.trim();
+    const validationError = validateHubWazzupForm({ api_key: key });
+    if (validationError) {
+      setError(validationError);
+      showToast(validationError, "error");
+      return;
+    }
+    setError(null);
+    setLoadingWazzupChannels(true);
+    try {
+      const response = await previewWazzupChannels(botId, key);
+      const channels = response.channels ?? [];
+      setWazzupChannels(channels);
+      if (channels.length === 0) {
+        setError("В аккаунте Wazzup нет каналов.");
+        return;
+      }
+      const preferred =
+        channels.find((item) => String(item.state || "").toLowerCase() === "active") ??
+        channels[0];
+      if (preferred?.channel_id) {
+        setReferenceId(preferred.channel_id);
+      }
+      showToast(`Найдено каналов: ${channels.length}`, "success");
+    } catch (err) {
+      const message = getApiErrorMessage(err, "Не удалось загрузить каналы Wazzup.");
+      setError(message);
+      showToast(message, "error");
+    } finally {
+      setLoadingWazzupChannels(false);
+    }
+  }, [apiKey, botId, showToast]);
 
   const channelType = channel?.id ?? null;
   const connected = isHubChannelConnected(status);
@@ -439,8 +480,44 @@ export function ChannelConfigModal({
 
             {channelType === "wazzup" ? (
               <>
-                <Field label="API Key" value={apiKey} onChange={setApiKey} password />
-                <Field label="Channel ID" value={referenceId} onChange={setReferenceId} />
+                <Field label="API-ключ Wazzup" value={apiKey} onChange={setApiKey} password />
+                <button
+                  type="button"
+                  disabled={loadingWazzupChannels || saving}
+                  onClick={() => void loadWazzupChannels()}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-2.5 text-sm font-medium text-violet-100 hover:bg-violet-500/15 disabled:opacity-50"
+                >
+                  {loadingWazzupChannels ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  Загрузить каналы
+                </button>
+                {wazzupChannels.length > 0 ? (
+                  <label className="block text-xs font-medium text-zinc-400">
+                    Канал
+                    <select
+                      value={referenceId}
+                      onChange={(event) => setReferenceId(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-zinc-800 bg-black/40 px-3 py-2.5 text-sm text-zinc-100 outline-none transition focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/30"
+                    >
+                      {wazzupChannels.map((item) => {
+                        const labelParts = [
+                          item.name || item.channel_id,
+                          item.kind || item.transport,
+                          item.state,
+                          item.plain_id ? String(item.plain_id) : null,
+                        ].filter(Boolean);
+                        return (
+                          <option key={item.channel_id} value={item.channel_id}>
+                            {labelParts.join(" · ")}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </label>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    Вставьте API-ключ и нажмите «Загрузить каналы» — список появится как в MoonAI.
+                  </p>
+                )}
               </>
             ) : null}
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,15 +49,14 @@ async def _handle_wazzup_payload(
     path_bot_id: uuid.UUID | None = None,
 ) -> WebhookQueuedResponse | Response:
     from app.core.redis_client import claim_inbound_event
-    from app.core.webhook_auth import require_internal_service_key
     from app.models.channels import HubChannelStatus
     from app.services.inbound.normalizer import attach_normalized, normalize_wazzup_inbound
     from app.services.wazzup_service import wazzup_service
 
-    try:
-        require_internal_service_key(request)
-    except HTTPException:
-        return Response(status_code=status.HTTP_403_FORBIDDEN)
+    _ = request  # public Wazzup callback — no internal service key
+    # Wazzup sends {"test": true} when saving webhooksUri; must acknowledge.
+    if raw_body.get("test") is True:
+        return Response(status_code=status.HTTP_200_OK)
 
     event_id = str(
         raw_body.get("messageId")

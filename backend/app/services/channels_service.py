@@ -585,6 +585,7 @@ class ChannelsHubService:
             HubChannelType.INSTAGRAM,
         }
         delivery_mode = "webhook"
+        wazzup_channels: list[dict] = []
         if is_greenapi:
             from app.core.config import is_public_https_webhook_url
             from app.services.greenapi_service import greenapi_service
@@ -604,16 +605,46 @@ class ChannelsHubService:
             else:
                 delivery_mode = "polling"
         elif row.channel_type == HubChannelType.WAZZUP:
+            from app.core.config import is_public_https_webhook_url
             from app.services.wazzup_service import wazzup_service
 
-            await wazzup_service.assert_authorized(secret, row.reference_id)
+            wazzup_channels = await wazzup_service.assert_authorized(secret, row.reference_id)
+            if not row.reference_id:
+                # MoonAI-style: API key alone → auto-pick first active channel.
+                preferred = next(
+                    (
+                        str(item.get("channel_id") or "")
+                        for item in wazzup_channels
+                        if str(item.get("state") or "").lower() == "active"
+                        and item.get("channel_id")
+                    ),
+                    "",
+                )
+                if not preferred and wazzup_channels:
+                    preferred = str(wazzup_channels[0].get("channel_id") or "")
+                row.reference_id = preferred or None
             webhook_url = f"{origin}/api/v1/webhooks/wazzup"
+            if is_public_https_webhook_url(webhook_url):
+                try:
+                    await wazzup_service.register_webhook(secret, webhook_url)
+                except Exception as exc:
+                    logger.warning(
+                        "ChannelsHub.wazzup_webhook_register_failed | error={error}",
+                        error=str(exc),
+                    )
+                    raise ValueError(str(exc)) from exc
+            else:
+                raise ValueError(
+                    "Для Wazzup нужен публичный HTTPS (WEBHOOK_BASE_URL). "
+                    "На localhost входящие сообщения не зарегистрируются."
+                )
 
         row.meta_data = {
             **(payload.meta_data or {}),
             "provider": "greenapi" if is_greenapi else label.lower(),
             **({"webhook_url": webhook_url} if webhook_url else {}),
             **({"delivery_mode": delivery_mode} if is_greenapi else {}),
+            **({"wazzup_channels": wazzup_channels} if wazzup_channels else {}),
         }
         row.updated_at = datetime.now(timezone.utc)
         await db.flush()

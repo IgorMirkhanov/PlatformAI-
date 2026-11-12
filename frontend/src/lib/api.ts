@@ -1419,6 +1419,25 @@ export async function startInstagramOAuth(botId: string): Promise<{ authorize_ur
   return apiRequest(`/api/v1/bots/${botId}/channels/instagram/oauth/start`);
 }
 
+export interface WazzupPreviewChannel {
+  channel_id: string;
+  transport?: string;
+  kind?: string;
+  plain_id?: string | null;
+  state?: string | null;
+  name?: string;
+}
+
+export async function previewWazzupChannels(
+  botId: string,
+  apiKey: string,
+): Promise<{ success: boolean; channels: WazzupPreviewChannel[] }> {
+  return apiRequest(`/api/v1/bots/${botId}/channels/wazzup/preview`, {
+    method: "POST",
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
 export async function connectHubChannel(
   botId: string,
   channelType: HubChannelType,

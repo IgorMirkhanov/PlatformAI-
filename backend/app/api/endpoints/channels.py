@@ -147,6 +147,41 @@ async def instagram_oauth_callback(
 
 
 @router.post(
+    "/bots/{bot_id}/channels/wazzup/preview",
+    summary="List Wazzup channels for an API key (MoonAI-style picker)",
+)
+async def preview_wazzup_channels(
+    bot_id: uuid.UUID,
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    _bot: Bot = Depends(require_credential_access()),
+) -> dict:
+    _ = db, bot_id
+    api_key = str(
+        (payload or {}).get("api_key")
+        or (payload or {}).get("token")
+        or ""
+    ).strip()
+    try:
+        from app.services.wazzup_service import wazzup_service
+
+        channels = await wazzup_service.list_channels(api_key)
+        return {"success": True, "channels": channels}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "ChannelsHub.wazzup_preview_failed | bot_id={bot_id} error={error}",
+            bot_id=bot_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Не удалось загрузить каналы Wazzup.",
+        ) from exc
+
+
+@router.post(
     "/bots/{bot_id}/channels/{channel_type}/connect",
     response_model=ChannelConnectResponse,
     summary="Connect a hub channel (encrypt credentials + register webhooks)",

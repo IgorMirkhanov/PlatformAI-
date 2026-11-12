@@ -23,14 +23,44 @@ class WazzupError(ValueError):
     """Tenant-visible Wazzup failure."""
 
 
-class WazzupService:
-    async def assert_authorized(self, api_key: str, channel_id: str | None = None) -> None:
-        """Validate a tenant API key (and optional channelId) against Wazzup before connecting.
+_TRANSPORT_KIND = {
+    "whatsapp": "whatsapp",
+    "wapi": "whatsapp",
+    "telegram": "telegram",
+    "tgapi": "telegram",
+    "instagram": "instagram",
+}
 
-        Mirrors ``greenapi_service.assert_authorized`` so every channel connect
-        path performs a real, live credential check instead of trusting whatever
-        was pasted into the form.
-        """
+
+def summarize_wazzup_channels(raw: Any) -> list[dict[str, Any]]:
+    rows = raw if isinstance(raw, list) else []
+    if isinstance(raw, dict):
+        inner = raw.get("channels") or raw.get("data") or []
+        rows = inner if isinstance(inner, list) else []
+    out: list[dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        transport = str(item.get("transport") or "").strip().lower()
+        channel_id = str(item.get("channelId") or item.get("id") or "").strip()
+        if not channel_id:
+            continue
+        out.append(
+            {
+                "channel_id": channel_id,
+                "transport": transport,
+                "kind": _TRANSPORT_KIND.get(transport, transport or "unknown"),
+                "plain_id": item.get("plainId") or item.get("plain_id"),
+                "state": item.get("state"),
+                "name": item.get("name") or item.get("title") or channel_id,
+            }
+        )
+    return out
+
+
+class WazzupService:
+    async def list_channels(self, api_key: str) -> list[dict[str, Any]]:
+        """Fetch channel list for an API key (MoonAI-style picker)."""
         secret = (api_key or "").strip()
         if len(secret) < 8:
             raise WazzupError("API Key Wazzup слишком короткий.")
@@ -51,19 +81,63 @@ class WazzupService:
             raw_channels = response.json()
         except Exception as exc:
             raise WazzupError("Wazzup вернул не-JSON при проверке ключа.") from exc
-        items = raw_channels if isinstance(raw_channels, list) else []
-        if isinstance(raw_channels, dict):
-            inner = raw_channels.get("channels") or raw_channels.get("data") or []
-            items = inner if isinstance(inner, list) else []
+        return summarize_wazzup_channels(raw_channels)
+
+    async def register_webhook(self, api_key: str, webhook_uri: str) -> str:
+        """Register shared inbound webhook URI in the Wazzup account."""
+        secret = (api_key or "").strip()
+        uri = (webhook_uri or "").strip()
+        if len(secret) < 8:
+            raise WazzupError("API Key Wazzup слишком короткий.")
+        if not uri.startswith("https://"):
+            raise WazzupError("Для Wazzup нужен публичный HTTPS webhook.")
+        if len(uri) > 200:
+            raise WazzupError("Адрес webhook слишком длинный для Wazzup (макс. 200 символов).")
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.patch(
+                    f"{WAZZUP_API_BASE}/webhooks",
+                    headers={
+                        "Authorization": f"Bearer {secret}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "webhooksUri": uri,
+                        "subscriptions": {
+                            "messagesAndStatuses": True,
+                            "channelsUpdates": True,
+                            "contactsAndDealsCreation": False,
+                            "templateStatus": False,
+                        },
+                    },
+                )
+        except httpx.RequestError as exc:
+            raise WazzupError(f"Wazzup недоступен при регистрации webhook: {exc}") from exc
+        if response.status_code >= 400:
+            logger.warning(
+                "WazzupService.webhook_register_failed | status={status} body={body}",
+                status=response.status_code,
+                body=response.text[:300],
+            )
+            raise WazzupError(
+                "Wazzup не принял адрес для входящих сообщений. "
+                "Проверьте публичный HTTPS (WEBHOOK_BASE_URL)."
+            )
+        return uri
+
+    async def assert_authorized(self, api_key: str, channel_id: str | None = None) -> list[dict[str, Any]]:
+        """Validate a tenant API key (and optional channelId) against Wazzup before connecting.
+
+        Mirrors ``greenapi_service.assert_authorized`` so every channel connect
+        path performs a real, live credential check instead of trusting whatever
+        was pasted into the form. Returns the channel list for callers that want
+        auto-pick.
+        """
+        channels = await self.list_channels(api_key)
         cid = (channel_id or "").strip()
-        if cid and items:
-            known = {
-                str(item.get("channelId") or item.get("id") or "").strip()
-                for item in items
-                if isinstance(item, dict)
-            }
-            if cid not in known:
-                raise WazzupError("Указанный Channel ID не найден в аккаунте Wazzup.")
+        if cid and channels and not any(row.get("channel_id") == cid for row in channels):
+            raise WazzupError("Указанный Channel ID не найден в аккаунте Wazzup.")
+        return channels
 
     def extract_channel_id(self, body: dict[str, Any]) -> str | None:
         """Pull Wazzup ``channelId`` from a webhook payload (top-level or messages)."""
